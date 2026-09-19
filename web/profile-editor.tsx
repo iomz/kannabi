@@ -4,12 +4,13 @@ import type { Member } from '../server/identity-store';
 import { api, unwrap } from './api';
 import { DestructiveConfirmation } from './destructive-confirmation';
 import { PasswordField } from './password-field';
+import { TransientSuccess } from './transient-success';
 
 type FormFeedback = { saved: boolean; error: string | null } | undefined;
 
 function FormStatus({ feedback, savedLabel }: { feedback: FormFeedback; savedLabel: string }) {
   return <div className="profile-action-status" role="status" aria-live="polite" aria-atomic="true">
-    {feedback?.saved ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> {savedLabel}</span>
+    {feedback?.saved ? <TransientSuccess trigger={feedback} label={savedLabel} />
       : feedback?.error ? <span className="settings-status-pill error" role="alert">{feedback.error}</span> : null}
   </div>;
 }

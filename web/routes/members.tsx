@@ -5,6 +5,7 @@ import { DestructiveConfirmation } from '../destructive-confirmation';
 import { displayInstant } from '../../server/settings';
 import { filterMembers } from '../member-filter';
 import { memberAccessLabel } from '../member-access';
+import { TransientSuccess } from '../transient-success';
 import type { Member } from '../../server/identity-store';
 import type { Route } from './+types/members';
 
@@ -58,7 +59,7 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
 function Feedback({ actionData, intent, memberKey }: { actionData?: MemberAction; intent: string; memberKey: string | null }) {
   if (actionData?.intent !== intent || actionData.key !== memberKey) return <div className="member-action-status" />;
   return <div className="member-action-status" aria-live="polite">{actionData.saved
-    ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> {actionData.message}</span>
+    ? <TransientSuccess trigger={actionData} label={actionData.message ?? 'Saved'} />
     : <span className="settings-status-pill error" role="alert">{actionData.error}</span>}</div>;
 }
 

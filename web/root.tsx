@@ -8,7 +8,7 @@ import { builtInThemes, themeById } from './themes';
 import { themeStylesheet } from './themes/variables';
 import { applyDocumentTheme, cacheInstanceTheme, themeBootScript, useResolvedAppearance } from './appearance';
 import { ThemeRuntimeContext } from './theme-runtime';
-import { AnonymousShell, isAnonymousShellHandle } from './anonymous-shell';
+import { AnonymousShell, isPublicShellHandle, usesAnonymousShell } from './anonymous-shell';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -34,7 +34,10 @@ export { WorkspaceError as ErrorBoundary } from './route-error';
 export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const { user, isAdmin } = loaderData;
   const location = useLocation();
-  const anonymousShell = useMatches().some((match) => isAnonymousShellHandle(match.handle));
+  const matches = useMatches();
+  const handles = matches.map((match) => match.handle);
+  const publicContent = handles.some(isPublicShellHandle);
+  const anonymousShell = usesAnonymousShell(handles, user !== null);
   const busy = useNavigation().state !== 'idle';
   const [menuOpen, setMenuOpen] = useState(false);
   const [themeId, setThemeId] = useState(loaderData.themeId);
@@ -62,7 +65,8 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   useEffect(() => cacheInstanceTheme(theme.id), [theme.id]);
   return <ThemeRuntimeContext.Provider value={{ themeId, setThemeId, appearance, setAppearance,
     colorScheme, setColorSchemePreview }}>
-    {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy} error={actionData?.error} />
+    {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
+      error={actionData?.error} publicContent={publicContent} />
       : <div className="app-shell" data-theme={theme.id} data-color-scheme={colorScheme}>
     <a className="skip-link" href="#workspace">Skip to content</a>
     <aside className="sidebar">

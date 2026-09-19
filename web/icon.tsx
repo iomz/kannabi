@@ -8,6 +8,9 @@ const paths = {
   lock: 'M5 10h14v11H5z M8 10V6a4 4 0 0 1 8 0v4 M12 14v3',
   globe: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0 M3 12h18 M12 3c-5 5-5 13 0 18 5-5 5-13 0-18 M5 7h14 M5 17h14',
   photo: 'M3 4h18v16H3z M3 16l6-6 5 5 3-3 4 4 M17 8h.01',
+  copy: 'M8 8h11v11H8z M5 16H4V5h11v1',
+  check: 'm5 12 4 4L19 6',
+  trash: 'M4 7h16 M9 7V4h6v3 M7 7l1 14h8l1-14 M10 11v6 M14 11v6',
 };
 export function Icon({ name }: { name: keyof typeof paths }) {
   return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;

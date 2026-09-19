@@ -44,6 +44,11 @@ export class MediaService {
     const photo = await this.store.getPhoto(identifier, key, actorKey);
     return { photo, bytes: await this.storage.get(key) };
   }
+  async remove(identifier: AssetIdentifier, actorKey: string, key: string) {
+    await this.store.beginPhotoDeletion(identifier, actorKey, key);
+    try { await this.cleanup(key); }
+    catch (error) { console.error('Photo cleanup pending', error); }
+  }
   async cleanup(key?: string) {
     for (const pending of await this.store.claimPhotoCleanup(key)) {
       await this.storage.delete(pending);

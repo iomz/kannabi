@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { displayInstant, validateSettings } from './settings.js';
 import { maxPhotoBytes, photoBytes } from './media.js';
+import { orderPhotos } from './identity-store.js';
 
 test('display timezone changes presentation without changing the absolute instant', () => {
   const instant = '2026-01-01T23:30:00.000Z';
@@ -22,4 +23,16 @@ test('photo validation rejects empty, oversized, active content and mismatched M
   await assert.rejects(photoBytes(new File([new Uint8Array(maxPhotoBytes + 1)], 'big.png', { type: 'image/png' })));
   await assert.rejects(photoBytes(new File(['<svg/>'], 'script.svg', { type: 'image/svg+xml' })));
   await assert.rejects(photoBytes(new File(['fake'], 'fake.png', { type: 'image/png' })));
+});
+
+test('photos order oldest to newest with deterministic ties and legacy entries first', () => {
+  const photo = (key: string, createdAt: string | null) => ({ key, createdAt, contentType: 'image/png', size: 1 });
+  assert.deepEqual(orderPhotos([
+    photo('new', '2026-09-20T02:00:00.000Z'),
+    photo('tie-b', '2026-09-20T01:00:00.000Z'),
+    photo('legacy-b', null),
+    photo('old', '2026-09-19T23:00:00.000Z'),
+    photo('legacy-a', null),
+    photo('tie-a', '2026-09-20T01:00:00.000Z'),
+  ]).map(({ key }) => key), ['legacy-a', 'legacy-b', 'old', 'tie-a', 'tie-b', 'new']);
 });

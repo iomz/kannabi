@@ -1,6 +1,7 @@
 import { Form, redirect, useNavigation } from 'react-router';
 import { useEffect, useRef } from 'react';
 import { api, unwrap } from '../api';
+import { TransientSuccess } from '../transient-success';
 import type { Route } from './+types/groups';
 
 export async function clientLoader() {
@@ -72,7 +73,7 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
     <label>Member key<input name="userKey" required /></label><button disabled={busy}>Add member</button>
     <div className="group-member-status" aria-live="polite" aria-atomic="true">
-      {result?.status === 'added' ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> {result.message}</span>
+      {result?.status === 'added' ? <TransientSuccess trigger={result} label={result.message} />
         : result?.status === 'already-member' ? <span className="settings-status-pill">{result.message}</span>
           : result?.status === 'error' ? <span className="settings-status-pill error" role="alert">{result.message}</span> : null}
     </div>

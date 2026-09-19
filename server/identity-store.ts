@@ -36,7 +36,20 @@ export type Asset = Readonly<{
   isPublic: boolean;
   photos: readonly Photo[];
 }>;
-export type Photo = { key: string; contentType: string; size: number };
+export type Photo = { key: string; contentType: string; size: number; createdAt: string | null };
+
+export function orderPhotos(photos: readonly Photo[]): Photo[] {
+  return [...photos].sort((left, right) => {
+    const leftCreatedAt = left.createdAt ?? '';
+    const rightCreatedAt = right.createdAt ?? '';
+    if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt < rightCreatedAt ? -1 : 1;
+    return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+  });
+}
+
+function assetWithOrderedPhotos(asset: Omit<Asset, 'identifier'>, identifier: AssetIdentifier): Asset {
+  return { ...asset, identifier, photos: orderPhotos(asset.photos) };
+}
 export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
 export type ReportAsset = {
   name: string;
@@ -78,7 +91,8 @@ const assetProjection = `
     reportedBy: { key: u.key,
       name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
       status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END }, owner: o { .key, .name },
-    groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) | m { .key, .contentType, size: toFloat(m.size) }] } AS asset`;
+    groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
+      m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] } AS asset`;
 
 /** Internal persistence API. Callers must supply a trusted actor context.
  * No HTTP routes or authentication are provided by this layer.
@@ -98,6 +112,7 @@ export class IdentityStore {
       await session.run(`MERGE (m:MailConfiguration {key: 'instance'})
         ON CREATE SET m.enabled = false, m.transport = 'smtp', m.revision = 0
         SET m.verificationStatus = coalesce(m.verificationStatus, 'not-verified')`);
+      await session.run('MATCH (a:Asset) SET a.isPublic = coalesce(a.isPublic, false)');
       // Better Auth role is sole persisted administrator authority. Preserve existing
       // installations once, then remove legacy duplicate state.
       await session.run(`MATCH (u:User) WHERE u.id IS NOT NULL
@@ -223,7 +238,7 @@ export class IdentityStore {
         if (!result.records.length) {
           throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
         }
-        return { ...result.records[0].get('asset'), identifier } as Asset;
+        return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
       });
     } catch (error) {
       // CREATE, rather than MERGE, makes every second claim a conflict.
@@ -244,7 +259,7 @@ export class IdentityStore {
         `${assetMatch} WHERE a.isPublic = true OR ${collaboration} ${assetProjection}`,
         { claim: claimProperties(identifier), actorKey },
       ));
-      return result.records.length ? { ...result.records[0].get('asset'), identifier } as Asset : null;
+      return result.records.length ? assetWithOrderedPhotos(result.records[0].get('asset'), identifier) : null;
     } finally { await session.close(); }
   }
 
@@ -285,7 +300,8 @@ export class IdentityStore {
             reportedBy: { key: u.key,
               name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
               status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
-            owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) | m { .key, .contentType, size: toFloat(m.size) }] },
+            owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
+              m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] },
             identifier: identity { .scheme, .value, .serial }}) AS rows
         }
         RETURN total, scopes, rows`, { actorKey, text, scope, after, fetchSize: int(limit + 1) }));
@@ -295,7 +311,7 @@ export class IdentityStore {
         const i = row.identifier;
         const identifier: AssetIdentifier = i.scheme === 'sgtin'
           ? { scheme: 'sgtin', gtin: i.value, serial: i.serial } : { scheme: 'grai', grai: i.value };
-        return { ...row.asset, identifier } as Asset;
+        return assetWithOrderedPhotos(row.asset, identifier);
       });
       const scopes = Object.fromEntries(Object.entries(row.get('scopes')).map(([key, value]) =>
         [key, (value as { toNumber(): number }).toNumber()])) as Record<AssetScope, number>;
@@ -510,7 +526,7 @@ export class IdentityStore {
   async reservePhoto(contentType: string, size: number): Promise<string> {
     const key = randomUUID();
     await this.write((tx) => tx.run(`CREATE (:Media {key: $key, contentType: $contentType, size: $size,
-      state: 'pending', expiresAt: datetime() + duration('PT10M')})`, { key, contentType, size }));
+      state: 'pending', createdAt: datetime(), expiresAt: datetime() + duration('PT10M')})`, { key, contentType, size }));
     return key;
   }
 
@@ -529,8 +545,20 @@ export class IdentityStore {
         MATCH (m:Media {key: $photoKey}) CREATE (a)-[:HAS_PHOTO]->(m)
         WITH a ${assetProjection}`, { claim: claimProperties(canonicalIdentifier(identifier)), actorKey, photoKey });
       if (!result.records.length) throw new ReferenceError('Asset access not found');
-      return { ...result.records[0].get('asset'), identifier };
+      return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
     });
+  }
+
+  async beginPhotoDeletion(identifier: AssetIdentifier, actorKey: string, photoKey: string): Promise<void> {
+    const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration}
+      MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
+      SET m.state = 'deleting', m.expiresAt = datetime()
+      DELETE relationship
+      RETURN m.key`, {
+      claim: claimProperties(canonicalIdentifier(identifier)), actorKey,
+      photoKey: requiredText(photoKey, 'photoKey'),
+    }));
+    if (!result.records.length) throw new ReferenceError('Asset access or photo not found');
   }
 
   async getPhoto(identifier: AssetIdentifier, key: string, actorKey: string | null): Promise<Photo> {
@@ -583,7 +611,7 @@ export class IdentityStore {
           CREATE (a)-[:OWNED_BY]->(o))
         WITH a ${assetProjection}`, params);
       if (!result.records.length) throw new ReferenceError('Asset or Owner does not exist');
-      return { ...result.records[0].get('asset'), identifier } as Asset;
+      return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
     });
   }
 }

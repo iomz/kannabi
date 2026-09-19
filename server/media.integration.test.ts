@@ -87,6 +87,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await assert.rejects(media.add(id, stranger.key, photo()));
     const added = await media.add(id, member.key, photo());
     assert.equal(added.photos.length, 2);
+    assert.deepEqual(added.photos.map(({ key: photoKey }) => photoKey), [key, added.photos[1].key]);
+    assert.ok(added.photos.every(({ createdAt }) => createdAt !== null));
     await store.updateAsset(id, { isPublic: true }, user.key);
     const publicRead = await request(path, 'GET', undefined, false);
     assert.equal(publicRead.status, 200);
@@ -103,6 +105,26 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await assert.rejects(media.add(id, user.key, photo()));
     assert.deepEqual((await store.getAsset(id, member.key))!.reportedBy, asset.reportedBy);
     await store.addGroupMember(member.key, group.key, user.key);
+  });
+
+  await t.test('authorized deletion removes public photo metadata and object while other actors are rejected', async () => {
+    const asset = (await store.getAsset(id, user.key))!;
+    const key = asset.photos.at(-1)!.key;
+    const path = '/photos/' + key + '?' + new URLSearchParams(id);
+    const deletionPath = '/photo/' + key + '?' + new URLSearchParams(id);
+    await store.updateAsset(id, { isPublic: true }, user.key);
+    assert.equal((await request(path, 'GET', undefined, false)).status, 200);
+
+    await assert.rejects(media.remove(id, stranger.key, key));
+    assert.equal((await request(deletionPath, 'DELETE', undefined, false)).status, 401);
+    assert.equal((await request(path, 'GET', undefined, false)).status, 200);
+
+    assert.equal((await request(deletionPath, 'DELETE')).status, 200);
+    assert.equal((await request(path, 'GET', undefined, false)).status, 404);
+    assert.equal((await request(path)).status, 404);
+    await assert.rejects(storage.get(key));
+    assert.equal((await store.getAsset(id, user.key))!.photos.some((candidate) => candidate.key === key), false);
+    await store.updateAsset(id, { isPublic: false }, user.key);
   });
 
   await t.test('optional policy accepts photo-free reports and does not affect existing Assets', async () => {
@@ -144,6 +166,14 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await new MediaService(await IdentityStore.open(driver), storage).cleanup();
     await assert.rejects(storage.get(failedKey)); await assert.rejects(storage.get(abandoned));
     assert.equal((await query("MATCH (m:Media) WHERE m.state <> 'attached' RETURN m")).records.length, 0);
+
+    const deletionCandidate = (await media.add(id, user.key, photo())).photos.at(-1)!.key;
+    await new MediaService(store, failing).remove(id, user.key, deletionCandidate);
+    assert.deepEqual(Buffer.from(await storage.get(deletionCandidate)), png);
+    assert.equal((await store.getAsset(id, user.key))!.photos.some(({ key }) => key === deletionCandidate), false);
+    await media.cleanup();
+    await assert.rejects(storage.get(deletionCandidate));
+
     const attached = (await store.getAsset(id, user.key))!.photos[0].key;
     await media.cleanup(attached);
     assert.deepEqual(Buffer.from(await storage.get(attached)), png);

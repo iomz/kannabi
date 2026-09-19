@@ -123,7 +123,11 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.equal((await read.json()).canEdit, true);
     assert.equal((await member.request('/asset?' + query, 'PATCH', { name: 'Bench instrument' })).status, 200);
     for (const [caller, editStatus] of [[stranger, 404], [anonymous, 401]] as const) {
-      assert.equal((await caller.request('/asset?' + query)).status, 404);
+      const inaccessible = await caller.request('/asset?' + query);
+      const missing = await caller.request('/asset?' + new URLSearchParams({ ...identifier, serial: 'missing' }));
+      assert.equal(inaccessible.status, 404);
+      assert.equal(missing.status, 404);
+      assert.deepEqual(await inaccessible.json(), await missing.json());
       assert.equal((await caller.request('/asset?' + query, 'PATCH', { name: 'Denied' })).status, editStatus);
     }
     const found = await member.request('/assets?q=Bench');
@@ -142,10 +146,16 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.asset, expected);
+      assert.deepEqual(Object.keys(result.asset).sort(),
+        ['groups', 'identifier', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+      assert.equal('email' in result.asset.reportedBy, false);
+      assert.equal('role' in result.asset.reportedBy, false);
+      assert.equal('password' in result.asset.reportedBy, false);
       assert.equal(result.canEdit, false);
       assert.equal((await caller.request('/asset?' + query, 'PATCH', { name: 'Denied' })).status, editStatus);
     }
     assert.equal((await member.request('/asset?' + query, 'PATCH', { isPublic: false })).status, 200);
+    assert.equal((await anonymous.request('/asset?' + query)).status, 404);
   });
 
   await t.test('leaving Group revokes reporter access while provenance stays immutable', async () => {

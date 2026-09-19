@@ -9,6 +9,8 @@ import type { Settings } from '../../server/settings';
 import { mailPasswordAction } from '../mail-form';
 import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
+import { Switch } from '../switch';
+import { TransientSuccess } from '../transient-success';
 import type { Route } from './+types/settings';
 
 export async function clientLoader() {
@@ -122,7 +124,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
       <fieldset disabled={saveBusy || recoveryRequired} aria-busy={saveBusy}>
         <input type="hidden" name="intent" value="mail" /><input type="hidden" name="revision" value={mail.revision} />
         <input type="hidden" name="passwordAction" value={passwordAction.action} />
-        <label className="checkbox"><input type="checkbox" name="enabled" defaultChecked={mail.enabled} />Enable mail delivery</label>
+        <Switch name="enabled" defaultChecked={mail.enabled} label="Enable mail delivery" />
         <div className="grid">
           <label>SMTP host<input name="smtpHost" defaultValue={mail.smtpHost ?? ''} maxLength={253} autoComplete="off" /></label>
           <label>SMTP port<input name="smtpPort" type="number" min="1" max="65535" defaultValue={mail.smtpPort ?? ''} /></label>
@@ -173,7 +175,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
         </div>
         <div className="mail-action-row"><button disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</button>
           <div className="mail-action-status" role="status" aria-live="polite" aria-atomic="true">
-            {result?.saved && !dirty ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> Saved</span> : null}
+            <TransientSuccess trigger={result?.saved && !dirty ? result : null} label="Saved" />
           </div>
         </div>
       </fieldset>
@@ -186,7 +188,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
         <div className="mail-test-action"><button disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
           {test.state !== 'idle' ? 'Sending…' : 'Send test email'}</button>
           <div className="mail-action-status" role="status" aria-live="polite" aria-atomic="true">
-            {testResult?.saved ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> Sent</span> : null}
+            <TransientSuccess trigger={testResult?.saved ? testResult : null} label="Sent" />
           </div>
         </div>
       </test.Form>
@@ -196,7 +198,9 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
     {mail.masterKeyState !== 'ready' || mail.passwordState === 'unavailable' ? <div className="secret-recovery"><h3>Instance master-key recovery</h3>
       <p>Restore the instance master key and restart Kannabi, or explicitly reset all encrypted credentials. Reset disables mail and cannot be undone.</p>
       {resetResult?.error && <p role="alert">{resetResult.error}</p>}
-      {resetResult?.saved && <p role="status" className="notice">Encrypted credentials reset.</p>}
+      <div className="secret-reset-status" role="status" aria-live="polite" aria-atomic="true">
+        <TransientSuccess trigger={resetResult?.saved ? resetResult : null} label="Encrypted credentials reset" />
+      </div>
       <reset.Form method="post"><input type="hidden" name="intent" value="secret-reset" />
         <input type="hidden" name="revision" value={mail.revision} />
         <label className="checkbox"><input type="checkbox" name="confirmed" required />I understand this removes all encrypted credentials.</label>
@@ -251,7 +255,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           {busy ? <span className="settings-status-pill saving">Saving…</span>
             : fetcher.data?.kind === 'settings' && fetcher.data.error ? <span className="settings-status-pill error" role="alert"
               title={fetcher.data.error}>Error: {fetcher.data.error}</span>
-              : fetcher.data?.kind === 'settings' && fetcher.data.saved ? <span className="settings-status-pill saved"><span aria-hidden="true">✓</span> Saved</span> : null}
+              : fetcher.data?.kind === 'settings' && fetcher.data.saved
+                ? <TransientSuccess trigger={fetcher.data} label="Saved" /> : null}
         </div>
       </div>
       <p>Reporting policy, time presentation, theme, and mail delivery for this deployment.</p>
@@ -259,8 +264,9 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     <section className="panel form-panel"><h2>Reporting, display, and appearance</h2>
       <fetcher.Form method="post"><fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="settings" />
-        <label className="checkbox"><input type="checkbox" name="requirePhoto" checked={current.requirePhoto}
-          onChange={(event) => update({ requirePhoto: event.currentTarget.checked })} />Require photo when reporting an Asset</label>
+        <Switch name="requirePhoto" checked={current.requirePhoto}
+          onChange={(event) => update({ requirePhoto: event.currentTarget.checked })}
+          label="Require photo when reporting an Asset" />
         <p className="setting-help">Applies to new Asset reports.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />

@@ -198,6 +198,11 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       c.header('Content-Disposition', 'inline');
       return c.body(new Uint8Array(bytes).buffer);
     })
+    .delete('/photo/:key', validator('query', canonicalIdentifier), async (c) => {
+      if (!media) throw new HTTPException(503, { message: 'Media storage unavailable' });
+      await media.remove(c.req.valid('query'), actor(c.get('user')), c.req.param('key'));
+      return c.json({ deleted: true });
+    })
     .get('/groups', async (c) => c.json({ groups: await store.listGroups(actor(c.get('user'))) }))
     .post('/groups', validator('json', (value) => {
       const input = record(value, ['name']);

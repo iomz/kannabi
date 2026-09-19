@@ -10,7 +10,16 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
+  const legacy = driver.session();
+  try { await legacy.run("CREATE (:Asset {name: 'Legacy visibility'})"); }
+  finally { await legacy.close(); }
   const store = await IdentityStore.open(driver);
+  const migrated = driver.session();
+  try {
+    const result = await migrated.run("MATCH (a:Asset {name: 'Legacy visibility'}) RETURN a.isPublic AS public");
+    assert.equal(result.records[0].get('public'), false);
+    await migrated.run("MATCH (a:Asset {name: 'Legacy visibility'}) DELETE a");
+  } finally { await migrated.close(); }
   const otherStore = await IdentityStore.open(driver);
   const user = await store.createUser('Reporter');
   const outsider = await store.createUser('Other user');
