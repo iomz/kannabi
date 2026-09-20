@@ -29,7 +29,12 @@ export type AssetLookupRequest = {
  * in the same structured form the reporting and attachment APIs accept. */
 export function assetLookupQuery(query: Record<string, unknown>): AssetLookupRequest {
   const { id, limit: rawLimit, cursor, ...identifier } = record(query, assetLookupFields);
-  if ((id === undefined) === (identifier.scheme === undefined)) {
+  // Exactly one identity, judged on every identifier field rather than on
+  // `scheme` alone: `{ id, gtin }` is an ambiguous request, not a native-ID
+  // lookup with a stray parameter, and must not resolve by silently ignoring
+  // half of what was asked.
+  const identifierSupplied = Object.values(identifier).some((value) => value !== undefined);
+  if ((id !== undefined) === identifierSupplied) {
     throw new ValidationError('Look up either a native Asset ID or one external identifier');
   }
   const limit = rawLimit === undefined ? 30 : Number(rawLimit);

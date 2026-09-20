@@ -123,8 +123,10 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
       identifiers: [giai('0614141FILTER-2')] }, context2)).id;
     await store.updateAsset(made.published, { isPublic: true }, actor.key);
     // Dated apart so a range filter has something to cut.
+    // Mid-day deliberately: a date-only upper bound of 2025-03-01 must include
+    // it, which a naive midnight comparison would exclude.
     await query('MATCH (a:Asset {id: $id}) SET a.reportedAt = datetime($at)',
-      { id: made.plain, at: '2025-03-01T00:00:00Z' });
+      { id: made.plain, at: '2025-03-01T13:45:00Z' });
 
     const base = { group: filterGroup.key };
     const find = async (extra: Record<string, string | string[]> = {}) =>
@@ -156,6 +158,11 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.deepEqual(await ids({ reportedFrom: '2026-01-01' }),
       [made.classed, made.individual, made.published].sort());
     assert.deepEqual(await ids({ reportedTo: '2025-12-31' }), [made.plain]);
+    // A date-only upper bound covers the whole day it names, including an Asset
+    // reported later that same day. An explicit instant is taken exactly.
+    assert.deepEqual(await ids({ reportedTo: '2025-03-01' }), [made.plain]);
+    assert.deepEqual(await ids({ reportedTo: '2025-03-01T00:00:00Z' }), []);
+    assert.deepEqual(await ids({ reportedFrom: '2025-03-01', reportedTo: '2025-03-01' }), [made.plain]);
 
     // Filters AND together, and compose with q and scope. The Group filter is
     // the narrower question the scope tabs cannot ask: `scope=group` means any

@@ -46,10 +46,22 @@ export type AssetFilters = Readonly<{
   identified: AssetIdentified | null;
   reportedFrom: string | null;
   reportedTo: string | null;
+  /** True when `reportedTo` was written as a date rather than an instant,
+   * meaning the range runs through the end of that day.
+   *
+   * A date and an instant ask different questions, so the filter remembers
+   * which was asked instead of guessing from the value: `reportedTo=2026-02-01`
+   * means everything reported on 1 February, while
+   * `reportedTo=2026-02-01T00:00:00Z` means exactly up to that instant. The
+   * stored value stays the caller's own, so the URL, the chip and the date
+   * control all keep showing the day that was chosen.
+   */
+  reportedToEndOfDay: boolean;
 }>;
 
 export const emptyAssetFilters: AssetFilters = Object.freeze({
   groups: [], schemes: [], identified: null, reportedFrom: null, reportedTo: null,
+  reportedToEndOfDay: false,
 });
 
 /** A position in the current ordering: the sort field's value at the page
@@ -73,7 +85,9 @@ export function canonicalFilters(filters: AssetFilters): string {
   if (filters.schemes.length) parts.push(`schemes=${[...filters.schemes].sort().join(',')}`);
   if (filters.identified) parts.push(`identified=${filters.identified}`);
   if (filters.reportedFrom) parts.push(`from=${filters.reportedFrom}`);
-  if (filters.reportedTo) parts.push(`to=${filters.reportedTo}`);
+  // The two upper bounds are different predicates, so they must not share a
+  // cursor key: a page taken under one must never continue under the other.
+  if (filters.reportedTo) parts.push(`${filters.reportedToEndOfDay ? 'through' : 'to'}=${filters.reportedTo}`);
   return parts.join('|');
 }
 
@@ -86,6 +100,12 @@ function instant(value: string | undefined, field: string): string | null {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new ValidationError(`${field} must be an ISO date or instant`);
   return parsed.toISOString();
+}
+
+/** Whether a bound was written as a plain date. A date names a whole day; an
+ * instant names a point in time. */
+function isDateOnly(value: string | undefined): boolean {
+  return value !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
 }
 
 function many<T extends string>(values: readonly string[], allowed: readonly T[], field: string): T[] {
@@ -129,6 +149,7 @@ export function assetFilters(query: Record<string, string | string[] | undefined
       ? null : member(identified, ['any', 'none'], 'Identifier presence filter'),
     reportedFrom: instant(single(query.reportedFrom), 'Reported from'),
     reportedTo: instant(single(query.reportedTo), 'Reported to'),
+    reportedToEndOfDay: isDateOnly(single(query.reportedTo)),
   });
 }
 
