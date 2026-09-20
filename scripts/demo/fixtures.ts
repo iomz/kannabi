@@ -6,9 +6,23 @@ export const demoAccounts = [
 ] as const;
 export const demoGroups = ['Demo Workshop', 'Shared Studio', 'Field Kits', 'Private Store'] as const;
 export const demoOwners = ['Northstar Demo Cooperative', 'Meadow Demo Rentals', 'Workshop Equipment Pool'] as const;
-const products = ['Signal generator', 'RFID reader', 'Field laptop', 'Inspection camera',
-  'Tool case', 'Portable projector', 'Survey receiver', 'Trail backpack',
-  'Bench multimeter', 'Audio recorder', 'Inspection microscope', 'Workshop tablet'];
+/** Each product names the bundled illustration that suits it, so searching a
+ * category such as `camera` returns Assets whose photos match their names.
+ * Only the existing three illustrations are used; none were added. */
+const products = [
+  { name: 'Signal generator', photo: 'instrument.png' },
+  { name: 'RFID reader', photo: 'instrument.png' },
+  { name: 'Field laptop', photo: 'case.png' },
+  { name: 'Inspection camera', photo: 'camera.png' },
+  { name: 'Tool case', photo: 'case.png' },
+  { name: 'Portable projector', photo: 'camera.png' },
+  { name: 'Survey receiver', photo: 'instrument.png' },
+  { name: 'Trail backpack', photo: 'case.png' },
+  { name: 'Bench multimeter', photo: 'instrument.png' },
+  { name: 'Audio recorder', photo: 'instrument.png' },
+  { name: 'Inspection microscope', photo: 'camera.png' },
+  { name: 'Workshop tablet', photo: 'case.png' },
+] as const;
 const places = ['Bench', 'Studio', 'Field', 'Shelf'];
 
 // Synthetic, checksum-valid values for UI evaluation, not allocated GS1 keys.
@@ -31,6 +45,25 @@ const demoGcp = '0614141';
  */
 const patterns = ['none', 'gtin', 'sgtin', 'giai', 'both', 'pallet', 'crate'] as const;
 
+/** Reported days, spread so ordering by `reportedAt` is visibly different from
+ * ordering by name.
+ *
+ * The window is 91 days ending well before any plausible demo run, and the
+ * stride is coprime with it, so the first 91 Assets each take a distinct day
+ * and the remaining 49 land on days already used. That gives both many distinct
+ * timestamps and many exact duplicates, so the `(reportedAt, Asset.id)`
+ * tiebreaker is still exercised by ordinary demo browsing.
+ *
+ * Every Asset is stamped at midnight UTC, deliberately: a duplicate must be an
+ * exact duplicate. Chronology lives only here — `Asset.id` is a UUIDv7 whose
+ * timestamp carries no domain meaning and is never read as one.
+ */
+const reportedWindow = 91;
+const reportedFirstDay = Date.UTC(2026, 5, 22);
+export function demoReportedAt(index: number): string {
+  return new Date(reportedFirstDay + ((index * 23) % reportedWindow) * 86400000).toISOString();
+}
+
 export function demoAssets() {
   return Array.from({ length: 140 }, (_, index) => {
     const serial = 'DEMO-' + String(index + 1).padStart(3, '0');
@@ -49,11 +82,12 @@ export function demoAssets() {
     const group = index < 48 ? 0 : index < 88 ? 1 : index < 120 ? 2 : 3;
     const reporter = group === 0 ? 0 : group === 1 ? 1 : group === 2 ? (index % 2) : 2;
     return {
-      name: `${products[index % products.length]} · ${places[Math.floor(index / products.length) % places.length]} ${serial.slice(-3)}`,
-      identifiers, pattern, group, reporter,
+      name: `${products[index % products.length].name} · ${places[Math.floor(index / products.length) % places.length]} ${serial.slice(-3)}`,
+      identifiers, pattern, group, reporter, reportedAt: demoReportedAt(index),
       isPublic: index < 120 ? index % 4 === 0 : index % 5 === 0,
       owner: index % 4 === 0 ? null : index % demoOwners.length,
-      photo: index % 3 === 0 ? ['instrument.png', 'camera.png', 'case.png'][Math.floor(index / 3) % 3] : null,
+      // Same photo coverage as before; only which illustration is chosen changed.
+      photo: index % 3 === 0 ? products[index % products.length].photo : null,
     };
   });
 }

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import neo4j from 'neo4j-driver';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand, GetBucketVersioningCommand } from '@aws-sdk/client-s3';
 import { IdentityStore } from '../../server/identity-store.js';
+import { emptyAssetFilters } from '../../server/asset-page.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
 import { MediaService } from '../../server/media.js';
@@ -88,15 +89,33 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       if (asset.isPublic) await store.updateAsset(reported.id, { isPublic: true }, actorKey);
       reportedIds.push(reported.id);
     }
+    // `reportedAt` is immutable through the domain API, by design, so the demo
+    // restates it directly in the database rather than widening that surface.
+    // Only the seed does this; the application still has no way to rewrite a
+    // reporting timestamp. The spread makes ordering by date legible while
+    // keeping runs of identical timestamps for the tiebreaker.
+    for (const [index, id] of reportedIds.entries()) {
+      await session.executeWrite((tx) => tx.run('MATCH (a:Asset {id: $id}) SET a.reportedAt = datetime($at)',
+        { id, at: demoAssets()[index].reportedAt }));
+    }
+    const chronology = await session.run(`MATCH (a:Asset)
+      WITH toString(a.reportedAt) AS at, count(*) AS n
+      RETURN count(*) AS distinct, sum(CASE WHEN n > 1 THEN 1 ELSE 0 END) AS duplicated`);
+    const distinctDates = chronology.records[0].get('distinct').toNumber();
+    const duplicatedDates = chronology.records[0].get('duplicated').toNumber();
+    if (distinctDates < 2 || duplicatedDates < 1) {
+      throw new Error('Demo verification failed: reportedAt must have several distinct values and duplicates');
+    }
     // Allocation order is fixed, so the issued references are deterministic.
     for (const index of demoAllocations) {
       await store.allocateGiai(reportedIds[index], users[demoAssets()[index].reporter], allocateFrom.key);
     }
-    const page = await store.findAssets(users[0], { q: '', scope: 'all', limit: 1, after: null });
+    const page = await store.findAssets(users[0], { q: '', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 1, after: null });
     for (const scope of ['all', 'mine', 'group', 'public'] as const) {
       if (page.scopes[scope] !== evaluatorScopes[scope]) throw new Error('Demo verification failed: unexpected access counts');
     }
     return { assets: demoAssets().length, photos: demoAssets().filter((asset) => asset.photo).length,
-      namespaces: demoNamespaces.length, allocations: demoAllocations.length, scopes: page.scopes };
+      namespaces: demoNamespaces.length, allocations: demoAllocations.length, scopes: page.scopes,
+      distinctDates, duplicatedDates };
   } finally { await session.close(); await driver.close(); s3.destroy(); }
 }
