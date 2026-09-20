@@ -8,6 +8,7 @@ try {
   const result = await runDemo(mode, args, process.env);
   console.log(`Created ${result.assets} synthetic Assets. Evaluator scopes: ${JSON.stringify(result.scopes)}.`);
   console.log(`Configured ${result.namespaces} GS1 Company Prefix namespaces and allocated ${result.allocations} GIAIs.`);
+  console.log(`Reported over ${result.distinctDates} distinct dates, ${result.duplicatedDates} of them shared by several Assets.`);
   console.log('Development/demo only. Never expose these accounts publicly.');
   for (const account of demoAccounts) console.log(account.email + (account === demoAccounts[0] ? ' (system administrator)' : ''));
   console.log('Password for all demo accounts: ' + demoPassword);
