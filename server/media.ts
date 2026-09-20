@@ -1,5 +1,4 @@
 import { IdentityStore, type Asset, type ReportAsset, type ReportingContext } from './identity-store.js';
-import type { AssetIdentifier } from './identity.js';
 import { ValidationError } from './identity.js';
 import type { ObjectStorage } from './storage.js';
 
@@ -36,16 +35,16 @@ export class MediaService {
     }
     return this.upload(file, (key) => this.store.reportAsset(input, context, key));
   }
-  async add(identifier: AssetIdentifier, actorKey: string, file: File) {
-    await this.store.assertCanEdit(identifier, actorKey);
-    return this.upload(file, (key) => this.store.attachPhoto(identifier, actorKey, key));
+  async add(assetId: string, actorKey: string, file: File) {
+    await this.store.assertCanEdit(assetId, actorKey);
+    return this.upload(file, (key) => this.store.attachPhoto(assetId, actorKey, key));
   }
-  async read(identifier: AssetIdentifier, key: string, actorKey: string | null) {
-    const photo = await this.store.getPhoto(identifier, key, actorKey);
+  async read(assetId: string, key: string, actorKey: string | null) {
+    const photo = await this.store.getPhoto(assetId, key, actorKey);
     return { photo, bytes: await this.storage.get(key) };
   }
-  async remove(identifier: AssetIdentifier, actorKey: string, key: string) {
-    await this.store.beginPhotoDeletion(identifier, actorKey, key);
+  async remove(assetId: string, actorKey: string, key: string) {
+    await this.store.beginPhotoDeletion(assetId, actorKey, key);
     try { await this.cleanup(key); }
     catch (error) { console.error('Photo cleanup pending', error); }
   }

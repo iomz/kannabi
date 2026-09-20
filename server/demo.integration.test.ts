@@ -81,17 +81,22 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     }
     let cursor: string | null = null;
     const identifiers = new Set<string>();
+    const nativeIds = new Set<string>();
     do {
       const page = await store.findAssets(users[0], assetPageRequest({ ...(cursor ? { cursor } : {}) }));
-      page.assets.forEach((a) => identifiers.add(JSON.stringify(a.identifier)));
+      page.assets.forEach((a) => { identifiers.add(JSON.stringify(a.identifier)); nativeIds.add(a.id); });
       cursor = page.nextCursor;
     } while (cursor);
     assert.equal(identifiers.size, 124);
+    assert.equal(nativeIds.size, 124);
     const hidden = demoAssets().find((a) => a.group === 3 && !a.isPublic && a.photo)!;
-    assert.equal(await store.getAsset(hidden.identifier, users[0]), null);
-    const asset = (await store.getAsset(hidden.identifier, users[2]))!;
-    await assert.rejects(media.read(hidden.identifier, asset.photos[0].key, users[0]));
-    assert.deepEqual(Buffer.from((await media.read(hidden.identifier, asset.photos[0].key, users[2])).bytes),
+    const hiddenId = (await query('MATCH (a:Asset {name: $name}) RETURN a.id AS id',
+      { name: hidden.name })).records[0].get('id') as string;
+    assert.equal(await store.getAsset(hiddenId, users[0]), null);
+    const asset = (await store.getAsset(hiddenId, users[2]))!;
+    assert.deepEqual(asset.identifier, hidden.identifier);
+    await assert.rejects(media.read(hiddenId, asset.photos[0].key, users[0]));
+    assert.deepEqual(Buffer.from((await media.read(hiddenId, asset.photos[0].key, users[2])).bytes),
       await readFile(new URL('../scripts/demo/photos/' + hidden.photo, import.meta.url)));
     for (const key of mediaKeys) {
       const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));

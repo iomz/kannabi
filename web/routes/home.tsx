@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, redirect } from 'react-router';
-import { api, unwrap, assetPath } from '../api';
+import { api, unwrap } from '../api';
+import { assetPath, assetPhotoPath } from '../../shared/asset-uri';
 import type { Asset, AssetPage } from '../../server/identity-store';
 import type { AssetScope } from '../../server/asset-page';
 import { Icon } from '../icon';
@@ -45,9 +46,9 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
         { init: { signal: controller.signal } }));
       if (controller.signal.aborted) return;
       setPage((previous) => {
-        // Live edits can move an Asset in the name ordering. Keep one row per supported identity.
-        const assets = new Map(previous.assets.map((asset) => [assetPath(asset.identifier), asset]));
-        next.assets.forEach((asset) => assets.set(assetPath(asset.identifier), asset));
+        // Live edits can move an Asset in the name ordering. Keep one row per native Asset identity.
+        const assets = new Map(previous.assets.map((asset) => [asset.id, asset]));
+        next.assets.forEach((asset) => assets.set(asset.id, asset));
         return { ...next, assets: [...assets.values()] };
       });
     } catch {
@@ -88,8 +89,8 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
       {!page.assets.length ? <div className="panel empty-state"><h2>{q || scope !== 'all' ? 'No matching Assets' : 'Your inventory starts here'}</h2>
         <p>{q || scope !== 'all' ? 'Try another scope or search by name.' : 'Report an Asset with its existing identifier and choose a Group to collaborate with.'}</p>
         {!q && scope === 'all' && <Link to="/assets/report">Report your first Asset →</Link>}</div>
-        : <ul className="inventory-list">{page.assets.map((asset) => <li key={assetPath(asset.identifier)}>
-          <Link className="inventory-row" to={assetPath(asset.identifier)}>
+        : <ul className="inventory-list">{page.assets.map((asset) => <li key={asset.id}>
+          <Link className="inventory-row" to={assetPath(asset.id)}>
             <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
             <div className="inventory-row-body"><strong>{asset.name}</strong>
               <span className="asset-identifier">{asset.identifier.scheme.toUpperCase()} · {asset.identifier.scheme === 'sgtin' ? `${asset.identifier.gtin} / ${asset.identifier.serial}` : asset.identifier.grai}</span>
@@ -113,7 +114,7 @@ function Thumbnail({ asset }: { asset: Asset }) {
   const [failed, setFailed] = useState(false);
   const photo = asset.photos[0];
   return <div className="asset-thumbnail">{photo && !failed
-    ? <img src={'/api/photos/' + photo.key + '?' + new URLSearchParams(asset.identifier)}
+    ? <img src={assetPhotoPath(asset.id, photo.key)}
         alt={'Photo of ' + asset.name} loading="lazy" decoding="async" onError={() => setFailed(true)} />
     : <span title={failed ? 'Photo unavailable' : 'No photo'}><Icon name="photo" /><span className="sr-only">{failed ? 'Photo unavailable' : 'No photo'}</span></span>}</div>;
 }

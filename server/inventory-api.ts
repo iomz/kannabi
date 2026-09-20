@@ -6,7 +6,8 @@ import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
-import { canonicalIdentifier, record, requiredText, ValidationError } from './identity.js';
+import { record, requiredText, ValidationError } from './identity.js';
+import { assetId } from './asset-id.js';
 import { AdministrationError, LastAdministratorError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
@@ -182,25 +183,25 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const asset = await media.report(report as ReportAsset, { actorKey, groupKey: requiredText(groupKey, 'groupKey') }, file && file.size ? file : undefined);
       return c.json({ asset }, 201);
     })
-    .post('/photo', validator('query', canonicalIdentifier), async (c) => {
+    .post('/assets/:id/photos', async (c) => {
       const actorKey = actor(c.get('user'));
       if (!media) throw new HTTPException(503, { message: 'Media storage unavailable' });
       const form = await c.req.formData();
       const file = form.get('photo');
       if (!(file instanceof File)) throw new ValidationError('Expected a photo file');
-      return c.json({ asset: await media.add(c.req.valid('query'), actorKey, file) }, 201);
+      return c.json({ asset: await media.add(assetId(c.req.param('id')), actorKey, file) }, 201);
     })
-    .get('/photos/:key', validator('query', canonicalIdentifier), async (c) => {
+    .get('/assets/:id/photos/:key', async (c) => {
       if (!media) throw new HTTPException(503, { message: 'Media storage unavailable' });
-      const { photo, bytes } = await media.read(c.req.valid('query'), c.req.param('key'), c.get('user')?.key ?? null);
+      const { photo, bytes } = await media.read(assetId(c.req.param('id')), c.req.param('key'), c.get('user')?.key ?? null);
       c.header('Content-Type', photo.contentType);
       c.header('X-Content-Type-Options', 'nosniff');
       c.header('Content-Disposition', 'inline');
       return c.body(new Uint8Array(bytes).buffer);
     })
-    .delete('/photo/:key', validator('query', canonicalIdentifier), async (c) => {
+    .delete('/assets/:id/photos/:key', async (c) => {
       if (!media) throw new HTTPException(503, { message: 'Media storage unavailable' });
-      await media.remove(c.req.valid('query'), actor(c.get('user')), c.req.param('key'));
+      await media.remove(assetId(c.req.param('id')), actor(c.get('user')), c.req.param('key'));
       return c.json({ deleted: true });
     })
     .get('/groups', async (c) => c.json({ groups: await store.listGroups(actor(c.get('user'))) }))
@@ -232,16 +233,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const asset = await store.reportAsset(report, { actorKey, groupKey });
       return c.json({ asset }, 201);
     })
-    .get('/asset', validator('query', canonicalIdentifier), async (c) => {
+    .get('/assets/:id', async (c) => {
       const user = c.get('user');
-      const asset = await store.getAsset(c.req.valid('query'), user?.key ?? null);
+      const asset = await store.getAsset(assetId(c.req.param('id')), user?.key ?? null);
       if (!asset) return c.json({ error: 'Asset not found' }, 404);
       const groups = user ? await store.listGroups(user.key) : [];
       return c.json({ asset, canEdit: groups.some((g) => asset.groups.some((access) => access.key === g.key)) });
     })
-    .patch('/asset', validator('query', canonicalIdentifier), validator('json', (value) =>
+    .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {
-      const asset = await store.updateAsset(c.req.valid('query'), c.req.valid('json'), actor(c.get('user')));
+      const asset = await store.updateAsset(assetId(c.req.param('id')), c.req.valid('json'), actor(c.get('user')));
       return c.json({ asset });
     })
     .onError((error, c) => {

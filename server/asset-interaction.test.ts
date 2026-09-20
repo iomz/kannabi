@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { clientAction } from '../web/routes/asset.js';
+import { newAssetId } from './asset-id.js';
 
-const assetUrl = 'http://127.0.0.1:3000/asset?scheme=sgtin&gtin=00614141123452&serial=interaction';
+const id = newAssetId();
+const assetUrl = 'http://127.0.0.1:3000/asset/' + id;
 
 test('Asset edit and photo actions return fetcher data instead of redirects', async () => {
   const originalFetch = globalThis.fetch;
@@ -21,7 +23,7 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     edit.set('name', 'Updated Asset');
     edit.set('isPublic', 'on');
     const editResult = await clientAction({
-      request: new Request(assetUrl, { method: 'POST', body: edit }),
+      params: { id }, request: new Request(assetUrl, { method: 'POST', body: edit }),
     } as never);
     assert.deepEqual(editResult, { kind: 'edit', saved: true, error: null, photoKey: null });
     assert.equal(editResult instanceof Response, false);
@@ -30,7 +32,7 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     photo.set('intent', 'photo');
     photo.set('photo', new File([new Uint8Array([1])], 'photo.png', { type: 'image/png' }));
     const photoResult = await clientAction({
-      request: new Request(assetUrl, { method: 'POST', body: photo }),
+      params: { id }, request: new Request(assetUrl, { method: 'POST', body: photo }),
     } as never);
     assert.deepEqual(photoResult, { kind: 'photo', saved: true, error: null, photoKey: 'new-photo' });
     assert.equal(photoResult instanceof Response, false);
@@ -39,12 +41,17 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     deletion.set('intent', 'delete-photo');
     deletion.set('photoKey', 'new-photo');
     const deletionResult = await clientAction({
-      request: new Request(assetUrl, { method: 'POST', body: deletion }),
+      params: { id }, request: new Request(assetUrl, { method: 'POST', body: deletion }),
     } as never);
     assert.deepEqual(deletionResult, { kind: 'delete-photo', saved: true, error: null, photoKey: 'new-photo' });
     assert.equal(deletionResult instanceof Response, false);
 
     assert.deepEqual(requests.map((request) => request.method), ['PATCH', 'POST', 'DELETE']);
+    // Every Asset-scoped call addresses the native Asset id, never an external identifier.
+    assert.deepEqual(requests.map((request) => new URL(request.url, assetUrl).pathname), [
+      `/api/assets/${id}`, `/api/assets/${id}/photos`, `/api/assets/${id}/photos/new-photo`,
+    ]);
+    assert.ok(requests.every((request) => !new URL(request.url, assetUrl).search));
   } finally {
     globalThis.fetch = originalFetch;
   }

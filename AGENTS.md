@@ -11,8 +11,12 @@ Preserve the README naming story at the bottom of README.
 - Do not introduce direct User-to-Asset ACLs.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
-- Public Asset identity uses supported identifiers such as SGTIN or GRAI, never a separate application ID.
-- Internal database keys remain implementation details.
+- Every Asset has an immutable application-owned `Asset.id`, assigned at reporting time and never changed; startup verifies this and fails closed on data that violates it.
+- `Asset.id` is a canonical lowercase UUIDv7 and is the only Kannabi Asset identity; it addresses the Asset everywhere, including the canonical public Asset URI.
+- Migration assigns a native identity only where one is missing, under a lock that makes concurrent startup safe; an unrecognized identity is never repaired or replaced.
+- The UUIDv7 timestamp has no domain meaning; Asset chronology uses explicit fields such as `reportedAt`.
+- SGTIN and GRAI are external domain identifiers, not Kannabi's native Asset identity; standards define external contracts, never the internal identity model.
+- Internal database keys, including Neo4j node identity, remain implementation details.
 - GS1 Digital Link, resolver semantics, and identifier issuance remain deferred.
 - Account deletion removes the active personal account but preserves immutable Asset provenance by default.
 - Deleted reporters become non-active tombstones that retain only the deletion-time display name required for human-readable provenance; they must not behave as discoverable Users.

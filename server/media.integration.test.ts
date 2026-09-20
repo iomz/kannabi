@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
+import { isAssetId } from './asset-id.js';
 import { IdentityStore } from './identity-store.js';
 import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
@@ -37,8 +38,10 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   const group = await store.createReportingGroup('Team', user.key);
   await store.addGroupMember(user.key, group.key, member.key);
   const context = { actorKey: user.key, groupKey: group.key };
-  const id = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'media' };
-  const input = { name: 'Camera', identifiers: [id] };
+  const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'media' };
+  const input = { name: 'Camera', identifiers: [identifier] };
+  // The native Asset id, assigned by the first successful report below.
+  let assetId = '';
   async function query(cypher: string, params = {}) {
     const session = driver.session();
     try { return await session.run(cypher, params); } finally { await session.close(); }
@@ -63,59 +66,62 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await assert.rejects(store.reportAsset(input, context), /photo is required/);
     const empty = new FormData(); empty.set('report', JSON.stringify({ ...input, groupKey: group.key }));
     assert.equal((await request('/reports', 'POST', empty)).status, 400);
-    assert.equal(await store.getAsset(id, user.key), null);
+    assert.equal((await query('MATCH (a:Asset) RETURN count(a) AS n')).records[0].get('n').toNumber(), 0);
     const form = new FormData(); form.set('report', JSON.stringify({ ...input, groupKey: group.key })); form.set('photo', photo());
     const response = await request('/reports', 'POST', form);
     assert.equal(response.status, 201, await response.clone().text());
     const asset = (await response.json()).asset;
+    assetId = asset.id;
+    assert.ok(isAssetId(assetId), assetId);
     assert.equal(asset.photos.length, 1);
     assert.deepEqual(Buffer.from(await storage.get(asset.photos[0].key)), png);
     assert.match(asset.reportedAt, /Z$/);
   });
 
   await t.test('photo access follows Asset visibility and membership, including revocation', async () => {
-    const asset = (await store.getAsset(id, user.key))!;
+    const asset = (await store.getAsset(assetId, user.key))!;
     const key = asset.photos[0].key;
     const inventory = await (await request('/assets?q=camERA&limit=1')).json();
     assert.equal(inventory.matching, 1);
     assert.deepEqual(inventory.assets[0].photos, asset.photos);
-    assert.deepEqual(inventory.assets[0].identifier, id);
-    const path = '/photos/' + key + '?' + new URLSearchParams(id);
+    assert.deepEqual(inventory.assets[0].identifier, identifier);
+    assert.equal(inventory.assets[0].id, assetId);
+    const path = `/assets/${assetId}/photos/${key}`;
     assert.equal((await request(path)).status, 200);
     assert.equal((await request(path, 'GET', undefined, false)).status, 404);
-    await assert.rejects(media.read(id, key, stranger.key));
-    await assert.rejects(media.add(id, stranger.key, photo()));
-    const added = await media.add(id, member.key, photo());
+    await assert.rejects(media.read(assetId, key, stranger.key));
+    await assert.rejects(media.add(assetId, stranger.key, photo()));
+    const added = await media.add(assetId, member.key, photo());
     assert.equal(added.photos.length, 2);
     assert.deepEqual(added.photos.map(({ key: photoKey }) => photoKey), [key, added.photos[1].key]);
     assert.ok(added.photos.every(({ createdAt }) => createdAt !== null));
-    await store.updateAsset(id, { isPublic: true }, user.key);
+    await store.updateAsset(assetId, { isPublic: true }, user.key);
     const publicRead = await request(path, 'GET', undefined, false);
     assert.equal(publicRead.status, 200);
     assert.equal(publicRead.headers.get('Cache-Control'), 'no-store');
     assert.deepEqual(Buffer.from(await publicRead.arrayBuffer()), png);
-    await assert.rejects(media.add(id, stranger.key, photo()));
+    await assert.rejects(media.add(assetId, stranger.key, photo()));
     const form = new FormData(); form.set('photo', photo());
-    assert.equal((await request('/photo?' + new URLSearchParams(id), 'POST', form, false)).status, 401);
-    await store.updateAsset(id, { isPublic: false }, user.key);
+    assert.equal((await request(`/assets/${assetId}/photos`, 'POST', form, false)).status, 401);
+    await store.updateAsset(assetId, { isPublic: false }, user.key);
     assert.equal((await request(path, 'GET', undefined, false)).status, 404);
     await store.leaveGroup(user.key, group.key);
     assert.equal((await store.accountState(user.key)).isAdmin, true);
     assert.equal((await request(path)).status, 404); // administrator is not an Asset ACL
-    await assert.rejects(media.add(id, user.key, photo()));
-    assert.deepEqual((await store.getAsset(id, member.key))!.reportedBy, asset.reportedBy);
+    await assert.rejects(media.add(assetId, user.key, photo()));
+    assert.deepEqual((await store.getAsset(assetId, member.key))!.reportedBy, asset.reportedBy);
     await store.addGroupMember(member.key, group.key, user.key);
   });
 
   await t.test('authorized deletion removes public photo metadata and object while other actors are rejected', async () => {
-    const asset = (await store.getAsset(id, user.key))!;
+    const asset = (await store.getAsset(assetId, user.key))!;
     const key = asset.photos.at(-1)!.key;
-    const path = '/photos/' + key + '?' + new URLSearchParams(id);
-    const deletionPath = '/photo/' + key + '?' + new URLSearchParams(id);
-    await store.updateAsset(id, { isPublic: true }, user.key);
+    const path = `/assets/${assetId}/photos/${key}`;
+    const deletionPath = path;
+    await store.updateAsset(assetId, { isPublic: true }, user.key);
     assert.equal((await request(path, 'GET', undefined, false)).status, 200);
 
-    await assert.rejects(media.remove(id, stranger.key, key));
+    await assert.rejects(media.remove(assetId, stranger.key, key));
     assert.equal((await request(deletionPath, 'DELETE', undefined, false)).status, 401);
     assert.equal((await request(path, 'GET', undefined, false)).status, 200);
 
@@ -123,16 +129,17 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request(path, 'GET', undefined, false)).status, 404);
     assert.equal((await request(path)).status, 404);
     await assert.rejects(storage.get(key));
-    assert.equal((await store.getAsset(id, user.key))!.photos.some((candidate) => candidate.key === key), false);
-    await store.updateAsset(id, { isPublic: false }, user.key);
+    assert.equal((await store.getAsset(assetId, user.key))!.photos.some((candidate) => candidate.key === key), false);
+    await store.updateAsset(assetId, { isPublic: false }, user.key);
   });
 
   await t.test('optional policy accepts photo-free reports and does not affect existing Assets', async () => {
     await store.updateSettings(user.key, { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
-    const asset = await media.report({ name: 'Optional', identifiers: [{ ...id, serial: 'optional' }] }, context);
+    const asset = await media.report({ name: 'Optional', identifiers: [{ ...identifier, serial: 'optional' }] }, context);
     assert.deepEqual(asset.photos, []);
+    assert.notEqual(asset.id, assetId);
     await store.updateSettings(user.key, { requirePhoto: true, displayTimezone: 'UTC', themeId: 'default' });
-    assert.ok(await store.updateAsset(asset.identifier, { name: 'Still editable' }, user.key));
+    assert.ok(await store.updateAsset(asset.id, { name: 'Still editable' }, user.key));
   });
 
   await t.test('failed S3 writes and duplicate identity commits clean bytes without attaching metadata', async () => {
@@ -141,13 +148,13 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
       put: async (key, bytes, mime) => { failedKey = key; await storage.put(key, bytes, mime); throw new Error('Write acknowledgement lost'); },
       get: (key) => storage.get(key), delete: (key) => storage.delete(key),
     };
-    const failedId = { ...id, serial: 'failed' };
+    const failedId = { ...identifier, serial: 'failed' };
     await assert.rejects(new MediaService(store, failing).report({ name: 'Failed', identifiers: [failedId] }, context, photo()), /acknowledgement/);
-    assert.equal(await store.getAsset(failedId, user.key), null);
+    assert.equal((await query('MATCH (i:Identifier {serial: $serial}) RETURN i', { serial: 'failed' })).records.length, 0);
     await assert.rejects(storage.get(failedKey));
-    const before = (await store.getAsset(id, user.key))!.photos.length;
+    const before = (await store.getAsset(assetId, user.key))!.photos.length;
     await assert.rejects(media.report(input, context, photo()), /already claimed/);
-    assert.equal((await store.getAsset(id, user.key))!.photos.length, before);
+    assert.equal((await store.getAsset(assetId, user.key))!.photos.length, before);
     const dangling = await query("MATCH (:Asset)-[:HAS_PHOTO]->(m:Media) WHERE m.state <> 'attached' RETURN m");
     assert.equal(dangling.records.length, 0);
   });
@@ -158,7 +165,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
       put: async (key, bytes, mime) => { failedKey = key; await storage.put(key, bytes, mime); throw new Error('Upload failed'); },
       get: (key) => storage.get(key), delete: async () => { throw new Error('Storage unavailable'); },
     };
-    await assert.rejects(new MediaService(store, failing).add(id, user.key, photo()));
+    await assert.rejects(new MediaService(store, failing).add(assetId, user.key, photo()));
     assert.deepEqual(Buffer.from(await storage.get(failedKey)), png);
     const abandoned = await store.reservePhoto('image/png', png.length);
     await storage.put(abandoned, png, 'image/png');
@@ -167,14 +174,14 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await assert.rejects(storage.get(failedKey)); await assert.rejects(storage.get(abandoned));
     assert.equal((await query("MATCH (m:Media) WHERE m.state <> 'attached' RETURN m")).records.length, 0);
 
-    const deletionCandidate = (await media.add(id, user.key, photo())).photos.at(-1)!.key;
-    await new MediaService(store, failing).remove(id, user.key, deletionCandidate);
+    const deletionCandidate = (await media.add(assetId, user.key, photo())).photos.at(-1)!.key;
+    await new MediaService(store, failing).remove(assetId, user.key, deletionCandidate);
     assert.deepEqual(Buffer.from(await storage.get(deletionCandidate)), png);
-    assert.equal((await store.getAsset(id, user.key))!.photos.some(({ key }) => key === deletionCandidate), false);
+    assert.equal((await store.getAsset(assetId, user.key))!.photos.some(({ key }) => key === deletionCandidate), false);
     await media.cleanup();
     await assert.rejects(storage.get(deletionCandidate));
 
-    const attached = (await store.getAsset(id, user.key))!.photos[0].key;
+    const attached = (await store.getAsset(assetId, user.key))!.photos[0].key;
     await media.cleanup(attached);
     assert.deepEqual(Buffer.from(await storage.get(attached)), png);
   });

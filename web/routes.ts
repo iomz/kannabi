@@ -7,7 +7,7 @@ export default [
   route('forgot-password', 'routes/forgot-password.tsx'),
   route('reset-password', 'routes/reset-password.tsx'),
   route('assets/report', 'routes/report.tsx'),
-  route('asset', 'routes/asset.tsx'),
+  route('asset/:id', 'routes/asset.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),
   route('admin/members', 'routes/members.tsx'),
