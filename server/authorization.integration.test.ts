@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { isAssetId, newAssetId } from './asset-id.js';
 import { test } from 'node:test';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
@@ -92,7 +93,8 @@ test('local authentication and Group authorization', { skip: !uri || !password }
 
   let groupKey: string;
   const identifier = { scheme: 'sgtin', gtin: '00614141123452', serial: '001/a%?' };
-  const query = new URLSearchParams(identifier).toString();
+  // The canonical native Asset path, assigned when the Asset is reported.
+  let assetPath = '';
   let reportedAt: string;
   await t.test('create Group, add member, report in explicit context', async () => {
     const created = await reporter.request('/groups', 'POST', { name: 'Team' });
@@ -111,6 +113,9 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const reported = await reporter.request('/assets', 'POST', input);
     assert.equal(reported.status, 201, await reported.clone().text());
     const { asset } = await reported.json();
+    assert.ok(isAssetId(asset.id), asset.id);
+    assetPath = '/assets/' + asset.id;
+    assert.deepEqual(asset.identifier, identifier);
     assert.deepEqual(asset.reportedBy, { ...people[0], status: 'active' });
     assert.equal(asset.groups[0].key, groupKey);
     assert.equal(asset.isPublic, false);
@@ -118,52 +123,60 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   });
 
   await t.test('member reads and edits private Asset; unrelated and anonymous callers cannot', async () => {
-    const read = await member.request('/asset?' + query);
+    const read = await member.request(assetPath);
     assert.equal(read.status, 200);
     assert.equal((await read.json()).canEdit, true);
-    assert.equal((await member.request('/asset?' + query, 'PATCH', { name: 'Bench instrument' })).status, 200);
+    assert.equal((await member.request(assetPath, 'PATCH', { name: 'Bench instrument' })).status, 200);
     for (const [caller, editStatus] of [[stranger, 404], [anonymous, 401]] as const) {
-      const inaccessible = await caller.request('/asset?' + query);
-      const missing = await caller.request('/asset?' + new URLSearchParams({ ...identifier, serial: 'missing' }));
+      const inaccessible = await caller.request(assetPath);
+      const missing = await caller.request('/assets/' + newAssetId());
       assert.equal(inaccessible.status, 404);
       assert.equal(missing.status, 404);
       assert.deepEqual(await inaccessible.json(), await missing.json());
-      assert.equal((await caller.request('/asset?' + query, 'PATCH', { name: 'Denied' })).status, editStatus);
+      assert.equal((await caller.request(assetPath, 'PATCH', { name: 'Denied' })).status, editStatus);
+    }
+    // The retired identifier-addressed route is gone, not aliased or redirected.
+    for (const retired of ['/asset?' + new URLSearchParams(identifier), '/photos/any-key?' + new URLSearchParams(identifier)]) {
+      assert.equal((await member.request(retired)).status, 404);
     }
     const found = await member.request('/assets?q=Bench');
     assert.equal((await found.json()).assets.length, 1);
     assert.equal((await (await stranger.request('/assets?q=Bench')).json()).assets.length, 0);
     assert.equal((await anonymous.request('/assets')).status, 401);
-    assert.equal((await member.request('/asset?' + query, 'PATCH', { reportedBy: people[1].key })).status, 400);
-    assert.equal((await member.request('/asset?' + query, 'PATCH', { name: 'CSRF' }, 'https://elsewhere.example')).status, 403);
+    assert.equal((await member.request(assetPath, 'PATCH', { reportedBy: people[1].key })).status, 400);
+    assert.equal((await member.request(assetPath, 'PATCH', { id: newAssetId() })).status, 400);
+    assert.equal((await member.request(assetPath, 'PATCH', { name: 'CSRF' }, 'https://elsewhere.example')).status, 403);
   });
 
   await t.test('public full representation is readable anonymously and never grants edit access', async () => {
-    assert.equal((await member.request('/asset?' + query, 'PATCH', { isPublic: true })).status, 200);
-    const expected = (await (await member.request('/asset?' + query)).json()).asset;
+    assert.equal((await member.request(assetPath, 'PATCH', { isPublic: true })).status, 200);
+    const expected = (await (await member.request(assetPath)).json()).asset;
     for (const [caller, editStatus] of [[stranger, 404], [anonymous, 401]] as const) {
-      const response = await caller.request('/asset?' + query);
+      const response = await caller.request(assetPath);
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.asset, expected);
+      // The native Asset id belongs to the legitimate public representation.
       assert.deepEqual(Object.keys(result.asset).sort(),
-        ['groups', 'identifier', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+        ['groups', 'id', 'identifier', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+      assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);
       assert.equal('role' in result.asset.reportedBy, false);
       assert.equal('password' in result.asset.reportedBy, false);
       assert.equal(result.canEdit, false);
-      assert.equal((await caller.request('/asset?' + query, 'PATCH', { name: 'Denied' })).status, editStatus);
+      assert.equal((await caller.request(assetPath, 'PATCH', { name: 'Denied' })).status, editStatus);
     }
-    assert.equal((await member.request('/asset?' + query, 'PATCH', { isPublic: false })).status, 200);
-    assert.equal((await anonymous.request('/asset?' + query)).status, 404);
+    assert.equal((await member.request(assetPath, 'PATCH', { isPublic: false })).status, 200);
+    assert.equal((await anonymous.request(assetPath)).status, 404);
   });
 
   await t.test('leaving Group revokes reporter access while provenance stays immutable', async () => {
     assert.equal((await reporter.request(`/groups/${groupKey}/membership`, 'DELETE')).status, 200);
-    assert.equal((await reporter.request('/asset?' + query)).status, 404);
-    assert.equal((await reporter.request('/asset?' + query, 'PATCH', { name: 'Denied' })).status, 404);
-    const response = await member.request('/asset?' + query);
+    assert.equal((await reporter.request(assetPath)).status, 404);
+    assert.equal((await reporter.request(assetPath, 'PATCH', { name: 'Denied' })).status, 404);
+    const response = await member.request(assetPath);
     const { asset } = await response.json();
+    assert.equal('/assets/' + asset.id, assetPath);
     assert.deepEqual(asset.reportedBy, { ...people[0], status: 'active' });
     assert.equal(asset.reportedAt, reportedAt);
     assert.equal(asset.name, 'Bench instrument');
@@ -186,9 +199,9 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const foreignGroup = await store.createReportingGroup('Foreign', people[2].key);
     for (const serial of ['hidden', 'visible']) {
       const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial };
-      await store.reportAsset({ name: 'Inventory Twin', identifiers: [identifier] },
+      const reported = await store.reportAsset({ name: 'Inventory Twin', identifiers: [identifier] },
         { actorKey: people[2].key, groupKey: foreignGroup.key });
-      if (serial === 'visible') await store.updateAsset(identifier, { isPublic: true }, people[2].key);
+      if (serial === 'visible') await store.updateAsset(reported.id, { isPublic: true }, people[2].key);
     }
     for (const [scope, count] of [['all', 107], ['mine', 105], ['group', 106], ['public', 1]] as const) {
       const page = await (await member.request('/assets?scope=' + scope)).json();

@@ -111,7 +111,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       const asset = await store.reportAsset({ name: 'Self-deleted provenance', identifiers: [identifier] },
         { actorKey: selfKey, groupKey: group.key });
       assert.deepEqual(asset.reportedBy, { key: selfKey, name: 'Self deleting member', status: 'active' });
-      await store.updateAsset(identifier, { isPublic: true }, selfKey);
+      await store.updateAsset(asset.id, { isPublic: true }, selfKey);
       assert.equal((await selfDeleting('/auth/request-password-reset', 'POST', {
         email: 'self-delete@example.com', redirectTo: origin + '/reset-password',
       })).status, 200);
@@ -140,7 +140,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
         assert.equal(row.get('groupMembers').toNumber(), 0);
         assert.equal(row.get('verificationCount').toNumber(), 0);
       } finally { await session.close(); }
-      const publicAsset = await anonymous('/asset?' + new URLSearchParams(identifier));
+      const publicAsset = await anonymous('/assets/' + asset.id);
       assert.equal(publicAsset.status, 200);
       assert.deepEqual((await publicAsset.json()).asset.reportedBy,
         { key: selfKey, name: 'Self deleting member', status: 'deleted' });
@@ -209,7 +209,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       const asset = await store.reportAsset({ name: 'Retained provenance', identifiers: [identifier] },
         { actorKey: keys[1], groupKey: group.key });
       assert.deepEqual(asset.reportedBy, { key: keys[1], name: 'Edited member', status: 'active' });
-      await store.updateAsset(identifier, { isPublic: true }, keys[1]);
+      await store.updateAsset(asset.id, { isPublic: true }, keys[1]);
       const targetAccount = await store.memberAccount(keys[0], keys[1]);
       assert.equal((await admin(`/members/${keys[0]}`, 'DELETE')).status, 403);
       assert.equal((await admin(`/members/${keys[1]}`, 'DELETE')).status, 200);
@@ -239,7 +239,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
         assert.equal(row.get('groupMembers').toNumber(), 0);
         assert.equal(row.get('verificationCount').toNumber(), 0);
       } finally { await session.close(); }
-      const publicAsset = await anonymous('/asset?' + new URLSearchParams(identifier));
+      const publicAsset = await anonymous('/assets/' + asset.id);
       assert.equal(publicAsset.status, 200);
       assert.deepEqual((await publicAsset.json()).asset.reportedBy,
         { key: keys[1], name: 'Edited member', status: 'deleted' });
@@ -256,12 +256,12 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
 
     await t.test('final administrator role protection remains atomic', async () => {
       const privateGroup = await store.createReportingGroup('Admin-only asset group', keys[0]);
-      const privateAsset = { scheme: 'grai' as const, grai: '00614141234561789' };
-      await store.reportAsset({ name: 'Role-independent access', identifiers: [privateAsset] },
-        { actorKey: keys[0], groupKey: privateGroup.key });
+      const privateAsset = await store.reportAsset({ name: 'Role-independent access',
+        identifiers: [{ scheme: 'grai' as const, grai: '00614141234561789' }] },
+      { actorKey: keys[0], groupKey: privateGroup.key });
       assert.equal((await admin(`/members/${keys[0]}/role`, 'PATCH', { isAdmin: false })).status, 409);
       assert.equal((await admin(`/members/${pendingKey}/role`, 'PATCH', { isAdmin: true })).status, 200);
-      assert.equal(await store.getAsset(privateAsset, pendingKey), null);
+      assert.equal(await store.getAsset(privateAsset.id, pendingKey), null);
       const secondAdmin = client(10);
       assert.equal((await secondAdmin('/auth/sign-in/email', 'POST', {
         email: 'pending@example.com', password: 'established-password-12345',

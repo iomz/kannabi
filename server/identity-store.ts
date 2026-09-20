@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { validateSettings, type Settings } from './settings.js';
-import type { Driver, ManagedTransaction } from 'neo4j-driver';
+import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
 import { int } from 'neo4j-driver';
 import { assetCursor, type AssetPageRequest, type AssetScope } from './asset-page.js';
+import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import {
-  canonicalClaims, canonicalIdentifier, record, requiredText, ValidationError,
+  canonicalClaims, record, requiredText, ValidationError,
   type AssetIdentifier, type IdentifierClaim,
 } from './identity.js';
 import { isAppearancePreference, type AppearancePreference } from '../shared/appearance.js';
@@ -23,10 +24,12 @@ const memberProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
     THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
 
-// Entity keys are internal references. Assets have no generated application ID.
+// Entity keys are internal references. An Asset carries its own native
+// application identity in `id`; external identifiers never address the Asset.
 export type Entity = Readonly<{ key: string; name: string }>;
 export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'deleted' }>;
 export type Asset = Readonly<{
+  id: string;
   name: string;
   identifier: AssetIdentifier;
   reportedBy: ReporterAttribution;
@@ -47,8 +50,14 @@ export function orderPhotos(photos: readonly Photo[]): Photo[] {
   });
 }
 
-function assetWithOrderedPhotos(asset: Omit<Asset, 'identifier'>, identifier: AssetIdentifier): Asset {
-  return { ...asset, identifier, photos: orderPhotos(asset.photos) };
+type StoredIdentifier = { scheme: string; value: string; serial: string };
+type StoredAsset = Omit<Asset, 'identifier'> & { identifier: StoredIdentifier };
+
+function assetFrom(stored: StoredAsset): Asset {
+  const i = stored.identifier;
+  const identifier: AssetIdentifier = i.scheme === 'sgtin'
+    ? { scheme: 'sgtin', gtin: i.value, serial: i.serial } : { scheme: 'grai', grai: i.value };
+  return { ...stored, identifier, photos: orderPhotos(stored.photos) };
 }
 export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
 export type ReportAsset = {
@@ -66,9 +75,14 @@ const constraints = [
   'CREATE CONSTRAINT user_key IF NOT EXISTS FOR (n:User) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT group_key IF NOT EXISTS FOR (n:Group) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT owner_key IF NOT EXISTS FOR (n:Owner) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT migration_key IF NOT EXISTS FOR (n:Migration) REQUIRE n.key IS UNIQUE',
   `CREATE CONSTRAINT identifier_claim IF NOT EXISTS FOR (n:Identifier)
    REQUIRE (n.scheme, n.value, n.serial) IS UNIQUE`,
 ];
+
+// Installed only once every Asset carries a native id, so a pre-Phase-1
+// database is not rejected before its Assets can be migrated.
+const assetIdConstraint = 'CREATE CONSTRAINT asset_id IF NOT EXISTS FOR (n:Asset) REQUIRE n.id IS UNIQUE';
 
 function claimProperties(identifier: AssetIdentifier) {
   return identifier.scheme === 'sgtin'
@@ -76,18 +90,18 @@ function claimProperties(identifier: AssetIdentifier) {
     : { scheme: identifier.scheme, value: identifier.grai, serial: '' };
 }
 
-const assetMatch = `MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:Identifier {
-  scheme: $claim.scheme, value: $claim.value, serial: $claim.serial
-})`;
+const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:CAN_COLLABORATE]->(a)
 }`;
 const assetProjection = `
+  MATCH (a)-[:IDENTIFIED_BY]->(i:Identifier)
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-  WITH a, u, o, collect(g { .key, .name }) AS groups
-  RETURN a { .name, .isPublic, reportedAt: toString(a.reportedAt),
+  WITH a, i, u, o, collect(g { .key, .name }) AS groups
+  RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),
+    identifier: i { .scheme, .value, .serial },
     reportedBy: { key: u.key,
       name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
       status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END }, owner: o { .key, .name },
@@ -105,7 +119,12 @@ export class IdentityStore {
     const session = driver.session();
     try {
       // Fail closed if constraints cannot be installed, including on dirty data.
+      // These do not depend on migrated Asset data, and migration_key must exist
+      // before the backfill can take its lock.
       for (const statement of constraints) await session.run(statement);
+      await IdentityStore.backfillAssetIds(driver);
+      await IdentityStore.verifyAssetIds(session);
+      await session.run(assetIdConstraint);
       await session.run(`MERGE (s:Settings {key: 'instance'})
         ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0
         SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
@@ -121,7 +140,7 @@ export class IdentityStore {
       const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
       for (const [label, properties] of [
         ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
-        ['Identifier', ['scheme', 'value', 'serial']],
+        ['Migration', ['key']], ['Asset', ['id']], ['Identifier', ['scheme', 'value', 'serial']],
       ] as const) {
         if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
           && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
@@ -133,6 +152,60 @@ export class IdentityStore {
       await session.close();
     }
     return new IdentityStore(driver);
+  }
+
+  /** Assign a native identity to Assets reported before Phase 1.
+   *
+   * Each batch runs in one transaction that first takes a write lock on the
+   * migration node, so a concurrently starting Kannabi blocks there and only
+   * reads `id IS NULL` once the peer's assignments are committed. Without that
+   * lock both processes read the same rows as null and the second overwrites
+   * ids the first already assigned.
+   *
+   * Idempotent: only `id IS NULL` Assets are written, so an interrupted or
+   * repeated migration never replaces an assigned id. Values are ordinary
+   * UUIDv7s generated now; no chronology is synthesized from `reportedAt`.
+   */
+  private static async backfillAssetIds(driver: Driver): Promise<void> {
+    const batch = 500;
+    const session = driver.session();
+    try {
+      for (;;) {
+        const ids = Array.from({ length: batch }, () => newAssetId());
+        const assigned = await session.executeWrite(async (tx) => {
+          // Held until this transaction commits, covering the read below.
+          await tx.run("MERGE (m:Migration {key: 'asset-id'}) SET m.lock = true");
+          const result = await tx.run(`
+            MATCH (a:Asset) WHERE a.id IS NULL
+            WITH a LIMIT $batch
+            WITH collect(a) AS legacy
+            UNWIND range(0, size(legacy) - 1) AS position
+            WITH legacy[position] AS asset, $ids[position] AS id
+            SET asset.id = id
+            RETURN count(asset) AS assigned`, { batch: int(batch), ids });
+          return result.records[0].get('assigned').toNumber() as number;
+        });
+        if (!assigned) return;
+      }
+    } finally { await session.close(); }
+  }
+
+  /** A uniqueness constraint establishes neither presence nor format, and
+   * Neo4j Community cannot express either, so startup checks them here.
+   * A non-null id that is not a canonical lowercase UUIDv7 is corrupt or
+   * unsupported data: fail closed rather than replace a value we do not
+   * recognize. The pattern is shared with `isAssetId`.
+   */
+  private static async verifyAssetIds(session: Session): Promise<void> {
+    const result = await session.run(`MATCH (a:Asset)
+      WHERE NOT coalesce(toString(a.id), '') =~ $pattern
+      RETURN count(a) AS invalid, collect(a.id)[0..3] AS samples`, { pattern: assetIdPattern });
+    const invalid = result.records[0].get('invalid').toNumber();
+    if (invalid) {
+      const samples = (result.records[0].get('samples') as unknown[]).map((value) => JSON.stringify(value)).join(', ');
+      throw new Error(`${invalid} Asset(s) have a missing or invalid native id `
+        + `(${samples}); a canonical lowercase UUIDv7 is required and unrecognized values are never replaced`);
+    }
   }
 
   private async write<T>(work: (tx: ManagedTransaction) => Promise<T>): Promise<T> {
@@ -210,6 +283,7 @@ export class IdentityStore {
     const actor = record(context, ['actorKey', 'groupKey']);
     const identifier = canonicalClaims(input.identifiers);
     const params = {
+      assetId: newAssetId(),
       name: requiredText(input.name, 'name'),
       actorKey: requiredText(actor.actorKey, 'actorKey'),
       groupKey: requiredText(actor.groupKey, 'groupKey'),
@@ -227,7 +301,7 @@ export class IdentityStore {
           OPTIONAL MATCH (o:Owner {key: $ownerKey})
           WITH u, g, o WHERE $ownerKey IS NULL OR o IS NOT NULL
           CREATE (i:Identifier $claim)
-          CREATE (a:Asset {name: $name, reportedAt: datetime(), isPublic: false})
+          CREATE (a:Asset {id: $assetId, name: $name, reportedAt: datetime(), isPublic: false})
           CREATE (a)-[:IDENTIFIED_BY]->(i), (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
           FOREACH (owner IN CASE WHEN o IS NULL THEN [] ELSE [o] END |
             CREATE (a)-[:OWNED_BY]->(owner))
@@ -238,7 +312,7 @@ export class IdentityStore {
         if (!result.records.length) {
           throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
         }
-        return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
+        return assetFrom(result.records[0].get('asset'));
       });
     } catch (error) {
       // CREATE, rather than MERGE, makes every second claim a conflict.
@@ -251,15 +325,14 @@ export class IdentityStore {
     }
   }
 
-  async getAsset(value: AssetIdentifier, actorKey: string | null): Promise<Asset | null> {
-    const identifier = canonicalIdentifier(value);
+  async getAsset(id: string, actorKey: string | null): Promise<Asset | null> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(
         `${assetMatch} WHERE a.isPublic = true OR ${collaboration} ${assetProjection}`,
-        { claim: claimProperties(identifier), actorKey },
+        { assetId: assetId(id), actorKey },
       ));
-      return result.records.length ? assetWithOrderedPhotos(result.records[0].get('asset'), identifier) : null;
+      return result.records.length ? assetFrom(result.records[0].get('asset')) : null;
     } finally { await session.close(); }
   }
 
@@ -296,23 +369,18 @@ export class IdentityStore {
           OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
           WITH a, identity, u, o, collect(g { .key, .name }) AS groups
           ORDER BY a.name, identity.scheme, identity.value, identity.serial
-          RETURN collect({asset: a { .name, .isPublic, reportedAt: toString(a.reportedAt),
+          RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),
+            identifier: identity { .scheme, .value, .serial },
             reportedBy: { key: u.key,
               name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
               status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
             owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
-              m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] },
-            identifier: identity { .scheme, .value, .serial }}) AS rows
+              m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows
         }
         RETURN total, scopes, rows`, { actorKey, text, scope, after, fetchSize: int(limit + 1) }));
       const row = result.records[0];
-      const rows = row.get('rows') as { asset: Omit<Asset, 'identifier'>; identifier: { scheme: string; value: string; serial: string } }[];
-      const assets = rows.slice(0, limit).map((row) => {
-        const i = row.identifier;
-        const identifier: AssetIdentifier = i.scheme === 'sgtin'
-          ? { scheme: 'sgtin', gtin: i.value, serial: i.serial } : { scheme: 'grai', grai: i.value };
-        return assetWithOrderedPhotos(row.asset, identifier);
-      });
+      const rows = row.get('rows') as StoredAsset[];
+      const assets = rows.slice(0, limit).map(assetFrom);
       const scopes = Object.fromEntries(Object.entries(row.get('scopes')).map(([key, value]) =>
         [key, (value as { toNumber(): number }).toNumber()])) as Record<AssetScope, number>;
       return { assets, total: row.get('total').toNumber(), scopes, matching: scopes[scope],
@@ -518,8 +586,8 @@ export class IdentityStore {
     });
   }
 
-  async assertCanEdit(identifier: AssetIdentifier, actorKey: string) {
-    const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration} RETURN a.name`, { claim: claimProperties(canonicalIdentifier(identifier)), actorKey }));
+  async assertCanEdit(id: string, actorKey: string) {
+    const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration} RETURN a.name`, { assetId: assetId(id), actorKey }));
     if (!result.records.length) throw new ReferenceError('Asset access not found');
   }
 
@@ -538,31 +606,31 @@ export class IdentityStore {
     if (!result.records.length) throw new ValidationError('Photo upload expired or unavailable');
   }
 
-  async attachPhoto(identifier: AssetIdentifier, actorKey: string, photoKey: string): Promise<Asset> {
+  async attachPhoto(id: string, actorKey: string, photoKey: string): Promise<Asset> {
     return this.write(async (tx) => {
       await this.consumePhoto(tx, photoKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
         MATCH (m:Media {key: $photoKey}) CREATE (a)-[:HAS_PHOTO]->(m)
-        WITH a ${assetProjection}`, { claim: claimProperties(canonicalIdentifier(identifier)), actorKey, photoKey });
+        WITH a ${assetProjection}`, { assetId: assetId(id), actorKey, photoKey });
       if (!result.records.length) throw new ReferenceError('Asset access not found');
-      return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
+      return assetFrom(result.records[0].get('asset'));
     });
   }
 
-  async beginPhotoDeletion(identifier: AssetIdentifier, actorKey: string, photoKey: string): Promise<void> {
+  async beginPhotoDeletion(id: string, actorKey: string, photoKey: string): Promise<void> {
     const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration}
       MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
       SET m.state = 'deleting', m.expiresAt = datetime()
       DELETE relationship
       RETURN m.key`, {
-      claim: claimProperties(canonicalIdentifier(identifier)), actorKey,
+      assetId: assetId(id), actorKey,
       photoKey: requiredText(photoKey, 'photoKey'),
     }));
     if (!result.records.length) throw new ReferenceError('Asset access or photo not found');
   }
 
-  async getPhoto(identifier: AssetIdentifier, key: string, actorKey: string | null): Promise<Photo> {
-    const asset = await this.getAsset(identifier, actorKey);
+  async getPhoto(id: string, key: string, actorKey: string | null): Promise<Photo> {
+    const asset = await this.getAsset(id, actorKey);
     const photo = asset?.photos.find((p) => p.key === key);
     if (!photo) throw new ReferenceError('Photo not found');
     return photo;
@@ -581,15 +649,14 @@ export class IdentityStore {
     await this.write((tx) => tx.run("MATCH (m:Media {key: $key, state: 'deleting'}) WHERE m.expiresAt <= datetime() DELETE m", { key }));
   }
 
-  async updateAsset(value: AssetIdentifier, changes: AssetChanges, actorKey: string): Promise<Asset> {
-    const identifier = canonicalIdentifier(value);
+  async updateAsset(id: string, changes: AssetChanges, actorKey: string): Promise<Asset> {
     const input = record(changes, ['name', 'ownerKey', 'isPublic']);
     if (Object.hasOwn(input, 'isPublic') && typeof input.isPublic !== 'boolean') {
       throw new ValidationError('isPublic must be a boolean');
     }
     if (!Object.keys(input).length) throw new ValidationError('At least one change is required');
     const params = {
-      claim: claimProperties(identifier),
+      assetId: assetId(id),
       actorKey,
       isPublic: input.isPublic ?? null,
       name: Object.hasOwn(input, 'name') ? requiredText(input.name, 'name') : null,
@@ -611,7 +678,7 @@ export class IdentityStore {
           CREATE (a)-[:OWNED_BY]->(o))
         WITH a ${assetProjection}`, params);
       if (!result.records.length) throw new ReferenceError('Asset or Owner does not exist');
-      return assetWithOrderedPhotos(result.records[0].get('asset'), identifier);
+      return assetFrom(result.records[0].get('asset'));
     });
   }
 }

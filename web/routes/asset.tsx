@@ -1,8 +1,8 @@
 import { Link, useFetcher } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { displayInstant } from '../../server/settings.js';
-import { canonicalIdentifier } from '../../server/identity.js';
-import { api, unwrap, assetPath } from '../api';
+import { api, unwrap } from '../api';
+import { assetPath, assetPhotoPath } from '../../shared/asset-uri';
 import { ReporterAttribution } from '../reporter-attribution';
 import { publicShellHandle } from '../anonymous-shell';
 import { AssetUri } from '../asset-uri';
@@ -14,12 +14,10 @@ import type { Route } from './+types/asset';
 
 export const handle = publicShellHandle;
 
-function identifierFrom(request: Request) {
-  return canonicalIdentifier(Object.fromEntries(new URL(request.url).searchParams));
-}
-export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
+  const id = params.id;
   const [response, account] = await Promise.all([
-    api.asset.$get({ query: identifierFrom(request) }),
+    api.assets[':id'].$get({ param: { id } }),
     unwrap(await api.me.$get()),
   ]);
   if (!response.ok) throw new Response('Asset not found or access unavailable.', { status: response.status });
@@ -27,29 +25,29 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
   const { settings } = await unwrap(await api.settings.$get());
   return { ...result, settings, authenticated: account.user !== null,
-    assetUri: new URL(assetPath(result.asset.identifier), request.url).toString() };
+    assetUri: new URL(assetPath(result.asset.id), request.url).toString() };
 }
-export async function clientAction({ request }: Route.ClientActionArgs) {
+export async function clientAction({ params, request }: Route.ClientActionArgs) {
   const data = await request.formData();
   const intent = data.get('intent');
   const kind = intent === 'photo' ? 'photo' as const : intent === 'delete-photo' ? 'delete-photo' as const : 'edit' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
-    const identifier = identifierFrom(request);
+    const id = params.id;
     if (kind === 'photo') {
       const form = new FormData();
       const photo = data.get('photo');
       if (!(photo instanceof File)) throw new Error('Select a photo');
       form.set('photo', photo);
       const result = await unwrap<{ asset: { photos: Array<{ key: string }> } }>(
-        await fetch('/api/photo?' + new URLSearchParams(identifier), { method: 'POST', body: form }));
+        await fetch('/api/assets/' + id + '/photos', { method: 'POST', body: form }));
       return { kind, saved: true as const, error: null, photoKey: result.asset.photos.at(-1)?.key ?? null };
     }
     if (kind === 'delete-photo') {
-      await unwrap(await api.photo[':key'].$delete({ param: { key: requestedPhotoKey! }, query: identifier }));
+      await unwrap(await api.assets[':id'].photos[':key'].$delete({ param: { id, key: requestedPhotoKey! } }));
       return { kind, saved: true as const, error: null, photoKey: requestedPhotoKey };
     }
-    await unwrap(await api.asset.$patch({ query: identifier, json: {
+    await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
     } }));
     return { kind, saved: true as const, error: null, photoKey: null };
@@ -82,6 +80,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
       {authenticated ? <span className={'badge ' + (asset.isPublic ? 'public' : '')}>{asset.isPublic ? 'Public' : 'Group access'}</span>
         : <Link to="/signin" className="button">Sign in</Link>}</div>
     <section className="panel"><h2>Asset identity</h2><dl>
+      <dt>Asset ID</dt><dd><code>{asset.id}</code></dd>
       <dt>Scheme</dt><dd>{asset.identifier.scheme.toUpperCase()}</dd>
       {asset.identifier.scheme === 'sgtin' ? <><dt>GTIN</dt><dd>{asset.identifier.gtin}</dd>
         <dt>Serial</dt><dd>{asset.identifier.serial}</dd></> : <><dt>GRAI</dt><dd>{asset.identifier.grai}</dd></>}
@@ -95,7 +94,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
       {!asset.photos.length && <p>No photos yet.</p>}
       <div className="photos">{asset.photos.map((photo, index) => <div key={photo.key}
         className={'photo-item' + (uploadResult?.saved && uploadResult.photoKey === photo.key ? ' newly-uploaded' : '')}>
-        <img src={'/api/photos/' + photo.key + '?' + new URLSearchParams(asset.identifier)} alt={'Photo of ' + asset.name} />
+        <img src={assetPhotoPath(asset.id, photo.key)} alt={'Photo of ' + asset.name} />
         {canEdit && <button type="button" className="photo-delete" disabled={deleteBusy}
           aria-label={'Delete photo ' + (index + 1)} onClick={() => setPhotoToDelete(photo.key)}>
           <Icon name="trash" />

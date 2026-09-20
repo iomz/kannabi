@@ -41,6 +41,9 @@ importers:
       react-router:
         specifier: ^7.18.3
         version: 7.18.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      uuid:
+        specifier: ^14.0.2
+        version: 14.0.2
     devDependencies:
       '@react-router/dev':
         specifier: ^7.18.3
@@ -1225,6 +1228,10 @@ packages:
     peerDependencies:
       browserslist: '>= 4.21.0'
 
+  uuid@14.0.2:
+    resolution: {integrity: sha512-xZe/16rV4aa+HGSOCiY2YeLT1OybRLrrkL/Rqaq7p7GMVXjFh+6wN4oMYgjFmnSnhY8t6Xpdl2l9qmnHYuMHwQ==}
+    hasBin: true
+
   valibot@1.5.0:
     resolution: {integrity: sha512-nil6AkP2TChWL43Z5uJ6GTxX01CUA+g8LWUM+N/rB9NBbkUMaUsi9PUNzlUPgoKASgmx9f7eGOYpJ04/fSa6FQ==}
     peerDependencies:
@@ -2376,6 +2383,8 @@ snapshots:
       browserslist: 4.28.9
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uuid@14.0.2: {}
 
   valibot@1.5.0(typescript@5.9.3):
     optionalDependencies:
