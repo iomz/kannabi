@@ -15,9 +15,21 @@ Preserve the README naming story at the bottom of README.
 - `Asset.id` is a canonical lowercase UUIDv7 and is the only Kannabi Asset identity; it addresses the Asset everywhere, including the canonical public Asset URI.
 - Migration assigns a native identity only where one is missing, under a lock that makes concurrent startup safe; an unrecognized identity is never repaired or replaced.
 - The UUIDv7 timestamp has no domain meaning; Asset chronology uses explicit fields such as `reportedAt`.
-- SGTIN and GRAI are external domain identifiers, not Kannabi's native Asset identity; standards define external contracts, never the internal identity model.
 - Internal database keys, including Neo4j node identity, remain implementation details.
-- GS1 Digital Link, resolver semantics, and identifier issuance remain deferred.
+- A Kannabi Asset exists independently of GS1. Registering and managing one must never require GS1 knowledge or a GS1 identifier.
+- External identifiers are optional and multiple: zero is a normal Asset state, and identifiers are attached and detached after creation without touching `Asset.id`.
+- External identifiers are external identities, never Kannabi's native Asset identity, and never a basis for authorization; Asset access stays Group-derived.
+- GS1 syntax rules are enforced strictly at one boundary, and the internal domain model must not become the GS1 ontology.
+- GS1 `req=`/`ex=` association rules belong to a single AI element string; never apply them across the independent identifiers of one Asset. Asset-level cardinality is permissive, GS1 validity within an identifier is strict.
+- Persistence labels that carry a derived GS1 level are persistence vocabulary; never promote them into domain concepts or expose them as identifier schemes.
+- GS1 rules are versioned policy data, not application conditionals, and the policy version is independent of the Kannabi software version.
+- Kannabi must never present its own Syntax Dictionary to General Specifications mapping as a GS1 assertion.
+- A GS1 policy bump governs future acceptance only; stored identifiers are never revalidated or rewritten, and a scheme's canonical layout may not change without a data migration.
+- Each stored external identifier records the policy version that accepted it as historical provenance; a missing stamp is rejected, never replaced with the active version.
+- Identification level is derived from GS1 semantics and is never user-supplied or independently editable.
+- A class-level identifier may describe many Assets; an individual-level identifier identifies exactly one, enforced by schema constraints rather than application sequencing.
+- Allocation authority is never inferred from possession of an identifier; a stored identifier is not evidence that Kannabi allocated it.
+- GS1 Digital Link, resolver semantics, and identifier allocation remain deferred.
 - Account deletion removes the active personal account but preserves immutable Asset provenance by default.
 - Deleted reporters become non-active tombstones that retain only the deletion-time display name required for human-readable provenance; they must not behave as discoverable Users.
 - Tombstones do not retain email, credentials, sessions, preferences, administrator roles, or Group memberships.

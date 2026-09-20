@@ -5,6 +5,7 @@ import { assetPath, assetPhotoPath } from '../../shared/asset-uri';
 import type { Asset, AssetPage } from '../../server/identity-store';
 import type { AssetScope } from '../../server/asset-page';
 import { Icon } from '../icon';
+import { schemeLabels } from '../../server/gs1.js';
 import { ReporterAttribution } from '../reporter-attribution';
 import type { Route } from './+types/home';
 
@@ -93,7 +94,9 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
           <Link className="inventory-row" to={assetPath(asset.id)}>
             <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
             <div className="inventory-row-body"><strong>{asset.name}</strong>
-              <span className="asset-identifier">{asset.identifier.scheme.toUpperCase()} · {asset.identifier.scheme === 'sgtin' ? `${asset.identifier.gtin} / ${asset.identifier.serial}` : asset.identifier.grai}</span>
+              <span className="asset-identifier">{asset.identifiers.length
+                ? asset.identifiers.map((identifier) => schemeLabels[identifier.scheme] + ' ' + identifier.canonical).join(' · ')
+                : 'No external identifier'}</span>
               <span className="asset-context"><Icon name="groups" /><span>{asset.groups.map((group) => group.name).join(', ')}</span><span className="context-divider">·</span><span>Reported by <ReporterAttribution reporter={asset.reportedBy} /></span></span>
             </div>
               <span className={'badge ' + (asset.isPublic ? 'public' : '')}><Icon name={asset.isPublic ? 'globe' : 'lock'} />{asset.isPublic ? 'Public' : 'Group access'}</span>

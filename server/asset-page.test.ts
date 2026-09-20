@@ -1,30 +1,28 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { assetCursor, assetPageRequest } from './asset-page.js';
+import { newAssetId } from './asset-id.js';
 import { ValidationError } from './identity.js';
 
-test('Asset page bounds and cursor preserve search, Unicode names and supported identities', () => {
+test('Asset page bounds and cursor use Asset-native ordering only', () => {
   assert.deepEqual(assetPageRequest({}), { q: '', scope: 'all', limit: 30, after: null });
-  for (const identifier of [
-    { scheme: 'sgtin' as const, gtin: '00614141123452', serial: '001/a%?' },
-    { scheme: 'grai' as const, grai: '00614141234561789' },
-  ]) {
-    const cursor = assetCursor('測定', { name: '測定器 — A', identifier });
-    const parsed = assetPageRequest({ q: '測定', limit: '100', cursor });
-    assert.equal(parsed.after?.name, '測定器 — A');
-    assert.equal(parsed.after?.scheme, identifier.scheme);
-    assert.equal(parsed.after?.value, identifier.scheme === 'sgtin' ? identifier.gtin : identifier.grai);
-    assert.equal(parsed.after?.serial, identifier.scheme === 'sgtin' ? identifier.serial : '');
-    assert.throws(() => assetPageRequest({ q: 'other', cursor }), ValidationError);
-    assert.throws(() => assetPageRequest({ q: '測定', scope: 'mine', cursor }), ValidationError);
-    assert.equal(assetPageRequest({ q: '測定', scope: 'mine', cursor: assetCursor('測定', { name: '測定器 — A', identifier }, 'mine') }).scope, 'mine');
-  }
+  const id = newAssetId();
+  const cursor = assetCursor('測定', { name: '測定器 — A', id });
+  const parsed = assetPageRequest({ q: '測定', limit: '100', cursor });
+  assert.deepEqual(parsed.after, { name: '測定器 — A', id });
+  assert.throws(() => assetPageRequest({ q: 'other', cursor }), ValidationError);
+  assert.throws(() => assetPageRequest({ q: '測定', scope: 'mine', cursor }), ValidationError);
+  assert.equal(assetPageRequest({ q: '測定', scope: 'mine',
+    cursor: assetCursor('測定', { name: '測定器 — A', id }, 'mine') }).scope, 'mine');
   for (const limit of ['', '0', '-1', '101', '1.5', 'NaN', 'Infinity']) {
     assert.throws(() => assetPageRequest({ limit }), ValidationError);
   }
-  for (const cursor of ['', '%', 'null', Buffer.from(JSON.stringify({ q: '', name: 'Asset', identifier: { id: 'internal' } })).toString('base64url')]) {
-    assert.throws(() => assetPageRequest({ cursor }), ValidationError);
-  }
+  for (const cursor of ['', '%', 'null',
+    // No identifier may act as a cursor position, and the id must be a native one.
+    Buffer.from(JSON.stringify({ q: '', scope: 'all', name: 'Asset', identifier: { scheme: 'sgtin' } })).toString('base64url'),
+    Buffer.from(JSON.stringify({ q: '', scope: 'all', name: 'Asset', id: 'not-a-native-id' })).toString('base64url'),
+    Buffer.from(JSON.stringify({ q: '', scope: 'all', name: 'Asset' })).toString('base64url'),
+  ]) assert.throws(() => assetPageRequest({ cursor }), ValidationError);
   assert.throws(() => assetPageRequest({ q: 'a'.repeat(201) }), ValidationError);
   assert.throws(() => assetPageRequest({ scope: 'owner' }), ValidationError);
 });

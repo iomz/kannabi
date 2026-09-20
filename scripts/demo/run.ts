@@ -73,7 +73,7 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     const media = new MediaService(store, storage);
     for (const asset of demoAssets()) {
       const actorKey = users[asset.reporter];
-      const reported = await media.report({ name: asset.name, identifiers: [asset.identifier],
+      const reported = await media.report({ name: asset.name, identifiers: asset.identifiers,
         ...(asset.owner === null ? {} : { ownerKey: owners[asset.owner].key }) },
       { actorKey, groupKey: groups[asset.group].key },
       asset.photo ? new File([new Uint8Array(photos.get(asset.photo)!)], asset.photo, { type: 'image/png' }) : undefined);

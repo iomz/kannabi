@@ -257,7 +257,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
     await t.test('final administrator role protection remains atomic', async () => {
       const privateGroup = await store.createReportingGroup('Admin-only asset group', keys[0]);
       const privateAsset = await store.reportAsset({ name: 'Role-independent access',
-        identifiers: [{ scheme: 'grai' as const, grai: '00614141234561789' }] },
+        identifiers: [{ scheme: 'grai' as const, assetType: '0614141234561', serial: '789' }] },
       { actorKey: keys[0], groupKey: privateGroup.key });
       assert.equal((await admin(`/members/${keys[0]}/role`, 'PATCH', { isAdmin: false })).status, 409);
       assert.equal((await admin(`/members/${pendingKey}/role`, 'PATCH', { isAdmin: true })).status, 200);

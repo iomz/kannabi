@@ -84,7 +84,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     const inventory = await (await request('/assets?q=camERA&limit=1')).json();
     assert.equal(inventory.matching, 1);
     assert.deepEqual(inventory.assets[0].photos, asset.photos);
-    assert.deepEqual(inventory.assets[0].identifier, identifier);
+    assert.deepEqual(inventory.assets[0].identifiers.map((i: { canonical: string }) => i.canonical),
+      ['(01)00614141123452(21)media']);
     assert.equal(inventory.assets[0].id, assetId);
     const path = `/assets/${assetId}/photos/${key}`;
     assert.equal((await request(path)).status, 200);

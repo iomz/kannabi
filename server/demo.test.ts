@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
-import { canonicalIdentifier } from './identity.js';
+import { canonicalIdentifiers } from './gs1.js';
 import { demoAssets, evaluatorScopes } from '../scripts/demo/fixtures.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket } from '../scripts/demo/safety.js';
 
@@ -13,9 +13,35 @@ test('demo contents and supported identifiers are deterministic with overlapping
   const assets = demoAssets();
   assert.deepEqual(assets, demoAssets());
   assert.equal(assets.length, 140);
-  assert.equal(new Set(assets.map((asset) => JSON.stringify(canonicalIdentifier(asset.identifier)))).size, 140);
-  assert.equal(assets.filter((a) => a.identifier.scheme === 'sgtin').length, 70);
-  assert.equal(assets.filter((a) => a.identifier.scheme === 'grai').length, 70);
+  // Every identifier set is accepted by the pinned GS1 policy.
+  const identifiers = assets.map((asset) => canonicalIdentifiers(asset.identifiers));
+  const flat = identifiers.flat();
+  const has = (scheme: string) => identifiers.filter((set) => set.some((i) => i.scheme === scheme)).length;
+  // The seed demonstrates the whole 0..n model, not one identifier shape.
+  assert.equal(identifiers.filter((set) => !set.length).length, 20, 'Assets with no external identifier');
+  assert.equal(has('gtin'), 40, 'class-level GTIN, alone or beside its SGTIN');
+  assert.equal(has('sgtin'), 40);
+  assert.equal(has('giai'), 40);
+  assert.equal(has('grai'), 40);
+  assert.equal(identifiers.filter((set) =>
+    set.some((i) => i.scheme === 'sgtin') && set.some((i) => i.scheme === 'giai')).length, 20,
+  'an Asset carrying both a manufacturer SGTIN and an owner-assigned GIAI');
+  // Individual identifiers are exclusive, so every one of them must be distinct.
+  const individual = flat.filter((identifier) => identifier.level === 'individual');
+  assert.equal(individual.length, 100);
+  assert.equal(new Set(individual.map((identifier) => identifier.canonical)).size, individual.length);
+  // Class identifiers are shared: two GTINs and one returnable asset type,
+  // each describing many Assets.
+  const classLevel = flat.filter((identifier) => identifier.level === 'class');
+  const shared = new Map<string, number>();
+  for (const identifier of classLevel) shared.set(identifier.canonical, (shared.get(identifier.canonical) ?? 0) + 1);
+  assert.deepEqual([...shared.values()], [20, 20, 20]);
+  assert.equal([...shared.keys()].filter((canonical) => canonical.startsWith('(01)')).length, 2);
+  assert.equal([...shared.keys()].filter((canonical) => canonical.startsWith('(8003)')).length, 1);
+  // Serialised GRAIs share one asset type while identifying individual pallets.
+  const pallets = individual.filter((identifier) => identifier.scheme === 'grai');
+  assert.equal(pallets.length, 20);
+  assert.equal(new Set(pallets.map((identifier) => identifier.components.assetType)).size, 1);
   const readable = assets.filter((a) => a.group !== 3 || a.isPublic);
   assert.deepEqual({ all: readable.length, mine: readable.filter((a) => a.reporter === 0).length,
     group: readable.filter((a) => a.group !== 3).length, public: readable.filter((a) => a.isPublic).length }, evaluatorScopes);
