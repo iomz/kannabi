@@ -57,7 +57,10 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   }, [user]);
   useEffect(() => setThemeId(loaderData.themeId), [loaderData.themeId]);
   useEffect(() => setAppearance(loaderData.appearance), [loaderData.appearance]);
-  const assetsActive = location.pathname === '/' || location.pathname === '/asset' || location.pathname.startsWith('/assets/');
+  // The inventory owns Asset detail and reporting; Lookup is its own destination.
+  const lookupActive = location.pathname === '/lookup';
+  const inventoryActive = !lookupActive && (location.pathname === '/'
+    || location.pathname.startsWith('/asset/') || location.pathname.startsWith('/assets/'));
   const theme = themeById(themeId);
   const resolvedAppearance = useResolvedAppearance(appearance);
   const colorScheme = colorSchemePreview ?? resolvedAppearance;
@@ -77,7 +80,13 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
       <button className="nav-toggle" aria-expanded={menuOpen} aria-controls="primary-navigation" onClick={() => setMenuOpen(!menuOpen)}>Navigation</button>
       <nav id="primary-navigation" aria-label="Primary" className={menuOpen ? 'expanded' : ''} onClick={() => setMenuOpen(false)}>
         <p className="nav-label">Workspace</p>
-        <Link to="/" aria-current={assetsActive ? 'page' : undefined} className={assetsActive ? 'active' : ''}><Icon name="assets" />Assets</Link>
+        {/* Assets groups its two discovery destinations: browsing the inventory
+            and resolving a known identity. Reporting stays a page action. */}
+        <p className="nav-group"><Icon name="assets" />Assets</p>
+        <Link to="/" className={'nav-child' + (inventoryActive ? ' active' : '')}
+          aria-current={inventoryActive ? 'page' : undefined}>Inventory</Link>
+        <Link to="/lookup" className={'nav-child' + (lookupActive ? ' active' : '')}
+          aria-current={lookupActive ? 'page' : undefined}>Lookup</Link>
         <NavLink to="/groups"><Icon name="groups" />Groups</NavLink>
         {isAdmin && <><p className="nav-label admin-label">Administration</p><NavLink to="/admin/members"><Icon name="members" />Members</NavLink><NavLink to="/admin/settings"><Icon name="settings" />Settings</NavLink></>}
       </nav>

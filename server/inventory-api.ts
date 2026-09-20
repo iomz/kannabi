@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { validator } from 'hono/validator';
 import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
+import { assetLookupQuery } from './asset-lookup.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
 import { record, requiredText, ValidationError } from './identity.js';
@@ -225,6 +226,12 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const key = actor(c.get('user'));
       return c.json(await store.findAssets(key, assetPageRequest(c.req.query())));
     })
+    // Registered before /assets/:id so the static segment wins. Deterministic
+    // identity resolution, deliberately separate from free-text browsing: an
+    // identity that is unreadable answers exactly as one that does not exist.
+    .get('/assets/lookup', validator('query', (value) =>
+      assetLookupQuery(value as Record<string, unknown>)), async (c) =>
+      c.json(await store.lookupAssets(actor(c.get('user')), c.req.valid('query'))))
     .post('/assets', validator('json', (value) => {
       const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey']);
       return { ...input, groupKey: requiredText(input.groupKey, 'groupKey') } as ReportAsset & { groupKey: string };

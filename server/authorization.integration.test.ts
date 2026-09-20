@@ -240,6 +240,52 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.deepEqual((await (await stranger.request('/giai-namespaces')).json()).namespaces, []);
   });
 
+  await t.test('identity lookup answers only over the readable set and never enumerates', async () => {
+    const id = assetPath.slice('/assets/'.length);
+    const lookup = (caller: typeof member, params: Record<string, string>) =>
+      caller.request('/assets/lookup?' + new URLSearchParams(params));
+
+    // Anonymous callers cannot use lookup at all: #18 adds no anonymous
+    // discovery, even though a public Asset stays readable by direct URI.
+    assert.equal((await lookup(anonymous, { id })).status, 401);
+    assert.equal((await lookup(anonymous, identifier)).status, 401);
+
+    // A member resolves both the native id and the canonical identifier.
+    const byId = await lookup(member, { id });
+    assert.equal(byId.status, 200);
+    assert.deepEqual((await byId.json()).assets.map((asset: { id: string }) => asset.id), [id]);
+    const byIdentifier = await (await lookup(member, identifier)).json();
+    assert.equal(byIdentifier.identity.canonical, canonical);
+    assert.equal(byIdentifier.identity.level, 'individual');
+    assert.deepEqual(byIdentifier.assets.map((asset: { id: string }) => asset.id), [id]);
+    assert.equal(byIdentifier.matching, 1);
+
+    // For a stranger the very same identities are byte-identical to identities
+    // that were never used: same status, same body, no existence side channel.
+    const strangerById = await lookup(stranger, { id });
+    const strangerAbsentId = await lookup(stranger, { id: newAssetId() });
+    assert.equal(strangerById.status, strangerAbsentId.status);
+    assert.deepEqual(await strangerById.json(), { ...await strangerAbsentId.json(), identity: { kind: 'assetId', id } });
+    const strangerByIdentifier = await lookup(stranger, identifier);
+    const strangerAbsent = await lookup(stranger, { scheme: 'sgtin', gtin: '4901234567894', serial: 'never-used' });
+    assert.equal(strangerByIdentifier.status, strangerAbsent.status);
+    for (const response of [strangerByIdentifier, strangerAbsent]) {
+      const body = await response.json();
+      assert.deepEqual(body.assets, []);
+      assert.equal(body.matching, 0);
+    }
+
+    // Malformed input is a validation error, not a probe result, and it never
+    // depends on whether anything exists.
+    for (const params of [{}, { id: 'not-an-id' }, { id, scheme: 'sgtin' },
+      { scheme: 'sgtin', gtin: '0614141123452' }, { q: 'Bench instrument' }]) {
+      assert.equal((await lookup(member, params as Record<string, string>)).status, 400, JSON.stringify(params));
+    }
+    // Lookup grants nothing: the stranger still cannot read or edit the Asset.
+    assert.equal((await stranger.request(assetPath)).status, 404);
+    assert.equal((await stranger.request(assetPath, 'PATCH', { name: 'Denied' })).status, 404);
+  });
+
   await t.test('leaving Group revokes reporter access while provenance stays immutable', async () => {
     assert.equal((await reporter.request(`/groups/${groupKey}/membership`, 'DELETE')).status, 200);
     assert.equal((await reporter.request(assetPath)).status, 404);

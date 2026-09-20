@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { displayInstant, validateSettings } from './settings.js';
+import { displayDate, displayInstant, validateSettings } from './settings.js';
 import { maxPhotoBytes, photoBytes } from './media.js';
 import { orderPhotos } from './identity-store.js';
 
@@ -16,6 +16,13 @@ test('display timezone changes presentation without changing the absolute instan
   assert.throws(() => validateSettings({ requirePhoto: 'true', displayTimezone: 'UTC', themeId: 'default' }));
   assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }));
   assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', requiredFields: [] }));
+});
+
+test('Kannabi renders date-only values in ISO order with slashes', () => {
+  // The intended default for a future Admin/Settings preference. It presents
+  // the date fields as written, so a filter bound shows the day that was chosen.
+  assert.equal(displayDate('2026-09-19'), '2026/09/19');
+  assert.equal(displayDate('2026-01-01T23:30:00.000Z'), '2026/01/01');
 });
 
 test('photo validation rejects empty, oversized, active content and mismatched MIME', async () => {

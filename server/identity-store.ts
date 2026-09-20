@@ -2,12 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
 import { int } from 'neo4j-driver';
-import { assetCursor, type AssetPageRequest, type AssetScope } from './asset-page.js';
+import {
+  assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
+  type AssetSort,
+} from './asset-page.js';
+import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import {
   allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
-  storedIdentifier, type ExternalIdentifier,
+  storedIdentifier, type ExternalIdentifier, type IdentifierLevel, type IdentifierScheme,
 } from './gs1.js';
 import {
   allocatableSequence, canonicalExclusions, firstSequence, storedExclusions, type ExclusionRange,
@@ -109,6 +113,24 @@ function assetFrom(stored: StoredAsset): Asset {
   return { ...stored, identifiers, photos: orderPhotos(stored.photos) };
 }
 export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
+
+/** The resolved identity, echoed from the caller's own input so they can see
+ * what it canonicalised to. It is derived before any Asset is read and
+ * therefore discloses nothing about what exists. */
+export type ResolvedIdentity =
+  | Readonly<{ kind: 'assetId'; id: string }>
+  | Readonly<{ kind: 'identifier'; canonical: string; scheme: IdentifierScheme; level: IdentifierLevel }>;
+
+/** A native Asset ID and an individual identifier each resolve to at most one
+ * Asset; a class identifier describes a class, so it legitimately resolves to
+ * many. `assets` is therefore always a list, `matching` reports the complete
+ * readable count, and `nextCursor` pages through a class identifier's Assets. */
+export type AssetLookup = Readonly<{
+  identity: ResolvedIdentity;
+  assets: readonly Asset[];
+  matching: number;
+  nextCursor: string | null;
+}>;
 export type ReportAsset = {
   name: string;
   /** Optional. An Asset exists independently of GS1 identification. */
@@ -150,6 +172,23 @@ const constraints = [
 // Installed only once every Asset carries a native id, so a pre-Phase-1
 // database is not rejected before its Assets can be migrated.
 const assetIdConstraint = 'CREATE CONSTRAINT asset_id IF NOT EXISTS FOR (n:Asset) REQUIRE n.id IS UNIQUE';
+
+/** Range indexes backing the sortable Asset fields.
+ *
+ * Measured rather than assumed: profiling the browse query showed that with
+ * these indexes a keyset continuation page plans as NodeIndexSeekByRange
+ * instead of NodeByLabelScan, so deep paging stops re-scanning the label. The
+ * first page of a search still scans, because there is no range predicate to
+ * seek on and the readability check is applied afterwards.
+ *
+ * These are performance, not correctness, so unlike the uniqueness constraints
+ * they are not part of the fail-closed startup verification: a missing index
+ * makes Kannabi slower, never wrong.
+ */
+const indexes = [
+  'CREATE INDEX asset_name IF NOT EXISTS FOR (n:Asset) ON (n.name)',
+  'CREATE INDEX asset_reported_at IF NOT EXISTS FOR (n:Asset) ON (n.reportedAt)',
+];
 
 function isDuplicateIdentifier(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
@@ -218,6 +257,74 @@ const identifierProjection = `
 const allocationMatch = `OPTIONAL MATCH (issuance:GiaiAllocation {allocatedForAssetId: a.id})
   OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})`;
 
+/** How each sortable field is ordered and compared in Cypher.
+ *
+ * `reportedAt` is compared as a temporal value, not as text: the cursor carries
+ * the ISO instant the API returns and Cypher parses it back, so sub-second
+ * formatting can never decide ordering. `Asset.id` is appended to every
+ * ordering purely to make it total.
+ */
+const sortExpressions: Readonly<Record<AssetSort, { order: string; bound: string }>> = {
+  name: { order: 'a.name', bound: '$after.key' },
+  reportedAt: { order: 'a.reportedAt', bound: 'datetime($after.key)' },
+};
+
+/** Keyset continuation. The tiebreaker follows the primary direction so the
+ * total ordering reverses coherently and a page boundary inside a run of
+ * duplicate sort values neither repeats nor skips an Asset. */
+function keysetPredicate(sort: AssetSort, dir: AssetDirection): string {
+  const { order, bound } = sortExpressions[sort];
+  const comparison = dir === 'asc' ? '>' : '<';
+  return `($after IS NULL OR ${order} ${comparison} ${bound}
+    OR (${order} = ${bound} AND a.id ${comparison} $after.id))`;
+}
+
+/** Structured discovery predicates, applied inside the readability boundary so
+ * a filter can only ever narrow what the caller may already see. Each filter is
+ * inert when unset, which keeps one predicate valid for every combination. */
+const filterPredicate = `
+  (size($groups) = 0 OR EXISTS {
+    MATCH (fg:Group)-[:CAN_COLLABORATE]->(a) WHERE fg.key IN $groups })
+  AND (size($schemes) = 0 OR EXISTS {
+    MATCH (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->(fi) WHERE fi.scheme IN $schemes })
+  AND ($identified IS NULL
+    OR ($identified = 'any' AND EXISTS { MATCH (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() })
+    OR ($identified = 'none' AND NOT EXISTS { MATCH (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() }))
+  AND ($reportedFrom IS NULL OR a.reportedAt >= datetime($reportedFrom))
+  AND ($reportedTo IS NULL OR a.reportedAt <= datetime($reportedTo))`;
+
+function filterParameters(filters: AssetFilters) {
+  return {
+    groups: filters.groups,
+    schemes: filters.schemes,
+    identified: filters.identified,
+    reportedFrom: filters.reportedFrom,
+    reportedTo: filters.reportedTo,
+  };
+}
+
+function orderClause(sort: AssetSort, dir: AssetDirection): string {
+  const direction = dir === 'asc' ? 'ASC' : 'DESC';
+  return `ORDER BY ${sortExpressions[sort].order} ${direction}, a.id ${direction}`;
+}
+
+/** Projects a page of Assets already narrowed and ordered by the caller.
+ * Requires `a` in scope and yields `rows`. Shared so browse and lookup cannot
+ * drift into returning different Asset representations. */
+const assetRowsProjection = (order: string) => `
+  MATCH (a)-[:REPORTED_BY]->(u:User)
+  MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
+  OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
+  ${allocationMatch}
+  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
+  ${order}
+  RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
+    reportedBy: { key: u.key,
+      name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
+      status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
+    owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
+      m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
+
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:CAN_COLLABORATE]->(a)
@@ -249,6 +356,7 @@ export class IdentityStore {
       // These do not depend on migrated Asset data, and migration_key must exist
       // before the backfill can take its lock.
       for (const statement of constraints) await session.run(statement);
+      for (const statement of indexes) await session.run(statement);
       await IdentityStore.backfillAssetIds(driver);
       await IdentityStore.verifyAssetIds(session);
       await session.run(assetIdConstraint);
@@ -523,14 +631,73 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
-  async findAssets(actorKey: string, { q: text, scope, limit, after }: AssetPageRequest): Promise<AssetPage> {
+  /** Resolve a complete identity to the Assets that carry it.
+   *
+   * Runs over the caller-readable set, so an identity that exists but is not
+   * readable is indistinguishable from one that does not exist: both return no
+   * Assets and a matching count of zero. Lookup grants no access of its own.
+   *
+   * An individual identifier is matched on its canonical form against the
+   * unique-constrained node for its level — never by substring, and never by
+   * treating a prefix as allocation provenance.
+   */
+  async lookupAssets(actorKey: string, request: AssetLookupRequest): Promise<AssetLookup> {
+    const { identity: query, limit, after } = request;
+    if (query.kind === 'assetId') {
+      const asset = await this.getAsset(query.id, actorKey);
+      return Object.freeze({ identity: Object.freeze({ kind: 'assetId' as const, id: query.id }),
+        assets: asset ? [asset] : [], matching: asset ? 1 : 0, nextCursor: null });
+    }
+    const { canonical, scheme, level } = query.identifier;
+    // The level is derived by the GS1 boundary, so the label and relationship
+    // follow from policy rather than from any query-layer GS1 knowledge.
+    const individual = level === 'individual';
+    const identifierMatch = `MATCH (a:Asset)-[:${individual ? 'IDENTIFIED_BY' : 'CLASSIFIED_AS'}]->
+      (:${individual ? 'IndividualIdentifier' : 'ClassIdentifier'} {canonical: $canonical})`;
+    const session = this.driver.session();
+    try {
+      // Ordered by name then id: the same total ordering browse uses by
+      // default, which is the simplest stable order for a class's Assets.
+      const order = 'ORDER BY a.name ASC, a.id ASC';
+      const result = await session.executeRead((tx) => tx.run(`
+        CALL {
+          ${identifierMatch}
+          WHERE a.isPublic = true OR ${collaboration}
+          RETURN count(a) AS matching
+        }
+        CALL {
+          ${identifierMatch}
+          WHERE (a.isPublic = true OR ${collaboration})
+            AND ($after IS NULL OR a.name > $after.name
+              OR (a.name = $after.name AND a.id > $after.id))
+          WITH a ${order} LIMIT $fetchSize
+          ${assetRowsProjection(order)}
+        }
+        RETURN matching, rows`,
+      { actorKey, canonical, after, fetchSize: int(limit + 1) }));
+      const row = result.records[0];
+      const rows = row.get('rows') as StoredAsset[];
+      const assets = rows.slice(0, limit).map(assetFrom);
+      return Object.freeze({
+        identity: Object.freeze({ kind: 'identifier' as const, canonical, scheme, level }),
+        assets,
+        // Truthful across the whole readable result set, not just this page.
+        matching: row.get('matching').toNumber(),
+        nextCursor: rows.length > limit ? assetLookupCursor(canonical, assets.at(-1)!) : null,
+      });
+    } finally { await session.close(); }
+  }
+
+  async findAssets(actorKey: string, request: AssetPageRequest): Promise<AssetPage> {
+    const { q: text, scope, sort, dir, filters, limit, after } = request;
+    const order = orderClause(sort, dir);
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
           MATCH (a:Asset)
           WHERE a.isPublic = true OR ${collaboration}
-          WITH a, toLower(a.name) CONTAINS toLower($text) AS matches,
+          WITH a, (toLower(a.name) CONTAINS toLower($text) AND ${filterPredicate}) AS matches,
             ${collaboration} AS inGroup,
             EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) } AS mine
           RETURN count(a) AS total,
@@ -542,33 +709,23 @@ export class IdentityStore {
         CALL {
           MATCH (a:Asset)
           WHERE (a.isPublic = true OR ${collaboration}) AND toLower(a.name) CONTAINS toLower($text)
+            AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
               OR ($scope = 'group' AND ${collaboration})
               OR ($scope = 'mine' AND EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) }))
-            AND ($after IS NULL OR a.name > $after.name
-              OR (a.name = $after.name AND a.id > $after.id))
-          WITH a ORDER BY a.name, a.id LIMIT $fetchSize
-          MATCH (a)-[:REPORTED_BY]->(u:User)
-          MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
-          OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-          ${allocationMatch}
-          WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
-          ORDER BY a.name, a.id
-          RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
-            reportedBy: { key: u.key,
-              name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
-              status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
-            owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
-              m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows
+            AND ${keysetPredicate(sort, dir)}
+          WITH a ${order} LIMIT $fetchSize
+          ${assetRowsProjection(order)}
         }
-        RETURN total, scopes, rows`, { actorKey, text, scope, after, fetchSize: int(limit + 1) }));
+        RETURN total, scopes, rows`,
+      { actorKey, text, scope, after, fetchSize: int(limit + 1), ...filterParameters(filters) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map(assetFrom);
       const scopes = Object.fromEntries(Object.entries(row.get('scopes')).map(([key, value]) =>
         [key, (value as { toNumber(): number }).toNumber()])) as Record<AssetScope, number>;
       return { assets, total: row.get('total').toNumber(), scopes, matching: scopes[scope],
-        nextCursor: rows.length > limit ? assetCursor(text, assets.at(-1)!, scope) : null };
+        nextCursor: rows.length > limit ? assetCursor(request, assets.at(-1)!) : null };
     } finally { await session.close(); }
   }
 
