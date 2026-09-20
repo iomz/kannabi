@@ -4,10 +4,11 @@ import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
 import { int } from 'neo4j-driver';
 import { assetCursor, type AssetPageRequest, type AssetScope } from './asset-page.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
+import { record, requiredText, ValidationError } from './identity.js';
 import {
-  canonicalClaims, record, requiredText, ValidationError,
-  type AssetIdentifier, type IdentifierClaim,
-} from './identity.js';
+  assertCompatible, canonicalIdentifier, canonicalIdentifiers, storedIdentifier,
+  type ExternalIdentifier,
+} from './gs1.js';
 import { isAppearancePreference, type AppearancePreference } from '../shared/appearance.js';
 import { MailRevisionConflictError, type MailVerificationStatus, type PersistedMailSettings,
   type StoredMailConfiguration } from './mail.js';
@@ -28,10 +29,13 @@ const memberProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
 // application identity in `id`; external identifiers never address the Asset.
 export type Entity = Readonly<{ key: string; name: string }>;
 export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'deleted' }>;
+/** An external identifier as carried by an Asset. `key` addresses this
+ * attachment for detachment; everything else is derived by the GS1 boundary. */
+export type AttachedIdentifier = ExternalIdentifier & Readonly<{ key: string }>;
 export type Asset = Readonly<{
   id: string;
   name: string;
-  identifier: AssetIdentifier;
+  identifiers: readonly AttachedIdentifier[];
   reportedBy: ReporterAttribution;
   reportedAt: string;
   owner: Entity | null;
@@ -50,19 +54,22 @@ export function orderPhotos(photos: readonly Photo[]): Photo[] {
   });
 }
 
-type StoredIdentifier = { scheme: string; value: string; serial: string };
-type StoredAsset = Omit<Asset, 'identifier'> & { identifier: StoredIdentifier };
+type StoredIdentifier = { key: string; canonical: string; scheme: string; policyVersion: string };
+type StoredAsset = Omit<Asset, 'identifiers'> & { identifiers: StoredIdentifier[] };
 
+/** Components and level are always re-derived from the canonical form, so a
+ * stored identifier cannot become an independent source of GS1 truth. */
 function assetFrom(stored: StoredAsset): Asset {
-  const i = stored.identifier;
-  const identifier: AssetIdentifier = i.scheme === 'sgtin'
-    ? { scheme: 'sgtin', gtin: i.value, serial: i.serial } : { scheme: 'grai', grai: i.value };
-  return { ...stored, identifier, photos: orderPhotos(stored.photos) };
+  const identifiers = stored.identifiers
+    .map((row) => ({ key: row.key, ...storedIdentifier(row.scheme, row.canonical, row.policyVersion) }))
+    .sort((left, right) => (left.canonical < right.canonical ? -1 : left.canonical > right.canonical ? 1 : 0));
+  return { ...stored, identifiers, photos: orderPhotos(stored.photos) };
 }
 export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
 export type ReportAsset = {
   name: string;
-  identifiers: readonly IdentifierClaim[];
+  /** Optional. An Asset exists independently of GS1 identification. */
+  identifiers?: readonly unknown[];
   ownerKey?: string;
 };
 export type ReportingContext = { actorKey: string; groupKey: string };
@@ -76,32 +83,85 @@ const constraints = [
   'CREATE CONSTRAINT group_key IF NOT EXISTS FOR (n:Group) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT owner_key IF NOT EXISTS FOR (n:Owner) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT migration_key IF NOT EXISTS FOR (n:Migration) REQUIRE n.key IS UNIQUE',
-  `CREATE CONSTRAINT identifier_claim IF NOT EXISTS FOR (n:Identifier)
-   REQUIRE (n.scheme, n.value, n.serial) IS UNIQUE`,
+  // :IndividualIdentifier and :ClassIdentifier are persistence vocabulary, not
+  // domain concepts. They exist only because Neo4j Community cannot express a
+  // conditional uniqueness constraint, so the derived GS1 level is carried by
+  // the label and each rule becomes a plain constraint. A :ClassIdentifier
+  // holding a GTIN is that GTIN and nothing more: Kannabi defines no parallel
+  // class-identity scheme, mints no identifier of its own, and these labels
+  // must never be promoted into the domain model or exposed as schemes.
+  'CREATE CONSTRAINT individual_identifier IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.canonical IS UNIQUE',
+  'CREATE CONSTRAINT individual_identifier_key IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT class_identifier IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.canonical IS UNIQUE',
+  'CREATE CONSTRAINT class_identifier_key IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.key IS UNIQUE',
 ];
 
 // Installed only once every Asset carries a native id, so a pre-Phase-1
 // database is not rejected before its Assets can be migrated.
 const assetIdConstraint = 'CREATE CONSTRAINT asset_id IF NOT EXISTS FOR (n:Asset) REQUIRE n.id IS UNIQUE';
 
-function claimProperties(identifier: AssetIdentifier) {
-  return identifier.scheme === 'sgtin'
-    ? { scheme: identifier.scheme, value: identifier.gtin, serial: identifier.serial }
-    : { scheme: identifier.scheme, value: identifier.grai, serial: '' };
+function isDuplicateIdentifier(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && error.code === 'Neo.ClientError.Schema.ConstraintValidationFailed';
 }
+
+/** Rebuild a pre-Phase-2 claim through the GS1 boundary so migration validates
+ * rather than transcribes. SGTIN stored its components already; GRAI stored the
+ * whole AI 8003 payload, whose serial the legacy model always required. */
+function legacyIdentifier(scheme: unknown, value: unknown, serial: unknown): ExternalIdentifier {
+  if (scheme === 'sgtin') return canonicalIdentifier({ scheme: 'sgtin', gtin: value, serial });
+  if (scheme === 'grai') {
+    if (typeof value !== 'string' || value.length <= 14 || value[0] !== '0') {
+      throw new ValidationError(`Legacy GRAI ${JSON.stringify(value)} is not a zero-filled AI 8003 payload with a serial`);
+    }
+    return canonicalIdentifier({ scheme: 'grai', assetType: value.slice(1, 14), serial: value.slice(14) });
+  }
+  throw new ValidationError(`Legacy identifier scheme ${JSON.stringify(scheme)} cannot be migrated`);
+}
+
+function identifierRows(identifiers: readonly ExternalIdentifier[], level: 'individual' | 'class') {
+  return identifiers.filter((identifier) => identifier.level === level).map((identifier) => ({
+    key: randomUUID(), canonical: identifier.canonical,
+    scheme: identifier.scheme, policyVersion: identifier.policyVersion,
+  }));
+}
+
+function identifierParams(identifiers: readonly ExternalIdentifier[]) {
+  return {
+    individualIdentifiers: identifierRows(identifiers, 'individual'),
+    classIdentifiers: identifierRows(identifiers, 'class'),
+  };
+}
+
+// Requires `a` in scope. The two labels record the GS1 level an identifier
+// already has; they add no meaning of their own. Individual identifiers are
+// CREATEd so the uniqueness constraint rejects a second Asset claiming them;
+// class identifiers are MERGEd so Assets share one node.
+const attachIdentifiers = `
+  FOREACH (i IN $individualIdentifiers |
+    CREATE (a)-[:IDENTIFIED_BY]->(:IndividualIdentifier {
+      key: i.key, canonical: i.canonical, scheme: i.scheme, policyVersion: i.policyVersion }))
+  FOREACH (c IN $classIdentifiers |
+    MERGE (n:ClassIdentifier {canonical: c.canonical})
+      ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
+    MERGE (a)-[:CLASSIFIED_AS]->(n))`;
+
+const identifierProjection = `
+    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
+        x { .key, .canonical, .scheme, .policyVersion }]
+      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
+        y { .key, .canonical, .scheme, .policyVersion }],`
 
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:CAN_COLLABORATE]->(a)
 }`;
 const assetProjection = `
-  MATCH (a)-[:IDENTIFIED_BY]->(i:Identifier)
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-  WITH a, i, u, o, collect(g { .key, .name }) AS groups
-  RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),
-    identifier: i { .scheme, .value, .serial },
+  WITH a, u, o, collect(g { .key, .name }) AS groups
+  RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: { key: u.key,
       name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
       status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END }, owner: o { .key, .name },
@@ -125,6 +185,10 @@ export class IdentityStore {
       await IdentityStore.backfillAssetIds(driver);
       await IdentityStore.verifyAssetIds(session);
       await session.run(assetIdConstraint);
+      await IdentityStore.migrateExternalIdentifiers(driver);
+      await IdentityStore.verifyExternalIdentifiers(session);
+      // The pre-Phase-2 identifier schema has no remaining nodes to guard.
+      await session.run('DROP CONSTRAINT identifier_claim IF EXISTS');
       await session.run(`MERGE (s:Settings {key: 'instance'})
         ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0
         SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
@@ -140,7 +204,9 @@ export class IdentityStore {
       const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
       for (const [label, properties] of [
         ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
-        ['Migration', ['key']], ['Asset', ['id']], ['Identifier', ['scheme', 'value', 'serial']],
+        ['Migration', ['key']], ['Asset', ['id']],
+        ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
+        ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
       ] as const) {
         if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
           && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
@@ -206,6 +272,59 @@ export class IdentityStore {
       throw new Error(`${invalid} Asset(s) have a missing or invalid native id `
         + `(${samples}); a canonical lowercase UUIDv7 is required and unrecognized values are never replaced`);
     }
+  }
+
+  /** Move pre-Phase-2 Assets from the single required SGTIN/GRAI claim to
+   * external identifiers. Serialised on a migration node for the same reason
+   * as the native-id backfill: a concurrent peer must observe committed work
+   * rather than re-reading rows it is about to rewrite.
+   *
+   * Legacy shape is migrated; anything else is corruption and fails closed.
+   * Nothing is repaired or discarded, and no class-level GTIN is materialised
+   * from an SGTIN — that stays derivable.
+   */
+  private static async migrateExternalIdentifiers(driver: Driver): Promise<void> {
+    const session = driver.session();
+    try {
+      for (;;) {
+        const migrated = await session.executeWrite(async (tx) => {
+          await tx.run("MERGE (m:Migration {key: 'external-identifiers'}) SET m.lock = true");
+          const legacy = await tx.run(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:Identifier)
+            WITH a, i LIMIT $batch
+            RETURN a.id AS assetId, i.scheme AS scheme, i.value AS value, i.serial AS serial`,
+          { batch: int(500) });
+          if (!legacy.records.length) return 0;
+          const rows = legacy.records.map((row) => {
+            const identifier = legacyIdentifier(row.get('scheme'), row.get('value'), row.get('serial'));
+            return { assetId: row.get('assetId') as string, key: randomUUID(),
+              canonical: identifier.canonical, scheme: identifier.scheme,
+              policyVersion: identifier.policyVersion };
+          });
+          await tx.run(`UNWIND $rows AS row
+            MATCH (a:Asset {id: row.assetId})-[r:IDENTIFIED_BY]->(i:Identifier)
+            DELETE r, i
+            CREATE (a)-[:IDENTIFIED_BY]->(:IndividualIdentifier {
+              key: row.key, canonical: row.canonical, scheme: row.scheme,
+              policyVersion: row.policyVersion })`, { rows });
+          return rows.length;
+        });
+        if (!migrated) return;
+      }
+    } finally { await session.close(); }
+  }
+
+  /** Startup invariant: no pre-Phase-2 identifier survives, and every stored
+   * identifier carries the properties the GS1 boundary needs to rebuild it. */
+  private static async verifyExternalIdentifiers(session: Session): Promise<void> {
+    const legacy = await session.run('MATCH (i:Identifier) RETURN count(i) AS remaining');
+    const remaining = legacy.records[0].get('remaining').toNumber();
+    if (remaining) throw new Error(`${remaining} pre-Phase-2 Identifier node(s) could not be migrated`);
+    const incomplete = await session.run(`MATCH (n)
+      WHERE (n:IndividualIdentifier OR n:ClassIdentifier)
+        AND (n.key IS NULL OR n.canonical IS NULL OR n.scheme IS NULL OR n.policyVersion IS NULL)
+      RETURN count(n) AS invalid`);
+    const invalid = incomplete.records[0].get('invalid').toNumber();
+    if (invalid) throw new Error(`${invalid} external identifier(s) are missing required properties`);
   }
 
   private async write<T>(work: (tx: ManagedTransaction) => Promise<T>): Promise<T> {
@@ -281,14 +400,14 @@ export class IdentityStore {
   async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null): Promise<Asset> {
     const input = record(value, ['name', 'identifiers', 'ownerKey']);
     const actor = record(context, ['actorKey', 'groupKey']);
-    const identifier = canonicalClaims(input.identifiers);
+    const identifiers = canonicalIdentifiers(input.identifiers);
     const params = {
       assetId: newAssetId(),
       name: requiredText(input.name, 'name'),
       actorKey: requiredText(actor.actorKey, 'actorKey'),
       groupKey: requiredText(actor.groupKey, 'groupKey'),
       ownerKey: input.ownerKey === undefined ? null : requiredText(input.ownerKey, 'ownerKey'),
-      claim: claimProperties(identifier),
+      ...identifierParams(identifiers),
       photoKey,
     };
     try {
@@ -300,11 +419,11 @@ export class IdentityStore {
           MATCH (u:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
           OPTIONAL MATCH (o:Owner {key: $ownerKey})
           WITH u, g, o WHERE $ownerKey IS NULL OR o IS NOT NULL
-          CREATE (i:Identifier $claim)
           CREATE (a:Asset {id: $assetId, name: $name, reportedAt: datetime(), isPublic: false})
-          CREATE (a)-[:IDENTIFIED_BY]->(i), (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
+          CREATE (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
           FOREACH (owner IN CASE WHEN o IS NULL THEN [] ELSE [o] END |
             CREATE (a)-[:OWNED_BY]->(owner))
+          ${attachIdentifiers}
           WITH a
           OPTIONAL MATCH (m:Media {key: $photoKey})
           FOREACH (photo IN CASE WHEN m IS NULL THEN [] ELSE [m] END | CREATE (a)-[:HAS_PHOTO]->(photo))
@@ -317,8 +436,7 @@ export class IdentityStore {
     } catch (error) {
       // CREATE, rather than MERGE, makes every second claim a conflict.
       // The database constraint arbitrates concurrent transactions atomically.
-      if (typeof error === 'object' && error !== null && 'code' in error
-          && error.code === 'Neo.ClientError.Schema.ConstraintValidationFailed') {
+      if (isDuplicateIdentifier(error)) {
         throw new DuplicateIdentityError('The individual identifier is already claimed', { cause: error });
       }
       throw error;
@@ -341,7 +459,7 @@ export class IdentityStore {
     try {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
-          MATCH (a:Asset)-[:IDENTIFIED_BY]->(:Identifier)
+          MATCH (a:Asset)
           WHERE a.isPublic = true OR ${collaboration}
           WITH a, toLower(a.name) CONTAINS toLower($text) AS matches,
             ${collaboration} AS inGroup,
@@ -353,24 +471,20 @@ export class IdentityStore {
              public: count(CASE WHEN matches AND a.isPublic = true THEN 1 END)} AS scopes
         }
         CALL {
-          MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:Identifier)
+          MATCH (a:Asset)
           WHERE (a.isPublic = true OR ${collaboration}) AND toLower(a.name) CONTAINS toLower($text)
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
               OR ($scope = 'group' AND ${collaboration})
               OR ($scope = 'mine' AND EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) }))
             AND ($after IS NULL OR a.name > $after.name
-              OR (a.name = $after.name AND i.scheme > $after.scheme)
-              OR (a.name = $after.name AND i.scheme = $after.scheme AND i.value > $after.value)
-              OR (a.name = $after.name AND i.scheme = $after.scheme AND i.value = $after.value AND i.serial > $after.serial))
-          WITH a, i ORDER BY a.name, i.scheme, i.value, i.serial LIMIT $fetchSize
-          WITH a, i AS identity
+              OR (a.name = $after.name AND a.id > $after.id))
+          WITH a ORDER BY a.name, a.id LIMIT $fetchSize
           MATCH (a)-[:REPORTED_BY]->(u:User)
           MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
           OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-          WITH a, identity, u, o, collect(g { .key, .name }) AS groups
-          ORDER BY a.name, identity.scheme, identity.value, identity.serial
-          RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),
-            identifier: identity { .scheme, .value, .serial },
+          WITH a, u, o, collect(g { .key, .name }) AS groups
+          ORDER BY a.name, a.id
+          RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
             reportedBy: { key: u.key,
               name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
               status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
@@ -583,6 +697,60 @@ export class IdentityStore {
         RETURN ${IdentityStore.mailProjection} AS configuration`, { expectedRevision });
       if (!result.records.length) throw new MailRevisionConflictError('Mail configuration changed; reload and try again');
       return result.records[0].get('configuration');
+    });
+  }
+
+  /** Attach an external identifier to an existing Asset. Group authorization is
+   * unchanged and identifier knowledge grants nothing: the caller must already
+   * be able to edit the Asset. Phase 3 allocation will attach through here. */
+  async attachIdentifier(id: string, actorKey: string, value: unknown): Promise<Asset> {
+    const identifier = canonicalIdentifier(value);
+    const assetKey = assetId(id);
+    try {
+      return await this.write(async (tx) => {
+        const current = await tx.run(`${assetMatch} WHERE ${collaboration}
+          RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
+            + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
+        { assetId: assetKey, actorKey });
+        if (!current.records.length) throw new ReferenceError('Asset access not found');
+        const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
+          .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+        assertCompatible([...existing, identifier]);
+        const result = await tx.run(`${assetMatch} WHERE ${collaboration}
+          ${attachIdentifiers}
+          WITH a ${assetProjection}`, { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
+        return assetFrom(result.records[0].get('asset'));
+      });
+    } catch (error) {
+      if (isDuplicateIdentifier(error)) {
+        throw new DuplicateIdentityError('The individual identifier is already claimed', { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  /** Detach an identifier by its attachment key. An individual identifier is
+   * exclusive, so its node goes with the link; a class identifier node stays
+   * while any other Asset still refers to it. */
+  async detachIdentifier(id: string, actorKey: string, key: string): Promise<Asset> {
+    const assetKey = assetId(id);
+    const identifierKey = requiredText(key, 'identifier key');
+    return this.write(async (tx) => {
+      const detached = await tx.run(`${assetMatch} WHERE ${collaboration}
+        OPTIONAL MATCH (a)-[individualLink:IDENTIFIED_BY]->(individual:IndividualIdentifier {key: $key})
+        OPTIONAL MATCH (a)-[classLink:CLASSIFIED_AS]->(:ClassIdentifier {key: $key})
+        WITH a, individualLink, individual, classLink
+        WHERE individualLink IS NOT NULL OR classLink IS NOT NULL
+        DELETE individualLink, classLink
+        WITH a, individual
+        FOREACH (node IN CASE WHEN individual IS NULL THEN [] ELSE [individual] END | DELETE node)
+        RETURN a.id AS id`, { assetId: assetKey, actorKey, key: identifierKey });
+      if (!detached.records.length) throw new ReferenceError('Asset access or identifier not found');
+      await tx.run(`MATCH (c:ClassIdentifier {key: $key})
+        WHERE NOT EXISTS { ()-[:CLASSIFIED_AS]->(c) } DELETE c`, { key: identifierKey });
+      const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
+        { assetId: assetKey, actorKey });
+      return assetFrom(result.records[0].get('asset'));
     });
   }
 

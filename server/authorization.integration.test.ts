@@ -93,6 +93,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
 
   let groupKey: string;
   const identifier = { scheme: 'sgtin', gtin: '00614141123452', serial: '001/a%?' };
+  const canonical = '(01)00614141123452(21)001/a%?';
   // The canonical native Asset path, assigned when the Asset is reported.
   let assetPath = '';
   let reportedAt: string;
@@ -115,7 +116,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const { asset } = await reported.json();
     assert.ok(isAssetId(asset.id), asset.id);
     assetPath = '/assets/' + asset.id;
-    assert.deepEqual(asset.identifier, identifier);
+    assert.deepEqual(asset.identifiers.map((i: { canonical: string }) => i.canonical), [canonical]);
     assert.deepEqual(asset.reportedBy, { ...people[0], status: 'active' });
     assert.equal(asset.groups[0].key, groupKey);
     assert.equal(asset.isPublic, false);
@@ -146,6 +147,23 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.equal((await member.request(assetPath, 'PATCH', { reportedBy: people[1].key })).status, 400);
     assert.equal((await member.request(assetPath, 'PATCH', { id: newAssetId() })).status, 400);
     assert.equal((await member.request(assetPath, 'PATCH', { name: 'CSRF' }, 'https://elsewhere.example')).status, 403);
+    // Identifier mutation is Group-authorized like every other Asset change, and
+    // submitting an identifier never grants access to the Asset carrying it.
+    const attachPath = assetPath + '/identifiers';
+    assert.equal((await stranger.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141STRANGER' })).status, 404);
+    assert.equal((await anonymous.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141ANON' })).status, 401);
+    const attached = await member.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141MEMBER-1' });
+    assert.equal(attached.status, 201, await attached.clone().text());
+    const identifiers = (await attached.json()).asset.identifiers as { key: string; canonical: string; level: string }[];
+    assert.deepEqual(identifiers.map((i) => i.canonical).sort(), [canonical, '(8004)0614141MEMBER-1']);
+    // A stranger who learns the identifier still cannot reach or edit the Asset.
+    assert.equal((await stranger.request(assetPath)).status, 404);
+    const giaiKey = identifiers.find((i) => i.canonical === '(8004)0614141MEMBER-1')!.key;
+    assert.equal((await stranger.request(attachPath + '/' + giaiKey, 'DELETE')).status, 404);
+    assert.equal((await anonymous.request(attachPath + '/' + giaiKey, 'DELETE')).status, 401);
+    const detached = await member.request(attachPath + '/' + giaiKey, 'DELETE');
+    assert.equal(detached.status, 200);
+    assert.deepEqual((await detached.json()).asset.identifiers.map((i: { canonical: string }) => i.canonical), [canonical]);
   });
 
   await t.test('public full representation is readable anonymously and never grants edit access', async () => {
@@ -158,7 +176,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.deepEqual(result.asset, expected);
       // The native Asset id belongs to the legitimate public representation.
       assert.deepEqual(Object.keys(result.asset).sort(),
-        ['groups', 'id', 'identifier', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+        ['groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
       assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);
       assert.equal('role' in result.asset.reportedBy, false);
@@ -192,9 +210,13 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const group = await store.createReportingGroup('Inventory', people[1].key);
     const context = { actorKey: people[1].key, groupKey: group.key };
     for (let i = 0; i < 105; i++) {
-      await store.reportAsset({ name: i < 103 ? 'Inventory Twin' : 'Inventory Other', identifiers: [i % 2
-        ? { scheme: 'grai', grai: '00614141234561' + String(i).padStart(3, '0') }
-        : { scheme: 'sgtin', gtin: '00614141123452', serial: 'page-' + String(i).padStart(3, '0') }] }, context);
+      // A third of these carry no external identifier at all, so pagination is
+      // exercised without any identifier-cardinality assumption.
+      const identifiers = i % 3 === 0 ? []
+        : i % 3 === 1 ? [{ scheme: 'grai', assetType: '0614141234561', serial: 'p' + String(i).padStart(3, '0') }]
+          : [{ scheme: 'sgtin', gtin: '00614141123452', serial: 'page-' + String(i).padStart(3, '0') },
+            { scheme: 'gtin', gtin: '00614141123452' }];
+      await store.reportAsset({ name: i < 103 ? 'Inventory Twin' : 'Inventory Other', identifiers }, context);
     }
     const foreignGroup = await store.createReportingGroup('Foreign', people[2].key);
     for (const serial of ['hidden', 'visible']) {
@@ -232,16 +254,16 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(page.matching, 104);
       assert.ok(page.assets.length > 0 && page.assets.length <= 17);
       for (const asset of page.assets) {
-        assert.notEqual(asset.identifier.serial, 'hidden');
-        identities.push(JSON.stringify(asset.identifier));
+        assert.ok(!asset.identifiers.some((i: { canonical: string }) => i.canonical.endsWith('hidden')));
+        identities.push(asset.id);
       }
       cursor = page.nextCursor;
       if (!firstCursor && cursor) firstCursor = cursor;
       assert.ok(identities.length <= 104, 'pagination must terminate');
     } while (cursor);
     assert.equal(identities.length, 104);
-    assert.equal(new Set(identities).size, 104, 'equal names must not duplicate or omit identities');
-    assert.deepEqual(identities, [...identities].sort(), 'supported identifiers break name ties consistently');
+    assert.equal(new Set(identities).size, 104, 'equal names must not duplicate or omit Assets');
+    assert.deepEqual(identities, [...identities].sort(), 'Asset ids break name ties consistently');
     const atLimit = await (await member.request('/assets?q=inVENTory+twin&limit=100')).json();
     assert.equal(atLimit.assets.length, 100);
     const tail = await (await member.request('/assets?' + new URLSearchParams({ q: 'inVENTory twin', cursor: atLimit.nextCursor }))).json();

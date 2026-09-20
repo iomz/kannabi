@@ -8,6 +8,7 @@ import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import { assetId } from './asset-id.js';
+import { identifierInputFields } from './gs1.js';
 import { AdministrationError, LastAdministratorError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
@@ -243,6 +244,17 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {
       const asset = await store.updateAsset(assetId(c.req.param('id')), c.req.valid('json'), actor(c.get('user')));
+      return c.json({ asset });
+    })
+    // External identifiers are attached and detached explicitly. Knowing an
+    // identifier grants no access: Group authorization is checked as usual.
+    .post('/assets/:id/identifiers', validator('json', (value) =>
+      record(value, identifierInputFields) as Record<string, string>), async (c) => {
+      const asset = await store.attachIdentifier(assetId(c.req.param('id')), actor(c.get('user')), c.req.valid('json'));
+      return c.json({ asset }, 201);
+    })
+    .delete('/assets/:id/identifiers/:key', async (c) => {
+      const asset = await store.detachIdentifier(assetId(c.req.param('id')), actor(c.get('user')), c.req.param('key'));
       return c.json({ asset });
     })
     .onError((error, c) => {

@@ -1,5 +1,3 @@
-import type { AssetIdentifier } from '../../server/identity.js';
-
 export const demoPassword = 'Kannabi-demo-only-2026!';
 export const demoAccounts = [
   { name: 'Alex Demo', email: 'evaluator@demo.invalid' },
@@ -13,19 +11,46 @@ const products = ['Signal generator', 'RFID reader', 'Field laptop', 'Inspection
   'Bench multimeter', 'Audio recorder', 'Inspection microscope', 'Workshop tablet'];
 const places = ['Bench', 'Studio', 'Field', 'Shelf'];
 
-// These are synthetic, checksum-valid values for UI evaluation, not allocated GS1 keys.
-// Normal domain reporting still generates internal keys and provenance timestamps.
+// Synthetic, checksum-valid values for UI evaluation, not allocated GS1 keys.
+const laptopGtin = '00614141123452';
+const cameraGtin = '04901234567894';
+const palletType = '0614141234561';
+const crateType = '0614141234578';
+const demoGcp = '0614141';
+
+/** Every Asset falls into one identification pattern, so ordinary demo use
+ * shows the whole 0..n model rather than a single shape:
+ *
+ *   none        an Asset with no GS1 identifier at all — a normal state
+ *   gtin        a class-level GTIN only, shared with other Assets of the model
+ *   sgtin       a serialised trade item, with its trade-item GTIN alongside
+ *   giai        an individually identified fixed asset
+ *   both        an SGTIN from the manufacturer and an owner-assigned GIAI
+ *   pallet      a serialised GRAI sharing one returnable asset type
+ *   crate       a second shared type, tracked at type level only
+ */
+const patterns = ['none', 'gtin', 'sgtin', 'giai', 'both', 'pallet', 'crate'] as const;
+
 export function demoAssets() {
   return Array.from({ length: 140 }, (_, index) => {
     const serial = 'DEMO-' + String(index + 1).padStart(3, '0');
-    const identifier: AssetIdentifier = index % 2 === 0
-      ? { scheme: 'sgtin', gtin: '00614141123452', serial }
-      : { scheme: 'grai', grai: '00614141234561' + serial };
+    const pattern = patterns[index % patterns.length];
+    const gtin = index % 2 === 0 ? laptopGtin : cameraGtin;
+    const identifiers: unknown[] =
+      pattern === 'none' ? []
+        : pattern === 'gtin' ? [{ scheme: 'gtin', gtin }]
+          : pattern === 'sgtin' ? [{ scheme: 'sgtin', gtin, serial }, { scheme: 'gtin', gtin }]
+            : pattern === 'giai' ? [{ scheme: 'giai', assetReference: demoGcp + serial }]
+              : pattern === 'both'
+                ? [{ scheme: 'sgtin', gtin, serial }, { scheme: 'giai', assetReference: demoGcp + 'A' + serial }]
+                : pattern === 'pallet'
+                  ? [{ scheme: 'grai', assetType: palletType, serial }]
+                  : [{ scheme: 'grai', assetType: crateType }];
     const group = index < 48 ? 0 : index < 88 ? 1 : index < 120 ? 2 : 3;
     const reporter = group === 0 ? 0 : group === 1 ? 1 : group === 2 ? (index % 2) : 2;
     return {
       name: `${products[index % products.length]} · ${places[Math.floor(index / products.length) % places.length]} ${serial.slice(-3)}`,
-      identifier, group, reporter,
+      identifiers, pattern, group, reporter,
       isPublic: index < 120 ? index % 4 === 0 : index % 5 === 0,
       owner: index % 4 === 0 ? null : index % demoOwners.length,
       photo: index % 3 === 0 ? ['instrument.png', 'camera.png', 'case.png'][Math.floor(index / 3) % 3] : null,

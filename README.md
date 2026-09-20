@@ -58,7 +58,8 @@ The application needs HeadBucket, PutObject, GetObject, and DeleteObject access;
 
 The demo tools create 140 entirely synthetic Assets, three local email/password accounts, four Groups, three Owners, and 47 photos using three bundled illustrations.
 Names, supported identifiers, relationships, and visibility are deterministic; internal keys, password hashes, and immutable reporting timestamps are generated normally.
-The 70 SGTIN and 70 GRAI values are checksum-valid synthetic examples, not identifiers for real inventory.
+Identifiers vary on purpose: 70 Assets carry an SGTIN with its trade-item GTIN, 35 carry a serialised GRAI, and 35 carry none at all.
+The checksum-valid values are synthetic examples, not identifiers for real inventory.
 Search by name using terms such as `camera`, `bench`, `studio`, or `backpack`; Owners appear in Asset details.
 
 Run the tools on the host with Node 24, installed dependencies (`pnpm install`), and your existing local `.env` credentials.
@@ -120,28 +121,86 @@ Startup then verifies presence and canonical form for every Asset, because a Neo
 A missing `id` is legacy data and is backfilled; a non-null `id` that is not a canonical lowercase UUIDv7 is corrupt or unsupported data, so startup fails closed and the unrecognized value is never repaired or replaced.
 Uniqueness itself is enforced by the `:Asset(id)` constraint, installed once migration has completed.
 
+Startup then migrates any pre-Phase-2 Asset from the single required SGTIN or GRAI claim to the external identifier model, under the same migration lock.
+A stored SGTIN already kept its components apart; a stored GRAI is decomposed into its asset type and serial.
+Legacy shape is migrated, and anything else is corruption: startup fails closed rather than repairing or discarding it.
+No class-level GTIN is materialised from an SGTIN, because that fact stays derivable.
+
 `Asset.id` addresses the Asset everywhere: lookup, editing, photos, links, and the canonical Asset URI.
 Neo4j node identity is an implementation detail and is never exposed.
-SGTIN and GRAI are external domain identifiers describing the physical thing; they no longer address the Kannabi Asset.
 Kannabi owns its internal truth, and standards define its external contracts.
-Ordinary users can report and manage Assets without knowing anything about GS1.
 
-`server/identity.ts` validates structured GS1 identifier claims.
-SGTIN input is `{ scheme: 'sgtin', gtin, serial }`; GTIN/JAN accepts 8, 12, 13, or 14 digits with a valid check digit and normalizes to 14 digits.
-GRAI input is `{ scheme: 'grai', grai }`, where `grai` is the AI 8003 payload: zero filler, 13-digit key including its check digit, and a required individual serial.
+## External identification
+
+A Kannabi Asset exists independently of GS1.
+Reporting an Asset requires a name and a Group; it never requires GS1 knowledge or a GS1 identifier.
+An Asset carries zero or more external identifiers, attached and detached at any time through `POST` and `DELETE /api/assets/{id}/identifiers`, and none of that changes `Asset.id`.
+Carrying no external identifier is a normal state, not a deficiency.
+
+`server/gs1.ts` is the only place GS1 rules are applied.
+It accepts GTIN (AI 01), SGTIN (AI 01 with AI 21), GRAI (AI 8003) and GIAI (AI 8004), validates components, and derives everything else:
+
+| Scheme | Input | Canonical form | Identifies |
+| --- | --- | --- | --- |
+| GTIN | `gtin` | `(01)00614141123452` | the trade item class |
+| SGTIN | `gtin`, `serial` | `(01)00614141123452(21)A1B2` | this Asset |
+| GRAI | `assetType`, optional `serial` | `(8003)00614141234561…` | the asset type, or this Asset when serialised |
+| GIAI | `assetReference` | `(8004)0614141ASSET001` | this Asset |
+
+The identification level is derived from GS1 semantics and is never supplied or edited by a caller.
+An individual-level identifier identifies exactly one Asset; a class-level identifier describes any number of them.
+Both facts are enforced by Neo4j uniqueness constraints on the distinct labels `:IndividualIdentifier` and `:ClassIdentifier` rather than by application sequencing, so concurrent writers cannot break them.
+Those labels are persistence vocabulary for the derived level, nothing more: a `:ClassIdentifier` holding a GTIN is that GTIN, and Kannabi defines no class-identity scheme of its own.
+Stored identifiers keep only their canonical form, so components and level are re-derived on every read and cannot drift.
+That reversal is positional and is safe only because every component a scheme renders before its last one has a fixed length; `assertReversibleSchemes` turns any future scheme that breaks the property into a test failure rather than a corrupt read.
+Each one also records the GS1 policy version that accepted it, which no later reading of the value could reconstruct.
 Serials preserve case, leading zeros, and literal punctuation; they are never trimmed or URI-decoded.
-A matching `{ scheme: 'gtin', gtin }` claim may accompany SGTIN but cannot identify an Asset alone.
-Conflicting individual claims, mixed SGTIN/GRAI paths, unknown fields, and unsupported schemes are rejected.
-These rules follow the [GS1 Syntax Dictionary](https://github.com/gs1/gs1-syntax-dictionary/blob/main/gs1-syntax-dictionary.txt) for AIs 01, 21, and 8003 and the character set in [GS1 TDS 2.3](https://ref.gs1.org/standards/tds/2.3.0/).
+GTIN/JAN accepts 8, 12, 13, or 14 digits with a valid check digit and normalizes to 14 digits.
+GS1 `req=` and `ex=` association rules are applied to the AIs of one identifier, the coherent AI element string a scheme represents.
+They are deliberately not applied across an Asset's identifiers: the Syntax Dictionary scopes those rules to the combined data marking a physical item, whereas an Asset's identifiers are independent records attached at different times from different sources, most of which are not marked on the item at all.
+An Asset carrying a manufacturer's SGTIN beside an owner-assigned GIAI is therefore valid.
+Across an Asset, Kannabi applies only its own two coherence rules: the same identifier may not appear twice, and every AI (01) an Asset carries must name the same trade item.
+
+A GIAI supplied by a user is stored as syntax only.
+Locating a GS1 Company Prefix requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary, and a stored GIAI is never evidence that Kannabi allocated it.
+
 Asset links use `/asset/{id}`, and Asset-scoped photo requests use `/api/assets/{id}/photos/{key}`.
 There is one canonical Asset URI, and it carries no external identifier.
 GS1 Digital Link, company-prefix inference, resolver semantics, and identifier allocation remain deferred and will be designed as explicit external interfaces.
 
+### GS1 policy version
+
+GS1 rules are versioned data, not application conditionals.
+`server/gs1-syntax.ts` is derived from a pinned release of the [GS1 Barcode Syntax Dictionary](https://github.com/gs1/gs1-syntax-dictionary) and holds only mechanical content: component structure, character sets, lengths, check-digit requirements, and the `req=`/`ex=` associations.
+`server/gs1.ts` holds the Kannabi overlay: scheme naming such as SGTIN being AI 01 with AI 21, the individual-versus-class derivation, and the policy identity itself.
+
+The policy version is independent of the Kannabi software version:
+
+```ts
+{ version: '2026-01-27+kannabi.1', syntaxDictionaryRelease: '2026-01-27',
+  generalSpecificationsRelease: '26.0', assertedBy: 'kannabi' }
+```
+
+GS1 date-versions the Syntax Dictionary and separately releases the General Specifications, and publishes no mapping between them.
+`generalSpecificationsRelease` is therefore Kannabi's assertion, marked by `assertedBy`, and must never be presented as a GS1 statement.
+`gcppos1` and `gcppos2` are declared unenforced rather than silently skipped, because locating a GS1 Company Prefix needs a table GS1 no longer publishes openly.
+
+Bumping the version has exactly two triggers:
+
+- pinning a newer Syntax Dictionary release changes `syntaxDictionaryRelease` and resets the suffix to `+kannabi.1`;
+- changing the overlay — a scheme, a derivation, a Kannabi rule — while the pinned release is unchanged increments `+kannabi.N`.
+
+A new policy governs future acceptance only.
+Stored identifiers are never revalidated or rewritten, and there is no policy migration machinery.
+Each identifier's stored `policyVersion` is historical provenance: it records which policy accepted that value, not a claim that the value would still be accepted today.
+A missing stamp is rejected rather than replaced with the active version, because substituting it would assert an acceptance that never happened.
+One thing a version bump may not change is a scheme's canonical layout: stored identifiers keep only their canonical form and are re-parsed with the active scheme definition, so altering a layout is a breaking data change requiring migration.
+
 `IdentityStore.open(driver)` installs and verifies uniqueness constraints before returning the store.
 It owns its sessions; the caller owns the driver.
 Users, Groups, and Owners use internal keys, while Assets are addressed by their native `Asset.id`.
-Reporting requires an existing User who belongs to the explicitly selected Group; the Group receives collaboration access atomically with the Asset and identifier claim.
-`reportedBy` and `reportedAt` are captured by the reporting transaction; updates accept only name, Owner, and public visibility changes, so neither `Asset.id` nor the identifier can be changed.
+Reporting requires an existing User who belongs to the explicitly selected Group; the Group receives collaboration access atomically with the Asset.
+`reportedBy` and `reportedAt` are captured by the reporting transaction; updates accept only name, Owner, and public visibility changes, so `Asset.id` cannot be changed and identifiers move only through their own explicit operations.
 Owners remain independent from Users, and new Assets are private.
 The API obtains the actor from the authenticated session; store reads and mutations check current Group membership in Neo4j.
 Store actor arguments are trusted internal inputs, never accepted from request bodies.
@@ -181,7 +240,7 @@ New Assets are private, and there are no direct User-to-Asset ACLs.
 Counts include only Assets the signed-in User can read; pages default to 30 entries, with `limit` between 1 and 100.
 Pass `nextCursor` as `cursor` with the same `q` and `scope` to continue; a null cursor ends the results.
 `scope` accepts `all` (default), `mine`, `group`, or `public`; the response includes matching counts for every scope.
-Ordering remains name followed by supported identifier; each request checks current access and data rather than holding an inventory snapshot.
+Ordering is name followed by `Asset.id` as a deterministic tiebreaker, independent of how many external identifiers an Asset carries; each request checks current access and data rather than holding an inventory snapshot.
 
 Unsafe API requests require an Origin matching `APP_URL`.
 Better Auth rate limiting uses the TCP peer address set by the Node server; forwarded client IP headers are not trusted, so clients behind one reverse proxy share its rate-limit bucket.
@@ -241,7 +300,7 @@ Failure cleanup removes bytes while retaining a retry record through the ten-min
 Expired or failed uploads are retried on startup and every minute; attached photos are excluded.
 If storage is unavailable, cleanup waits for recovery and the pending photo is never exposed as an Asset photo.
 
-To evaluate an empty deployment, sign up, create a Group or join through an existing member, report an Asset with an existing identifier, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
+To evaluate an empty deployment, sign up, create a Group or join through an existing member, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
 ## Tests

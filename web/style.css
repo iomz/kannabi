@@ -175,6 +175,15 @@ kbd { font: inherit; }
 .panel summary { cursor: pointer; margin-bottom: 1rem; font-weight: 600; }
 dl { display: grid; grid-template-columns: 11rem 1fr; gap: .8rem; font-size: .9rem; }
 dt { color: var(--color-text-muted); } dd { margin: 0; overflow-wrap: anywhere; }
+.identifier-list { list-style: none; margin: 0 0 1.5rem; padding: 0; display: grid; gap: .75rem; }
+.identifier-list li { position: relative; padding: .85rem 3rem .85rem 1rem; background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: .5rem; }
+.identifier-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.identifier-canonical { display: block; margin-top: .35rem; word-break: break-all; }
+.identifier-components { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin: .5rem 0 0; }
+.identifier-components dt { font-size: .75rem; color: var(--color-text-muted); }
+.identifier-components dd { margin: 0; word-break: break-all; }
+.identifier-policy { display: block; margin-top: .5rem; font-size: .72rem; color: var(--color-text-muted); }
+.identifier-list .photo-delete { top: .6rem; right: .6rem; }
 .photos { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
 .photo-item { position: relative; max-width: 100%; width: 20rem; }
 .photo-item img { display: block; width: 100%; height: 15rem; object-fit: contain; background: var(--color-canvas); border-radius: .5rem; }

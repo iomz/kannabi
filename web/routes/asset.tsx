@@ -10,6 +10,7 @@ import { Switch } from '../switch';
 import { Icon } from '../icon';
 import { PhotoDeleteConfirmation } from '../photo-delete-confirmation';
 import { TransientSuccess } from '../transient-success';
+import { IdentifierForm, IdentifierList } from '../asset-identifiers';
 import type { Route } from './+types/asset';
 
 export const handle = publicShellHandle;
@@ -30,7 +31,10 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   const data = await request.formData();
   const intent = data.get('intent');
-  const kind = intent === 'photo' ? 'photo' as const : intent === 'delete-photo' ? 'delete-photo' as const : 'edit' as const;
+  const kind = intent === 'photo' ? 'photo' as const
+    : intent === 'delete-photo' ? 'delete-photo' as const
+      : intent === 'attach-identifier' ? 'attach-identifier' as const
+        : intent === 'detach-identifier' ? 'detach-identifier' as const : 'edit' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
     const id = params.id;
@@ -47,13 +51,29 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       await unwrap(await api.assets[':id'].photos[':key'].$delete({ param: { id, key: requestedPhotoKey! } }));
       return { kind, saved: true as const, error: null, photoKey: requestedPhotoKey };
     }
+    if (kind === 'attach-identifier') {
+      const identifier = Object.fromEntries([...data.entries()]
+        .filter(([field, value]) => field !== 'intent' && typeof value === 'string' && value !== '')
+        .map(([field, value]) => [field, String(value)]));
+      await unwrap(await api.assets[':id'].identifiers.$post({ param: { id }, json: identifier }));
+      return { kind, saved: true as const, error: null, photoKey: null };
+    }
+    if (kind === 'detach-identifier') {
+      await unwrap(await api.assets[':id'].identifiers[':key'].$delete({
+        param: { id, key: String(data.get('identifierKey') ?? '') } }));
+      return { kind, saved: true as const, error: null, photoKey: null };
+    }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
     } }));
     return { kind, saved: true as const, error: null, photoKey: null };
   } catch (error) {
     return { kind, saved: false as const,
-      error: error instanceof Error ? error.message : kind === 'photo' ? 'Upload failed' : kind === 'delete-photo' ? 'Delete failed' : 'Update failed',
+      error: error instanceof Error ? error.message
+        : kind === 'photo' ? 'Upload failed'
+          : kind === 'delete-photo' ? 'Delete failed'
+            : kind === 'attach-identifier' ? 'Identifier could not be added'
+              : kind === 'detach-identifier' ? 'Identifier could not be detached' : 'Update failed',
       photoKey: requestedPhotoKey };
   }
 }
@@ -61,11 +81,15 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
   const upload = useFetcher<typeof clientAction>();
   const edit = useFetcher<typeof clientAction>();
   const deletePhoto = useFetcher<typeof clientAction>();
+  const identifiers = useFetcher<typeof clientAction>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
   const uploadResult = upload.data?.kind === 'photo' ? upload.data : null;
   const editResult = edit.data?.kind === 'edit' ? edit.data : null;
   const deleteResult = deletePhoto.data?.kind === 'delete-photo' ? deletePhoto.data : null;
+  const identifierResult = identifiers.data?.kind === 'attach-identifier'
+    || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
+  const identifierBusy = identifiers.state !== 'idle';
   const uploadBusy = upload.state !== 'idle';
   const editBusy = edit.state !== 'idle';
   const deleteBusy = deletePhoto.state !== 'idle';
@@ -81,15 +105,24 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
         : <Link to="/signin" className="button">Sign in</Link>}</div>
     <section className="panel"><h2>Asset identity</h2><dl>
       <dt>Asset ID</dt><dd><code>{asset.id}</code></dd>
-      <dt>Scheme</dt><dd>{asset.identifier.scheme.toUpperCase()}</dd>
-      {asset.identifier.scheme === 'sgtin' ? <><dt>GTIN</dt><dd>{asset.identifier.gtin}</dd>
-        <dt>Serial</dt><dd>{asset.identifier.serial}</dd></> : <><dt>GRAI</dt><dd>{asset.identifier.grai}</dd></>}
       <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
       <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
       <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
       <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy} /></dd>
       <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
     </dl><AssetUri uri={assetUri} /></section>
+    <section className="panel"><h2>External identifiers</h2>
+      <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
+        onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
+      <div className="asset-photo-status" role="status" aria-live="polite" aria-atomic="true">
+        <TransientSuccess trigger={identifierResult?.kind === 'detach-identifier' && identifierResult.saved ? 'detached' : null} label="Detached" />
+      </div>
+      {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
+        <IdentifierForm busy={identifierBusy}
+          error={identifierResult?.error ?? null}
+          saved={identifierResult?.kind === 'attach-identifier' && identifierResult.saved ? 'added' : null} />
+      </identifiers.Form>}
+    </section>
     <section className="panel"><h2>Photos</h2>
       {!asset.photos.length && <p>No photos yet.</p>}
       <div className="photos">{asset.photos.map((photo, index) => <div key={photo.key}

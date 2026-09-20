@@ -37,11 +37,20 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
   }
   const keys = async () => (await s3.send(new ListObjectsV2Command({ Bucket: bucket }))).Contents?.map((o) => o.Key!).sort() ?? [];
   async function snapshot() {
-    const result = await query(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:Identifier), (a)-[:REPORTED_BY]->(u:User),
+    // Assets carrying no external identifier are part of the snapshot too.
+    const result = await query(`MATCH (a:Asset)-[:REPORTED_BY]->(u:User),
       (g:Group)-[:CAN_COLLABORATE]->(a) OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-      RETURN a.name AS name, a.isPublic AS public, i.scheme AS scheme, i.value AS value, i.serial AS serial,
+      RETURN a.name AS name, a.isPublic AS public,
+        [(a)-[:IDENTIFIED_BY]->(i:IndividualIdentifier) | i.canonical] AS individual,
+        [(a)-[:CLASSIFIED_AS]->(c:ClassIdentifier) | c.canonical] AS classLevel,
         u.email AS reporter, g.name AS group, o.name AS owner ORDER BY name`);
-    return result.records.map((r) => r.toObject());
+    // Pattern comprehensions return relationship order, which is not stable
+    // across reseeds; the identifier set is what the snapshot compares.
+    return result.records.map((r) => {
+      const row = r.toObject() as Record<string, unknown>;
+      return { ...row, individual: (row.individual as string[]).sort(),
+        classLevel: (row.classLevel as string[]).sort() };
+    });
   }
   await t.test('seed creates deterministic content through normal domain and authentication paths', async () => {
     const output = await promisify(execFile)('pnpm', ['demo:seed'], { env });
@@ -80,21 +89,27 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
       }
     }
     let cursor: string | null = null;
-    const identifiers = new Set<string>();
-    const nativeIds = new Set<string>();
+    const nativeIds: string[] = [];
+    let withoutIdentifiers = 0;
     do {
       const page = await store.findAssets(users[0], assetPageRequest({ ...(cursor ? { cursor } : {}) }));
-      page.assets.forEach((a) => { identifiers.add(JSON.stringify(a.identifier)); nativeIds.add(a.id); });
+      page.assets.forEach((a) => {
+        nativeIds.push(a.id);
+        if (!a.identifiers.length) withoutIdentifiers++;
+      });
       cursor = page.nextCursor;
     } while (cursor);
-    assert.equal(identifiers.size, 124);
-    assert.equal(nativeIds.size, 124);
+    // Paging is exhaustive and free of duplicates whatever each Asset carries:
+    // Assets with none, one, and several identifiers each appear exactly once.
+    assert.equal(nativeIds.length, 124);
+    assert.equal(new Set(nativeIds).size, 124);
+    assert.ok(withoutIdentifiers > 0);
     const hidden = demoAssets().find((a) => a.group === 3 && !a.isPublic && a.photo)!;
     const hiddenId = (await query('MATCH (a:Asset {name: $name}) RETURN a.id AS id',
       { name: hidden.name })).records[0].get('id') as string;
     assert.equal(await store.getAsset(hiddenId, users[0]), null);
     const asset = (await store.getAsset(hiddenId, users[2]))!;
-    assert.deepEqual(asset.identifier, hidden.identifier);
+    assert.equal(asset.identifiers.length, hidden.identifiers.length);
     await assert.rejects(media.read(hiddenId, asset.photos[0].key, users[0]));
     assert.deepEqual(Buffer.from((await media.read(hiddenId, asset.photos[0].key, users[2])).bytes),
       await readFile(new URL('../scripts/demo/photos/' + hidden.photo, import.meta.url)));
