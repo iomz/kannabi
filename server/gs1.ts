@@ -290,6 +290,47 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
   if (gtins.size > 1) throw new ValidationError('Identifiers claim conflicting GTINs for one Asset');
 }
 
+/** A GS1 Company Prefix as a Kannabi namespace configures it.
+ *
+ * Kannabi validates only what it can justify: GS1 Company Prefixes are digit
+ * strings, and at least one reference character must remain within AI 8004's
+ * 30. It deliberately imposes no length range — Kannabi holds no GCP Length
+ * Table, and a plausible-looking range would be a heuristic dressed as a
+ * standards rule.
+ */
+export function canonicalGcp(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    throw new ValidationError('A GS1 Company Prefix is a string of digits');
+  }
+  const room = (entries['8004'].components[0].maxLength ?? 0) - 1;
+  if (value.length > room) {
+    throw new ValidationError(`A GS1 Company Prefix must leave room for an asset reference within ${room + 1} characters`);
+  }
+  return value;
+}
+
+/** Construct a GIAI Kannabi is issuing from a managed namespace.
+ *
+ * The single construction point: no caller concatenates a GIAI itself. Unlike a
+ * GIAI Kannabi merely stores, this value's prefix boundary is known by
+ * construction — Kannabi built it from a configured prefix. That is a statement
+ * about construction, not about GS1 licensing: `gcppos1` stays unenforced for
+ * identifiers Kannabi did not build, because their boundary is unknown.
+ */
+export function allocatedGiai(gcp: string, sequence: number): ExternalIdentifier {
+  const prefix = canonicalGcp(gcp);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new ValidationError('An allocated asset reference is a whole number of at least 1');
+  }
+  // Unpadded decimal: the reference is terminal, so no width is needed, and a
+  // fixed width would impose a ceiling. Ordering is by the stored sequence.
+  const identifier = canonicalIdentifier({ scheme: 'giai', assetReference: prefix + String(sequence) });
+  if (!identifier.components.assetReference.startsWith(prefix)) {
+    throw new Error('Allocated GIAI does not begin with its configured prefix');
+  }
+  return identifier;
+}
+
 /** Rendering descriptors. Presentation only; the policy above remains the sole
  * authority on validity, so no caller re-implements a GS1 rule to draw a form. */
 export type SchemeInput = Readonly<{

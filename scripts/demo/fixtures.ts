@@ -58,3 +58,19 @@ export function demoAssets() {
   });
 }
 export const evaluatorScopes = { all: 124, mine: 64, group: 120, public: 34 };
+
+/** GIAI namespaces, arranged so every allocation UI state is reachable:
+ * Demo Workshop manages two, Shared Studio one, and the rest none. */
+export const demoNamespaces = [
+  { group: 0, gcp: '0614141', exclusions: [{ from: 1, to: 4 }, { from: 9, to: 11 }] },
+  { group: 0, gcp: '9521234', exclusions: [] },
+  { group: 1, gcp: '0455123', exclusions: [] },
+] as const;
+
+/** Assets that receive a Kannabi-issued GIAI from the first namespace.
+ * Its exclusions make the issued references 5, 6, 7, 8, 12 — the skips are
+ * visible without reading the configuration. Indices are all in Demo Workshop
+ * and deliberately mix an Asset that had no identifier at all with one that
+ * already carries a manufacturer SGTIN. */
+export const demoAllocations = [0, 2, 7, 9, 14] as const;
+export const demoAllocatedSequences = [5, 6, 7, 8, 12] as const;

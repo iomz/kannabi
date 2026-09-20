@@ -5,7 +5,8 @@ import { IdentityStore } from '../../server/identity-store.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
 import { MediaService } from '../../server/media.js';
-import { demoAccounts, demoAssets, demoGroups, demoOwners, demoPassword, evaluatorScopes } from './fixtures.js';
+import { demoAccounts, demoAllocations, demoAssets, demoGroups, demoNamespaces, demoOwners,
+  demoPassword, evaluatorScopes } from './fixtures.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket, type DemoMode } from './safety.js';
 
 export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.ProcessEnv) {
@@ -70,7 +71,14 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     await store.addGroupMember(users[0], groups[2].key, users[1]);
     const owners = [];
     for (const name of demoOwners) owners.push(await store.createOwner(name));
+    for (const namespace of demoNamespaces) {
+      await store.configureGiaiNamespace(users[[0, 1, 0, 2][namespace.group]], groups[namespace.group].key,
+        { gcp: namespace.gcp, exclusions: namespace.exclusions });
+    }
+    const namespaces = await store.listGiaiNamespaces(users[0]);
+    const allocateFrom = namespaces.find((namespace) => namespace.gcp === demoNamespaces[0].gcp)!;
     const media = new MediaService(store, storage);
+    const reportedIds: string[] = [];
     for (const asset of demoAssets()) {
       const actorKey = users[asset.reporter];
       const reported = await media.report({ name: asset.name, identifiers: asset.identifiers,
@@ -78,11 +86,17 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       { actorKey, groupKey: groups[asset.group].key },
       asset.photo ? new File([new Uint8Array(photos.get(asset.photo)!)], asset.photo, { type: 'image/png' }) : undefined);
       if (asset.isPublic) await store.updateAsset(reported.id, { isPublic: true }, actorKey);
+      reportedIds.push(reported.id);
+    }
+    // Allocation order is fixed, so the issued references are deterministic.
+    for (const index of demoAllocations) {
+      await store.allocateGiai(reportedIds[index], users[demoAssets()[index].reporter], allocateFrom.key);
     }
     const page = await store.findAssets(users[0], { q: '', scope: 'all', limit: 1, after: null });
     for (const scope of ['all', 'mine', 'group', 'public'] as const) {
       if (page.scopes[scope] !== evaluatorScopes[scope]) throw new Error('Demo verification failed: unexpected access counts');
     }
-    return { assets: demoAssets().length, photos: demoAssets().filter((asset) => asset.photo).length, scopes: page.scopes };
+    return { assets: demoAssets().length, photos: demoAssets().filter((asset) => asset.photo).length,
+      namespaces: demoNamespaces.length, allocations: demoAllocations.length, scopes: page.scopes };
   } finally { await session.close(); await driver.close(); s3.destroy(); }
 }

@@ -6,9 +6,12 @@ import { assetCursor, type AssetPageRequest, type AssetScope } from './asset-pag
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import {
-  assertCompatible, canonicalIdentifier, canonicalIdentifiers, storedIdentifier,
-  type ExternalIdentifier,
+  allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
+  storedIdentifier, type ExternalIdentifier,
 } from './gs1.js';
+import {
+  allocatableSequence, canonicalExclusions, firstSequence, storedExclusions, type ExclusionRange,
+} from './giai-allocation.js';
 import { isAppearancePreference, type AppearancePreference } from '../shared/appearance.js';
 import { MailRevisionConflictError, type MailVerificationStatus, type PersistedMailSettings,
   type StoredMailConfiguration } from './mail.js';
@@ -36,6 +39,8 @@ export type Asset = Readonly<{
   id: string;
   name: string;
   identifiers: readonly AttachedIdentifier[];
+  /** Derived from the issuance ledger, not from any identifier property. */
+  allocation: GiaiAllocation | null;
   reportedBy: ReporterAttribution;
   reportedAt: string;
   owner: Entity | null;
@@ -44,6 +49,32 @@ export type Asset = Readonly<{
   photos: readonly Photo[];
 }>;
 export type Photo = { key: string; contentType: string; size: number; createdAt: string | null };
+
+/** A GS1 Company Prefix namespace a Group has configured for allocation.
+ * `active` is configuration state, never allocation lifecycle. */
+export type GiaiNamespace = Readonly<{
+  key: string;
+  gcp: string;
+  active: boolean;
+  exclusions: readonly ExclusionRange[];
+  nextSequence: number;
+  group: Entity;
+  configuredAt: string;
+  configuredBy: string;
+}>;
+
+/** One immutable issuance. Kannabi's claim to have allocated a GIAI rests on
+ * this record and nothing else — never on an Asset merely carrying a value. */
+export type GiaiAllocation = Readonly<{
+  value: string;
+  gcp: string;
+  sequence: number;
+  allocatedAt: string;
+  allocatedForAssetId: string;
+  /** Public provenance in the same shape as `reportedBy`: who acted, rendered
+   * through the same tombstone rules, never a bare stored actor key. */
+  allocatedBy: ReporterAttribution;
+}>;
 
 export function orderPhotos(photos: readonly Photo[]): Photo[] {
   return [...photos].sort((left, right) => {
@@ -56,6 +87,18 @@ export function orderPhotos(photos: readonly Photo[]): Photo[] {
 
 type StoredIdentifier = { key: string; canonical: string; scheme: string; policyVersion: string };
 type StoredAsset = Omit<Asset, 'identifiers'> & { identifiers: StoredIdentifier[] };
+const namespaceProjection = `n { .key, .gcp, .active, .configuredBy,
+  configuredAt: toString(n.configuredAt), nextSequence: toFloat(n.nextSequence),
+  exclusionsFrom: n.exclusionsFrom, exclusionsTo: n.exclusionsTo,
+  group: head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g { .key, .name }]) }`;
+
+type StoredNamespace = Omit<GiaiNamespace, 'exclusions'>
+  & { exclusionsFrom: unknown; exclusionsTo: unknown };
+
+function namespaceFrom(stored: StoredNamespace): GiaiNamespace {
+  const { exclusionsFrom, exclusionsTo, ...namespace } = stored;
+  return { ...namespace, exclusions: storedExclusions(exclusionsFrom, exclusionsTo) };
+}
 
 /** Components and level are always re-derived from the canonical form, so a
  * stored identifier cannot become an independent source of GS1 truth. */
@@ -94,6 +137,14 @@ const constraints = [
   'CREATE CONSTRAINT individual_identifier_key IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT class_identifier IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.canonical IS UNIQUE',
   'CREATE CONSTRAINT class_identifier_key IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.key IS UNIQUE',
+  // One GCP has exactly one allocation counter, so a prefix can never be
+  // configured twice and issue the same reference from two counters.
+  'CREATE CONSTRAINT giai_namespace_key IF NOT EXISTS FOR (n:GiaiNamespace) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT giai_namespace_gcp IF NOT EXISTS FOR (n:GiaiNamespace) REQUIRE n.gcp IS UNIQUE',
+  // A GIAI is issued once, and Kannabi issues at most one per Asset. Both are
+  // schema facts rather than application sequencing.
+  'CREATE CONSTRAINT giai_allocation_value IF NOT EXISTS FOR (n:GiaiAllocation) REQUIRE n.value IS UNIQUE',
+  'CREATE CONSTRAINT giai_allocation_asset IF NOT EXISTS FOR (n:GiaiAllocation) REQUIRE n.allocatedForAssetId IS UNIQUE',
 ];
 
 // Installed only once every Asset carries a native id, so a pre-Phase-1
@@ -150,7 +201,22 @@ const identifierProjection = `
     identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
         x { .key, .canonical, .scheme, .policyVersion }]
       + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
-        y { .key, .canonical, .scheme, .policyVersion }],`
+        y { .key, .canonical, .scheme, .policyVersion }],
+    allocation: issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
+      allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
+      allocatedBy: { key: issuance.allocatedBy,
+        name: CASE WHEN allocator IS NULL THEN 'Deleted member'
+          WHEN allocator.accountDeletedAt IS NULL THEN allocator.name
+          ELSE coalesce(allocator.provenanceName, allocator.name, 'Deleted member') END,
+        status: CASE WHEN allocator IS NOT NULL AND allocator.accountDeletedAt IS NULL
+          THEN 'active' ELSE 'deleted' END } },`
+
+// The ledger row is found by the Asset id it records, which is unique, so this
+// cannot multiply rows and needs no relationship to the Asset to survive one.
+// The ledger stores an actor key; the allocator is resolved here so the public
+// representation carries attribution rather than that internal key alone.
+const allocationMatch = `OPTIONAL MATCH (issuance:GiaiAllocation {allocatedForAssetId: a.id})
+  OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})`;
 
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
@@ -160,7 +226,8 @@ const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-  WITH a, u, o, collect(g { .key, .name }) AS groups
+  ${allocationMatch}
+  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: { key: u.key,
       name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
@@ -207,6 +274,8 @@ export class IdentityStore {
         ['Migration', ['key']], ['Asset', ['id']],
         ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
         ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
+        ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
+        ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
       ] as const) {
         if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
           && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
@@ -482,7 +551,8 @@ export class IdentityStore {
           MATCH (a)-[:REPORTED_BY]->(u:User)
           MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
           OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-          WITH a, u, o, collect(g { .key, .name }) AS groups
+          ${allocationMatch}
+          WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
           ORDER BY a.name, a.id
           RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
             reportedBy: { key: u.key,
@@ -708,22 +778,181 @@ export class IdentityStore {
     const assetKey = assetId(id);
     try {
       return await this.write(async (tx) => {
-        const current = await tx.run(`${assetMatch} WHERE ${collaboration}
-          RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
-            + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
-        { assetId: assetKey, actorKey });
-        if (!current.records.length) throw new ReferenceError('Asset access not found');
-        const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
-          .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
-        assertCompatible([...existing, identifier]);
-        const result = await tx.run(`${assetMatch} WHERE ${collaboration}
-          ${attachIdentifiers}
-          WITH a ${assetProjection}`, { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
+          { assetId: assetKey, actorKey });
         return assetFrom(result.records[0].get('asset'));
       });
     } catch (error) {
       if (isDuplicateIdentifier(error)) {
         throw new DuplicateIdentityError('The individual identifier is already claimed', { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  /** The single attachment implementation: Asset authorization, GS1 set
+   * compatibility, the issuance guard, and persistence. Allocation runs this
+   * inside its own transaction rather than duplicating any of it. */
+  private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
+    actorKey: string, identifier: ExternalIdentifier): Promise<void> {
+    const current = await tx.run(`${assetMatch} WHERE ${collaboration}
+      RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
+        + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
+    { assetId: assetKey, actorKey });
+    if (!current.records.length) throw new ReferenceError('Asset access not found');
+    const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
+      .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+    assertCompatible([...existing, identifier]);
+    // A GIAI Kannabi issued may only ever return to the Asset it was issued
+    // for. An externally assigned GIAI has no ledger row and keeps the ordinary
+    // correction semantics of detaching from one Asset and attaching to another.
+    if (identifier.scheme === 'giai') {
+      const issued = await tx.run('MATCH (l:GiaiAllocation {value: $value}) RETURN l.allocatedForAssetId AS assetId',
+        { value: identifier.components.assetReference });
+      const issuedFor = issued.records[0]?.get('assetId') as string | undefined;
+      if (issuedFor !== undefined && issuedFor !== assetKey) {
+        throw new ValidationError('Kannabi issued that GIAI for another Asset');
+      }
+    }
+    await tx.run(`${assetMatch} WHERE ${collaboration} ${attachIdentifiers}`,
+      { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
+  }
+
+  /** GIAI namespaces the actor can reach, newest configuration last. */
+  async listGiaiNamespaces(actorKey: string): Promise<GiaiNamespace[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.executeRead((tx) => tx.run(`
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace)
+        RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`, { actorKey }));
+      return result.records.map((row) => namespaceFrom(row.get('namespace')));
+    } finally { await session.close(); }
+  }
+
+  /** Configure a GCP namespace for a Group.
+   *
+   * The prefix is an assertion by an authorized member, recorded with who made
+   * it. Kannabi cannot verify GS1 licensing and does not imply that it did.
+   */
+  async configureGiaiNamespace(actorKey: string, groupKey: string, value: unknown): Promise<GiaiNamespace> {
+    const input = record(value, ['gcp', 'exclusions']);
+    const gcp = canonicalGcp(input.gcp);
+    const exclusions = canonicalExclusions(input.exclusions);
+    const params = {
+      actorKey, groupKey: requiredText(groupKey, 'groupKey'), gcp,
+      key: randomUUID(), nextSequence: int(firstSequence),
+      exclusionsFrom: exclusions.map((range) => int(range.from)),
+      exclusionsTo: exclusions.map((range) => int(range.to)),
+    };
+    return this.write(async (tx) => {
+      const owner = await tx.run(`MATCH (n:GiaiNamespace {gcp: $gcp})
+        RETURN head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g.key]) AS groupKey`, { gcp });
+      if (owner.records.length) {
+        // One managed GCP belongs to one Group while Group membership is the
+        // only authorization we have. Issue #20's privilege model can relax
+        // this without touching any namespace or allocation record.
+        throw new DuplicateIdentityError(owner.records[0].get('groupKey') === params.groupKey
+          ? 'That GS1 Company Prefix is already configured for this Group'
+          : 'That GS1 Company Prefix is already managed by another Group');
+      }
+      const result = await tx.run(`
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
+        CREATE (g)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace {
+          key: $key, gcp: $gcp, active: true, nextSequence: $nextSequence,
+          exclusionsFrom: $exclusionsFrom, exclusionsTo: $exclusionsTo,
+          configuredAt: datetime(), configuredBy: $actorKey })
+        RETURN ${namespaceProjection} AS namespace`, params);
+      if (!result.records.length) throw new ReferenceError('Group not found');
+      return namespaceFrom(result.records[0].get('namespace'));
+    });
+  }
+
+  /** Deactivate or reactivate a namespace. Deactivation stops new issuance and
+   * nothing else: the counter, the exclusions and every ledger row remain, so
+   * reactivation resumes the same namespace rather than starting a new one. */
+  async setGiaiNamespaceActive(actorKey: string, namespaceKey: string, active: unknown): Promise<GiaiNamespace> {
+    if (typeof active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
+    return this.write(async (tx) => {
+      const result = await tx.run(`
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace {key: $key})
+        SET n.active = $active
+        RETURN ${namespaceProjection} AS namespace`,
+      { actorKey, key: requiredText(namespaceKey, 'namespace key'), active });
+      if (!result.records.length) throw new ReferenceError('Allocation namespace not found');
+      return namespaceFrom(result.records[0].get('namespace'));
+    });
+  }
+
+  /** Issue a GIAI for an Asset from a managed namespace, idempotently.
+   *
+   * One transaction, and the namespace write lock is taken before anything is
+   * decided — the Phase 1 lesson. A concurrent caller therefore blocks and then
+   * observes the committed allocation at step 3, so a double-click returns the
+   * same GIAI without consuming a sequence number.
+   *
+   * The same Asset allocating from two different namespaces at once locks two
+   * different nodes, so the `allocatedForAssetId` constraint arbitrates
+   * instead: the loser's whole transaction, counter included, rolls back and it
+   * returns the winner's allocation.
+   */
+  async allocateGiai(id: string, actorKey: string, namespaceKey: string): Promise<Asset> {
+    const assetKey = assetId(id);
+    const key = requiredText(namespaceKey, 'namespace key');
+    const project = async (tx: ManagedTransaction) => {
+      const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
+        { assetId: assetKey, actorKey });
+      return assetFrom(result.records[0].get('asset'));
+    };
+    try {
+      return await this.write(async (tx) => {
+        // 1. Lock the namespace before reading anything the decision depends on.
+        const locked = await tx.run(`MATCH (n:GiaiNamespace {key: $key}) SET n.lock = true
+          RETURN n.gcp AS gcp, n.active AS active, toFloat(n.nextSequence) AS nextSequence,
+            n.exclusionsFrom AS exclusionsFrom, n.exclusionsTo AS exclusionsTo`, { key });
+        if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
+        // 2. Authority comes from the Group that manages the namespace, and
+        //    that Group must also collaborate on the Asset.
+        const authorized = await tx.run(`
+          MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:GiaiNamespace {key: $key})
+          MATCH (g)-[:CAN_COLLABORATE]->(a:Asset {id: $assetId})
+          RETURN a.id AS id`, { actorKey, key, assetId: assetKey });
+        if (!authorized.records.length) throw new ReferenceError('Asset access or allocation namespace not found');
+        // 3/4. An existing issuance is returned as-is, whether or not the
+        //      identifier is still attached, and never consumes a sequence.
+        const existing = await tx.run('MATCH (l:GiaiAllocation {allocatedForAssetId: $assetId}) RETURN l.value AS value',
+          { assetId: assetKey });
+        if (existing.records.length) return project(tx);
+        if (locked.records[0].get('active') !== true) {
+          throw new ValidationError('That GS1 Company Prefix namespace is deactivated');
+        }
+        // 5. The next candidate, skipping existing-use ranges by range.
+        const row = locked.records[0];
+        const sequence = allocatableSequence(row.get('nextSequence') as number,
+          storedExclusions(row.get('exclusionsFrom'), row.get('exclusionsTo')));
+        // 6. Advance past the candidate; skipping happens again on the next read.
+        await tx.run('MATCH (n:GiaiNamespace {key: $key}) SET n.nextSequence = $next',
+          { key, next: int(sequence + 1) });
+        // 7. Construction and validation belong to the GS1 boundary.
+        const identifier = allocatedGiai(row.get('gcp') as string, sequence);
+        // 8. The issuance record, which outlives the Asset and the attachment.
+        await tx.run(`MATCH (n:GiaiNamespace {key: $key})
+          CREATE (l:GiaiAllocation { value: $value, gcp: $gcp, sequence: $sequence,
+            allocatedAt: datetime(), allocatedForAssetId: $assetId, allocatedBy: $actorKey })
+          CREATE (l)-[:ALLOCATED_FROM]->(n)`,
+        { key, value: identifier.components.assetReference, gcp: row.get('gcp'),
+          sequence: int(sequence), assetId: assetKey, actorKey });
+        // 9. Phase 2 attachment semantics, unchanged and not duplicated.
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        return project(tx);
+      });
+    } catch (error) {
+      if (isDuplicateIdentifier(error)) {
+        // Another transaction issued for this Asset first. Return its result
+        // rather than reporting a conflict the caller cannot act on.
+        const settled = await this.getAsset(assetKey, actorKey);
+        if (settled?.allocation) return settled;
+        throw new DuplicateIdentityError('The allocated identifier is already claimed', { cause: error });
       }
       throw error;
     }

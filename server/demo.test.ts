@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { canonicalIdentifiers } from './gs1.js';
-import { demoAssets, evaluatorScopes } from '../scripts/demo/fixtures.js';
+import { demoAllocatedSequences, demoAllocations, demoAssets, demoNamespaces,
+  evaluatorScopes } from '../scripts/demo/fixtures.js';
+import { allocatableSequence, canonicalExclusions, firstSequence } from './giai-allocation.js';
+import { canonicalGcp } from './gs1.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket } from '../scripts/demo/safety.js';
 
 const env = { KANNABI_DEMO: 'local', NODE_ENV: 'development', APP_URL: 'http://127.0.0.1:3000',
@@ -49,6 +52,34 @@ test('demo contents and supported identifiers are deterministic with overlapping
   assert.ok(assets.some((a) => a.owner === null));
   assert.ok(assets.some((a) => a.owner !== null));
   assert.equal(assets.filter((a) => a.photo).length, 47);
+});
+
+test('demo GIAI namespaces cover every allocation state and issue deterministic references', () => {
+  // Zero, one and multiple configured namespaces are all reachable in the UI.
+  const perGroup = [0, 1, 2, 3].map((group) => demoNamespaces.filter((n) => n.group === group).length);
+  assert.deepEqual(perGroup, [2, 1, 0, 0]);
+  assert.equal(new Set(demoNamespaces.map((n) => n.gcp)).size, demoNamespaces.length);
+  for (const namespace of demoNamespaces) {
+    assert.equal(canonicalGcp(namespace.gcp), namespace.gcp);
+    assert.deepEqual(canonicalExclusions(namespace.exclusions), namespace.exclusions);
+  }
+  // The seeded issuance order produces exactly the documented references, so
+  // the skipped ranges are visible in the demo without reading configuration.
+  const exclusions = canonicalExclusions(demoNamespaces[0].exclusions);
+  const issued: number[] = [];
+  let next = firstSequence;
+  for (let n = 0; n < demoAllocations.length; n++) {
+    const sequence = allocatableSequence(next, exclusions);
+    issued.push(sequence);
+    next = sequence + 1;
+  }
+  assert.deepEqual(issued, [...demoAllocatedSequences]);
+  // Allocation targets are all in the namespace-owning Group, and deliberately
+  // include an Asset with no identifier and one with a manufacturer SGTIN.
+  const assets = demoAssets();
+  assert.ok(demoAllocations.every((index) => assets[index].group === demoNamespaces[0].group));
+  assert.ok(demoAllocations.some((index) => assets[index].pattern === 'none'));
+  assert.ok(demoAllocations.some((index) => assets[index].pattern === 'sgtin'));
 });
 
 test('demo safety requires explicit opt-in, loopback configuration and exact destructive confirmation', () => {

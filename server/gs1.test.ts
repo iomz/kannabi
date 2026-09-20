@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  assertAiAssociations, assertCompatible, assertReversibleSchemes, canonicalGtin, canonicalIdentifier,
-  canonicalIdentifiers, gs1Policy, identifierSchemes, schemeInputs, storedIdentifier,
+  allocatedGiai, assertAiAssociations, assertCompatible, assertReversibleSchemes, canonicalGcp,
+  canonicalGtin, canonicalIdentifier, canonicalIdentifiers, gs1Policy, identifierSchemes,
+  schemeInputs, storedIdentifier,
 } from './gs1.js';
 import { entries, enforcedLinters, syntaxDictionaryRelease, unenforcedLinters } from './gs1-syntax.js';
 import { ValidationError } from './identity.js';
@@ -170,6 +171,52 @@ test('a stored identifier must carry the policy version that accepted it', () =>
   const historical = storedIdentifier(identifier.scheme, identifier.canonical, '2024-06-10+kannabi.1');
   assert.equal(historical.policyVersion, '2024-06-10+kannabi.1');
   assert.notEqual(historical.policyVersion, gs1Policy.version);
+});
+
+test('an allocated GIAI is built from a configured prefix and a numeric reference', () => {
+  const identifier = allocatedGiai('0614141', 12);
+  assert.equal(identifier.components.assetReference, '061414112');
+  assert.equal(identifier.canonical, '(8004)061414112');
+  assert.equal(identifier.level, 'individual');
+  assert.equal(identifier.scheme, 'giai');
+  assert.equal(identifier.policyVersion, gs1Policy.version);
+  // Unpadded decimal, so ordering is the stored sequence and never the string.
+  assert.equal(allocatedGiai('0614141', 5).components.assetReference, '06141415');
+  assert.equal(allocatedGiai('0614141', 1_000_000).components.assetReference, '06141411000000');
+  for (const sequence of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2, '4']) {
+    assert.throws(() => allocatedGiai('0614141', sequence as number), ValidationError, String(sequence));
+  }
+});
+
+test('a configured prefix is validated only as far as Kannabi can justify', () => {
+  // GS1 Company Prefixes are digit strings, and at least one reference
+  // character must remain within AI 8004's 30.
+  for (const gcp of ['0', '0614141', '9'.repeat(29)]) assert.equal(canonicalGcp(gcp), gcp);
+  for (const gcp of ['', '06141A1', '0614141 ', '9'.repeat(30), 614141, null]) {
+    assert.throws(() => canonicalGcp(gcp), ValidationError, String(gcp));
+  }
+  // No invented length range: Kannabi holds no GCP Length Table, so a
+  // plausible-looking 6-12 rule would be a heuristic posing as conformance.
+  for (const gcp of ['1', '12345', '1234567890123']) assert.doesNotThrow(() => canonicalGcp(gcp));
+});
+
+test('an allocated GIAI that would exceed AI 8004 is rejected, never truncated', () => {
+  const gcp = '9'.repeat(25);
+  assert.equal(allocatedGiai(gcp, 12345).components.assetReference.length, 30);
+  assert.throws(() => allocatedGiai(gcp, 123456), ValidationError);
+  assert.throws(() => allocatedGiai('9'.repeat(29), 10), ValidationError);
+});
+
+test('allocation adds no guarantee to GIAIs Kannabi merely stores', () => {
+  // Phase 2 semantics for an externally supplied GIAI are unchanged: the value
+  // is accepted on syntax alone, with no prefix boundary claimed.
+  const external = canonicalIdentifier({ scheme: 'giai', assetReference: 'ZZZ-not-a-prefix' });
+  assert.equal(external.level, 'individual');
+  assert.equal(external.components.assetReference, 'ZZZ-not-a-prefix');
+  // gcppos stays globally unenforced, and says why.
+  assert.ok(!(enforcedLinters as readonly string[]).includes('gcppos1'));
+  assert.match(unenforcedLinters.gcppos1, /GCP Length Table/);
+  assert.equal(entries['8004'].components[0].linters.includes('gcppos1'), true);
 });
 
 test('rendering descriptors cover every supported scheme without restating validation', () => {
