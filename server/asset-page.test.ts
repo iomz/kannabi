@@ -36,6 +36,15 @@ test('filters parse, validate and canonicalise into a stable key', () => {
   assert.equal(canonicalFilters(parsed.filters),
     'groups=a,b|schemes=gtin,sgtin|identified=any'
     + '|from=2026-01-01T00:00:00.000Z|to=2026-02-01T00:00:00.000Z');
+  // A date names a whole day and an instant names a point in time, so the two
+  // are different predicates and must not share a cursor key.
+  const day = assetPageRequest({ reportedTo: '2026-02-01' }).filters;
+  const moment = assetPageRequest({ reportedTo: '2026-02-01T00:00:00Z' }).filters;
+  assert.equal(day.reportedTo, moment.reportedTo);
+  assert.equal(day.reportedToEndOfDay, true);
+  assert.equal(moment.reportedToEndOfDay, false);
+  assert.equal(canonicalFilters(day), 'through=2026-02-01T00:00:00.000Z');
+  assert.notEqual(canonicalFilters(day), canonicalFilters(moment));
   // Visibility is not a filter: the scope tabs own that dimension, so the
   // parameter is simply unknown and contributes nothing to the predicate.
   assert.equal(canonicalFilters(assetPageRequest({ visibility: 'public' }).filters), '');

@@ -15,6 +15,9 @@ test('lookup accepts exactly one complete identity', () => {
   for (const query of [
     {},
     { id, scheme: 'giai', assetReference: '0614141ASSET-001' },
+    // An identifier field without a scheme is still an identity request: the
+    // native-ID branch must not win by ignoring it.
+    { id, gtin: '00614141123452' },
     { scheme: 'giai' },
     { assetReference: '0614141ASSET-001' },
     { id, extra: 'x' },

@@ -28,6 +28,7 @@ export type InventoryView = {
 
 export const noFilters: AssetFilters = {
   groups: [], schemes: [], identified: null, reportedFrom: null, reportedTo: null,
+  reportedToEndOfDay: false,
 };
 
 /** The canonical URL for a view. Defaults and unset filters are omitted, so the
@@ -60,12 +61,16 @@ export function filtersFromForm(form: FormData): AssetFilters {
   };
   const group = value('group');
   const scheme = value('scheme');
+  // The date controls submit plain dates, so an upper bound from this form
+  // always means through the end of the day it names.
+  const reportedTo = value('reportedTo');
   return {
     groups: group ? [group] : [],
     schemes: scheme ? [scheme as IdentifierScheme] : [],
     identified: value('identified') as AssetFilters['identified'],
     reportedFrom: value('reportedFrom'),
-    reportedTo: value('reportedTo'),
+    reportedTo,
+    reportedToEndOfDay: reportedTo !== null,
   };
 }
 

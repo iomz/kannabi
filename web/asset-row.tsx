@@ -12,9 +12,10 @@ import { ReporterAttribution } from './reporter-attribution';
 export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt' }) {
   const location = useLocation();
   return <li>
-    {/* Carrying the current query lets the Asset page return to the same
-        inventory view rather than to a default one. */}
-    <Link className="inventory-row" to={assetPath(asset.id)} state={{ from: location.search }}>
+    {/* Carrying the complete location lets the Asset page return to the view it
+        was opened from — the inventory query, or the lookup that resolved it. */}
+    <Link className="inventory-row" to={assetPath(asset.id)}
+      state={{ from: location.pathname + location.search }}>
       <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
       <div className="inventory-row-body"><strong>{asset.name}</strong>
         <span className="asset-identifier">{asset.identifiers.length

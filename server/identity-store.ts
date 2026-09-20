@@ -291,7 +291,9 @@ const filterPredicate = `
     OR ($identified = 'any' AND EXISTS { MATCH (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() })
     OR ($identified = 'none' AND NOT EXISTS { MATCH (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() }))
   AND ($reportedFrom IS NULL OR a.reportedAt >= datetime($reportedFrom))
-  AND ($reportedTo IS NULL OR a.reportedAt <= datetime($reportedTo))`;
+  AND ($reportedTo IS NULL
+    OR ($reportedToEndOfDay AND a.reportedAt < datetime($reportedTo) + duration({days: 1}))
+    OR (NOT $reportedToEndOfDay AND a.reportedAt <= datetime($reportedTo)))`;
 
 function filterParameters(filters: AssetFilters) {
   return {
@@ -299,7 +301,11 @@ function filterParameters(filters: AssetFilters) {
     schemes: filters.schemes,
     identified: filters.identified,
     reportedFrom: filters.reportedFrom,
+    // A date-only bound covers the whole day, so it compares against the start
+    // of the next one. Carrying the caller's own value and advancing it here
+    // keeps the URL, the chip and the date control showing the chosen day.
     reportedTo: filters.reportedTo,
+    reportedToEndOfDay: filters.reportedToEndOfDay,
   };
 }
 

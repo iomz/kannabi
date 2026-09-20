@@ -8,18 +8,23 @@ export const demoGroups = ['Demo Workshop', 'Shared Studio', 'Field Kits', 'Priv
 export const demoOwners = ['Northstar Demo Cooperative', 'Meadow Demo Rentals', 'Workshop Equipment Pool'] as const;
 /** Each product names the bundled illustration that suits it, so searching a
  * category such as `camera` returns Assets whose photos match their names.
- * Only the existing three illustrations are used; none were added. */
+ * Only the existing three illustrations are used; none were added.
+ *
+ * Order matters. Photos are attached on every third Asset, and the product
+ * cycles every twelfth, so only slots 0, 3, 6 and 9 ever carry one. Those four
+ * slots are arranged to cover all three illustrations; moving a product
+ * between them silently drops an illustration from the demo entirely. */
 const products = [
   { name: 'Signal generator', photo: 'instrument.png' },
   { name: 'RFID reader', photo: 'instrument.png' },
   { name: 'Field laptop', photo: 'case.png' },
   { name: 'Inspection camera', photo: 'camera.png' },
-  { name: 'Tool case', photo: 'case.png' },
+  { name: 'Audio recorder', photo: 'instrument.png' },
   { name: 'Portable projector', photo: 'camera.png' },
   { name: 'Survey receiver', photo: 'instrument.png' },
   { name: 'Trail backpack', photo: 'case.png' },
   { name: 'Bench multimeter', photo: 'instrument.png' },
-  { name: 'Audio recorder', photo: 'instrument.png' },
+  { name: 'Tool case', photo: 'case.png' },
   { name: 'Inspection microscope', photo: 'camera.png' },
   { name: 'Workshop tablet', photo: 'case.png' },
 ] as const;

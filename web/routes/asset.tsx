@@ -95,9 +95,10 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
   const edit = useFetcher<typeof clientAction>();
   const deletePhoto = useFetcher<typeof clientAction>();
   const identifiers = useFetcher<typeof clientAction>();
-  // The inventory row passes the view it was showing, so going back returns to
-  // that query rather than to a default inventory.
-  const from = (useLocation().state as { from?: string } | null)?.from ?? '';
+  // The row passes the complete location it was shown in, so going back returns
+  // to that view — the inventory query, or the lookup that resolved this Asset.
+  const from = (useLocation().state as { from?: string } | null)?.from;
+  const back = from?.startsWith('/') ? from : '/';
   const allocate = useFetcher<typeof clientAction>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
@@ -119,7 +120,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
     if (deleteResult?.saved) setPhotoToDelete(null);
   }, [deleteResult]);
   return <>
-    {authenticated && <Link to={{ pathname: '/', search: from }} className="back-link">← Assets</Link>}<div className="page-heading"><div><p className="eyebrow">Asset</p><h1>{asset.name}</h1></div>
+    {authenticated && <Link to={back} className="back-link">{back.startsWith('/lookup') ? '← Lookup' : '← Assets'}</Link>}<div className="page-heading"><div><p className="eyebrow">Asset</p><h1>{asset.name}</h1></div>
       {authenticated ? <span className={'badge ' + (asset.isPublic ? 'public' : '')}>{asset.isPublic ? 'Public' : 'Group access'}</span>
         : <Link to="/signin" className="button">Sign in</Link>}</div>
     <section className="panel"><h2>Asset identity</h2><dl>

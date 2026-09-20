@@ -9,6 +9,16 @@ import { AssetRow } from '../asset-row';
 import { InventoryControls, inventoryPath, type InventoryView } from '../inventory-controls';
 import type { Route } from './+types/home';
 
+/** The API query for a URL, keeping repeated parameters intact.
+ *
+ * `group` and `scheme` may appear more than once, and collapsing them to one
+ * entry would let the chips show a filter the request never applied. Both
+ * request sites go through here so they cannot drift apart.
+ */
+function assetQuery(params: URLSearchParams): Record<string, string[]> {
+  return Object.fromEntries([...new Set(params.keys())].map((key) => [key, params.getAll(key)]));
+}
+
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (!(await unwrap(await api.me.$get())).user) throw redirect('/signin');
   const url = new URL(request.url);
@@ -20,11 +30,10 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     scope: (params.get('scope') ?? 'all') as AssetScope,
     sort: (params.get('sort') ?? 'name') as AssetSort,
     dir: (params.get('dir') ?? 'asc') as AssetDirection,
-    filters: assetFilters(Object.fromEntries(
-      [...params.keys()].map((key) => [key, params.getAll(key)]))),
+    filters: assetFilters(assetQuery(params)),
   };
   const [page, { groups }] = await Promise.all([
-    unwrap(await api.assets.$get({ query: Object.fromEntries(params) },
+    unwrap(await api.assets.$get({ query: assetQuery(params) },
       { init: { signal: request.signal } })),
     unwrap(await api.groups.$get()),
   ]);
@@ -60,7 +69,7 @@ function Inventory({ initial, view, groups }: {
     setError(false);
     try {
       const next = await unwrap(await api.assets.$get(
-        { query: { ...Object.fromEntries(new URLSearchParams(inventoryPath(view).split('?')[1] ?? '')),
+        { query: { ...assetQuery(new URLSearchParams(inventoryPath(view).split('?')[1] ?? '')),
           cursor: page.nextCursor } },
         { init: { signal: controller.signal } }));
       if (controller.signal.aborted) return;

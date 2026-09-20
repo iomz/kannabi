@@ -8,10 +8,21 @@ import type { Route } from './+types/lookup';
 
 type LookupKind = 'id' | IdentifierScheme;
 
+/** An unrecognised `kind` is a bad request, not a broken page: indexing the
+ * scheme table with it would throw inside the loader and surface the generic
+ * error boundary instead of telling the caller what was wrong. */
+function lookupKind(value: string | null): LookupKind | null {
+  if (value === null || value === 'id') return 'id';
+  return (identifierSchemes as readonly string[]).includes(value) ? value as IdentifierScheme : null;
+}
+
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (!(await unwrap(await api.me.$get())).user) throw redirect('/signin');
   const params = new URL(request.url).searchParams;
-  const kind = (params.get('kind') ?? 'id') as LookupKind;
+  const kind = lookupKind(params.get('kind'));
+  if (kind === null) {
+    return { kind: 'id' as LookupKind, result: null, error: 'That is not an identity Kannabi can resolve.' };
+  }
   // Only the fields the chosen kind actually uses are sent, so the deterministic
   // query never receives an ambiguous mixture of identity inputs.
   const fields = kind === 'id' ? ['id'] : schemeInputs[kind].map((input) => input.name);
@@ -71,11 +82,13 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
         : <>
           <ul className="inventory-list">{result.assets.map((asset) =>
             <AssetRow key={asset.id} asset={asset} />)}</ul>
+          {/* Each page replaces the last, so this is navigation rather than an
+              append; the browser's Back button returns to the previous page. */}
           <p className="hint">Showing {result.assets.length} of {result.matching} Assets
             that carry this identity.</p>
           {result.nextCursor && <Link className="button secondary" to={'/lookup?' + new URLSearchParams({
             ...Object.fromEntries(new URLSearchParams(location.search)), cursor: result.nextCursor,
-          })}>Show more</Link>}
+          })}>Next page</Link>}
         </>}
     </section>}
   </>;
