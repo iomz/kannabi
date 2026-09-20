@@ -8,6 +8,7 @@ export default [
   route('reset-password', 'routes/reset-password.tsx'),
   route('assets/report', 'routes/report.tsx'),
   route('asset/:id', 'routes/asset.tsx'),
+  route('lookup', 'routes/lookup.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),
   route('admin/members', 'routes/members.tsx'),

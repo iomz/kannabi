@@ -4,6 +4,8 @@ import neo4j, { int } from 'neo4j-driver';
 import { IdentityStore, DuplicateIdentityError, ReferenceError, type ReportAsset } from './identity-store.js';
 import { ValidationError } from './identity.js';
 import { gs1Policy } from './gs1.js';
+import { emptyAssetFilters } from './asset-page.js';
+import { assetLookupQuery } from './asset-lookup.js';
 import { isAssetId, newAssetId } from './asset-id.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
@@ -540,6 +542,91 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await assert.rejects(store.allocateGiai(asset.id, owner.key, 'not-a-namespace'), ReferenceError);
     // A Group member of the namespace-owning Group that collaborates succeeds.
     assert.ok((await store.allocateGiai(asset.id, collaborator.key, namespace.key)).allocation);
+  });
+
+  await t.test('deterministic lookup resolves complete identities over the readable set', async () => {
+    const seeker = await store.createUser('Lookup seeker');
+    const outsiderGroup = await store.createReportingGroup('Sealed group', outsider.key);
+    const seekerGroup = await store.createReportingGroup('Seeker group', seeker.key);
+    const readable = await store.reportAsset({ name: 'Readable instrument',
+      identifiers: [{ scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP-1' },
+        { scheme: 'gtin', gtin: '0614141123452' }] },
+    { actorKey: seeker.key, groupKey: seekerGroup.key });
+    const sibling = await store.reportAsset({ name: 'Readable sibling',
+      identifiers: [{ scheme: 'gtin', gtin: '0614141123452' }] },
+    { actorKey: seeker.key, groupKey: seekerGroup.key });
+    // An Asset the seeker cannot read, carrying identities the seeker will probe.
+    const hidden = await store.reportAsset({ name: 'Sealed instrument',
+      identifiers: [{ scheme: 'giai', assetReference: '0614141SEALED' },
+        { scheme: 'gtin', gtin: '4901234567894' }] },
+    { actorKey: outsider.key, groupKey: outsiderGroup.key });
+
+    const lookup = (query: Record<string, unknown>) =>
+      store.lookupAssets(seeker.key, assetLookupQuery(query));
+
+    // Native Asset ID: an exact hit, and a well-formed miss.
+    const byId = await lookup({ id: readable.id });
+    assert.deepEqual(byId.identity, { kind: 'assetId', id: readable.id });
+    assert.deepEqual(byId.assets.map((asset) => asset.id), [readable.id]);
+    assert.equal(byId.matching, 1);
+    const absentId = await lookup({ id: newAssetId() });
+    assert.deepEqual(absentId.assets, []);
+    assert.equal(absentId.matching, 0);
+    // An unreadable Asset answers exactly as a nonexistent one.
+    const unreadableById = await lookup({ id: hidden.id });
+    assert.deepEqual(unreadableById.assets, absentId.assets);
+    assert.equal(unreadableById.matching, absentId.matching);
+
+    // An individual identifier resolves to at most one Asset.
+    const bySgtin = await lookup({ scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP-1' });
+    assert.deepEqual(bySgtin.identity,
+      { kind: 'identifier', canonical: '(01)00614141123452(21)LOOKUP-1', scheme: 'sgtin', level: 'individual' });
+    assert.deepEqual(bySgtin.assets.map((asset) => asset.id), [readable.id]);
+    // The same trade item written as GTIN-13 resolves identically.
+    const padded = await lookup({ scheme: 'sgtin', gtin: '00614141123452', serial: 'LOOKUP-1' });
+    assert.deepEqual(padded, bySgtin);
+
+    // A class identifier honestly describes several Assets, ordered by name.
+    const byGtin = await lookup({ scheme: 'gtin', gtin: '0614141123452' });
+    assert.equal(byGtin.identity.kind === 'identifier' && byGtin.identity.level, 'class');
+    assert.deepEqual(byGtin.assets.map((asset) => asset.name), ['Readable instrument', 'Readable sibling']);
+    assert.equal(byGtin.matching, 2);
+
+    // An identifier that exists only on an unreadable Asset is silent.
+    const sealedGiai = await lookup({ scheme: 'giai', assetReference: '0614141SEALED' });
+    assert.deepEqual(sealedGiai.assets, []);
+    assert.equal(sealedGiai.matching, 0);
+    const sealedGtin = await lookup({ scheme: 'gtin', gtin: '4901234567894' });
+    // Byte-identical to an identifier nobody has ever used.
+    const neverUsed = await lookup({ scheme: 'gtin', gtin: '4006381333931' });
+    assert.deepEqual({ ...sealedGtin, identity: null }, { ...neverUsed, identity: null });
+
+    // Substrings and prefixes are not identities.
+    for (const query of [
+      { scheme: 'giai', assetReference: '0614141SEALE' },
+      { scheme: 'giai', assetReference: 'SEALED' },
+      { scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP' },
+    ]) assert.deepEqual((await lookup(query)).assets, [], JSON.stringify(query));
+
+    // A managed prefix is not allocation provenance, and lookup never treats it
+    // as one: an externally supplied GIAI sharing a configured GCP resolves to
+    // itself alone and confers nothing.
+    const namespaceGroup = await store.createReportingGroup('Prefix group', seeker.key);
+    await store.configureGiaiNamespace(seeker.key, namespaceGroup.key, { gcp: '0662211' });
+    const lookalike = await store.reportAsset({ name: 'Externally tagged',
+      identifiers: [{ scheme: 'giai', assetReference: '0662211EXTERNAL' }] },
+    { actorKey: seeker.key, groupKey: namespaceGroup.key });
+    assert.deepEqual((await lookup({ scheme: 'giai', assetReference: '0662211EXTERNAL' }))
+      .assets.map((asset) => asset.id), [lookalike.id]);
+    assert.equal((await store.getAsset(lookalike.id, seeker.key))!.allocation, null);
+    // The configured prefix itself is not a lookup key.
+    assert.deepEqual((await lookup({ scheme: 'giai', assetReference: '0662211' })).assets, []);
+
+    // Ordinary name browsing is untouched by any of this.
+    const browsed = await store.findAssets(seeker.key,
+      { q: 'Readable', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 30, after: null });
+    assert.deepEqual(browsed.assets.map((asset) => asset.name), ['Readable instrument', 'Readable sibling']);
+    assert.equal(browsed.matching, 2);
   });
 
   await t.test('schema initialization fails closed when a constraint name masks the required schema', async () => {

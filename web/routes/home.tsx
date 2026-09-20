@@ -1,28 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, redirect } from 'react-router';
 import { api, unwrap } from '../api';
-import { assetPath, assetPhotoPath } from '../../shared/asset-uri';
-import type { Asset, AssetPage } from '../../server/identity-store';
-import type { AssetScope } from '../../server/asset-page';
+import type { AssetPage, Entity } from '../../server/identity-store';
+import { assetFilters, canonicalFilters, type AssetDirection, type AssetScope, type AssetSort }
+  from '../../server/asset-page';
 import { Icon } from '../icon';
-import { schemeLabels } from '../../server/gs1.js';
-import { ReporterAttribution } from '../reporter-attribution';
+import { AssetRow } from '../asset-row';
+import { InventoryControls, inventoryPath, type InventoryView } from '../inventory-controls';
 import type { Route } from './+types/home';
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (!(await unwrap(await api.me.$get())).user) throw redirect('/signin');
-  const params = new URL(request.url).searchParams;
-  const q = params.get('q') ?? '';
-  const scope = params.get('scope') ?? 'all';
-  const page = await unwrap(await api.assets.$get({ query: { q, scope } }, { init: { signal: request.signal } }));
-  return { page, q, scope: scope as AssetScope };
+  const url = new URL(request.url);
+  const params = url.searchParams;
+  // The view is parsed with the same code the API validates against, so the
+  // URL, the request and the cursor binding always agree on the filter state.
+  const view: InventoryView = {
+    q: params.get('q') ?? '',
+    scope: (params.get('scope') ?? 'all') as AssetScope,
+    sort: (params.get('sort') ?? 'name') as AssetSort,
+    dir: (params.get('dir') ?? 'asc') as AssetDirection,
+    filters: assetFilters(Object.fromEntries(
+      [...params.keys()].map((key) => [key, params.getAll(key)]))),
+  };
+  const [page, { groups }] = await Promise.all([
+    unwrap(await api.assets.$get({ query: Object.fromEntries(params) },
+      { init: { signal: request.signal } })),
+    unwrap(await api.groups.$get()),
+  ]);
+  return { page, view, groups };
 }
 
-export default function Assets({ loaderData: { page, q, scope } }: Route.ComponentProps) {
-  return <Inventory key={JSON.stringify([q, scope])} initial={page} q={q} scope={scope} />;
+export default function Assets({ loaderData: { page, view, groups } }: Route.ComponentProps) {
+  return <Inventory key={JSON.stringify([view.q, view.scope, view.sort, view.dir,
+    canonicalFilters(view.filters)])} initial={page} view={view} groups={groups} />;
 }
 
-function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope: AssetScope }) {
+function Inventory({ initial, view, groups }: {
+  initial: AssetPage; view: InventoryView; groups: readonly Entity[];
+}) {
   const [page, setPage] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -43,7 +59,9 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
     setLoading(true);
     setError(false);
     try {
-      const next = await unwrap(await api.assets.$get({ query: { q, scope, cursor: page.nextCursor } },
+      const next = await unwrap(await api.assets.$get(
+        { query: { ...Object.fromEntries(new URLSearchParams(inventoryPath(view).split('?')[1] ?? '')),
+          cursor: page.nextCursor } },
         { init: { signal: controller.signal } }));
       if (controller.signal.aborted) return;
       setPage((previous) => {
@@ -57,7 +75,7 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
     } finally {
       if (!controller.signal.aborted) { pending.current = null; setLoading(false); }
     }
-  }, [page.nextCursor, q, scope]);
+  }, [page.nextCursor, view]);
 
   useEffect(() => {
     if (!sentinel.current || !page.nextCursor || loading || error || !('IntersectionObserver' in window)) return;
@@ -68,40 +86,27 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
     return () => observer.disconnect();
   }, [page.nextCursor, loading, error, loadMore]);
 
-  const count = new Intl.NumberFormat();
+  const { q, scope, filters } = view;
+  const filtered = canonicalFilters(filters).length > 0;
   return <>
     <div className="page-heading"><div><p className="eyebrow">Inventory</p><h1>Assets</h1>
       <p>{q ? `Results for “${q}”` : 'Physical things, shared knowledge, lasting identity.'}</p></div>
       <Link to="/assets/report" className="button"><Icon name="plus" />Report Asset</Link>
     </div>
     <section className="inventory" aria-label="Asset inventory" aria-busy={loading}>
-      <div className="inventory-toolbar">
-        <nav className="inventory-scopes" aria-label="Asset scope">
-          {([['all', 'All'], ['mine', 'Mine'], ['group', 'Group access'], ['public', 'Public']] as const).map(([value, label]) =>
-            <Link key={value} to={'/?' + new URLSearchParams({ ...(q ? { q } : {}), scope: value })}
-              aria-current={scope === value ? 'page' : undefined} className={scope === value ? 'active' : ''}
-              title={value === 'mine' ? 'Readable Assets you originally reported' : undefined}>
-              {label}<span>{count.format(page.scopes[value])}</span>
-            </Link>)}
-        </nav>
-        <span className="inventory-count" role="status">{count.format(page.matching)} {page.matching === 1 ? 'asset' : 'assets'}</span>
-      </div>
-      {q && <p className="search-context"><Link to={'/?' + new URLSearchParams({ scope })}>Clear search</Link></p>}
-      {!page.assets.length ? <div className="panel empty-state"><h2>{q || scope !== 'all' ? 'No matching Assets' : 'Your inventory starts here'}</h2>
-        <p>{q || scope !== 'all' ? 'Try another scope or search by name.' : 'Report an Asset with its existing identifier and choose a Group to collaborate with.'}</p>
-        {!q && scope === 'all' && <Link to="/assets/report">Report your first Asset →</Link>}</div>
-        : <ul className="inventory-list">{page.assets.map((asset) => <li key={asset.id}>
-          <Link className="inventory-row" to={assetPath(asset.id)}>
-            <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
-            <div className="inventory-row-body"><strong>{asset.name}</strong>
-              <span className="asset-identifier">{asset.identifiers.length
-                ? asset.identifiers.map((identifier) => schemeLabels[identifier.scheme] + ' ' + identifier.canonical).join(' · ')
-                : 'No external identifier'}</span>
-              <span className="asset-context"><Icon name="groups" /><span>{asset.groups.map((group) => group.name).join(', ')}</span><span className="context-divider">·</span><span>Reported by <ReporterAttribution reporter={asset.reportedBy} /></span></span>
-            </div>
-              <span className={'badge ' + (asset.isPublic ? 'public' : '')}><Icon name={asset.isPublic ? 'globe' : 'lock'} />{asset.isPublic ? 'Public' : 'Group access'}</span>
-          </Link>
-        </li>)}</ul>}
+      <InventoryControls view={view} groups={groups} scopes={page.scopes} />
+      {q && <p className="search-context">
+        <Link to={inventoryPath({ ...view, q: '' })}>Clear search</Link></p>}
+      {!page.assets.length
+        ? <div className="panel empty-state">
+          <h2>{q || scope !== 'all' || filtered ? 'No matching Assets' : 'Your inventory starts here'}</h2>
+          <p>{q || scope !== 'all' || filtered
+            ? 'Try another scope, adjust the view, or search by name.'
+            : 'Report an Asset and choose a Group to collaborate with.'}</p>
+          {!q && scope === 'all' && !filtered && <Link to="/assets/report">Report your first Asset →</Link>}
+        </div>
+        : <ul className="inventory-list">{page.assets.map((asset) =>
+          <AssetRow key={asset.id} asset={asset} detail={view.sort === 'reportedAt' ? 'reportedAt' : undefined} />)}</ul>}
       <div ref={sentinel} className="inventory-load">
         {loading && <p role="status"><span className="spinner" aria-hidden="true" />Loading more assets…</p>}
         {error && <p role="alert">Could not load more Assets. Your current results are still here.</p>}
@@ -111,15 +116,6 @@ function Inventory({ initial, q, scope }: { initial: AssetPage; q: string; scope
       </div>
     </section>
   </>;
-}
-
-function Thumbnail({ asset }: { asset: Asset }) {
-  const [failed, setFailed] = useState(false);
-  const photo = asset.photos[0];
-  return <div className="asset-thumbnail">{photo && !failed
-    ? <img src={assetPhotoPath(asset.id, photo.key)}
-        alt={'Photo of ' + asset.name} loading="lazy" decoding="async" onError={() => setFailed(true)} />
-    : <span title={failed ? 'Photo unavailable' : 'No photo'}><Icon name="photo" /><span className="sr-only">{failed ? 'Photo unavailable' : 'No photo'}</span></span>}</div>;
 }
 
 export { WorkspaceError as ErrorBoundary } from '../route-error';
