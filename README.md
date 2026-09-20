@@ -56,10 +56,12 @@ The application needs HeadBucket, PutObject, GetObject, and DeleteObject access;
 
 ## Development/demo dataset
 
-The demo tools create 140 entirely synthetic Assets, three local email/password accounts, four Groups, three Owners, and 47 photos using three bundled illustrations.
+The demo tools create 140 entirely synthetic Assets, three local email/password accounts, four Groups, three Owners, 47 photos using three bundled illustrations, and three GS1 Company Prefix namespaces.
 Names, supported identifiers, relationships, and visibility are deterministic; internal keys, password hashes, and immutable reporting timestamps are generated normally.
-Identifiers vary on purpose: 70 Assets carry an SGTIN with its trade-item GTIN, 35 carry a serialised GRAI, and 35 carry none at all.
+Identifiers vary deliberately: the 140 Assets cycle through seven patterns, 20 each — no identifier, a class-level GTIN, an SGTIN with its trade-item GTIN, an externally assigned GIAI, an SGTIN beside an externally assigned GIAI, a serialised GRAI, and a type-level GRAI.
 The checksum-valid values are synthetic examples, not identifiers for real inventory.
+Demo Workshop manages two namespaces, Shared Studio one, and the remaining Groups none, so every allocation state is reachable.
+Kannabi issues five GIAIs from `0614141`, whose existing-use exclusions make the issued references 5, 6, 7, 8 and 12.
 Search by name using terms such as `camera`, `bench`, `studio`, or `backpack`; Owners appear in Asset details.
 
 Run the tools on the host with Node 24, installed dependencies (`pnpm install`), and your existing local `.env` credentials.
