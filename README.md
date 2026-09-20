@@ -164,6 +164,36 @@ Across an Asset, Kannabi applies only its own two coherence rules: the same iden
 A GIAI supplied by a user is stored as syntax only.
 Locating a GS1 Company Prefix requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary, and a stored GIAI is never evidence that Kannabi allocated it.
 
+## GIAI allocation
+
+A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GIAIs under them.
+Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
+
+On an Asset the actor can edit, the External identifiers panel offers **Allocate GIAI** when the Asset's Group has one active namespace, a prefix chooser when it has several, and a short explanation when it has none.
+The user never constructs a GIAI, and reporting stays GS1-free.
+
+`server/gs1.ts` builds every issued value as the configured prefix followed by an unpadded decimal reference, and it is the only place that does so.
+Ordering is by the stored sequence, never by comparing GIAI strings.
+Unlike a GIAI Kannabi merely stores, an issued value's prefix boundary is known because Kannabi built it from a configured prefix — a statement about construction, not about licensing, so `gcppos1` stays unenforced for identifiers Kannabi did not build.
+Kannabi validates only what it can justify: a GS1 Company Prefix is a digit string that leaves room for a reference within AI 8004's 30 characters. It imposes no prefix length range, because it holds no GCP Length Table and a plausible-looking range would be a heuristic posing as conformance.
+
+A namespace may declare existing-use ranges such as `1-4,9-11,200-300`: references that were already unavailable when it was configured, typically issued before Kannabi.
+They normalise to sorted, disjoint, non-adjacent intervals, and allocation jumps over them by range rather than by number, so an exclusion covering a trillion references costs no more than one covering a single reference.
+Exclusions are namespace configuration and never a free list; references Kannabi has issued are tracked only by the ledger.
+
+`:GiaiAllocation` is an append-only issuance ledger — `value`, `gcp`, `sequence`, `allocatedAt`, `allocatedForAssetId` and `allocatedBy`.
+`allocatedForAssetId` is a property rather than a relationship, so the record outlives the Asset.
+Kannabi's claim to have issued a GIAI rests on this ledger alone; nothing on the identifier marks its origin.
+Four constraints make the invariants schema facts: a GIAI is issued once, Kannabi issues at most one per Asset, one GCP has exactly one counter, and namespaces are stably addressable.
+
+Allocation runs in one transaction that takes the namespace write lock before deciding anything, so a double-click returns the same GIAI without consuming a sequence number.
+Repeating the operation always returns the existing issuance, whether or not the identifier is still attached.
+An issued GIAI may be detached and reattached to the Asset it was issued for, and can never be attached to another; an externally assigned GIAI keeps its ordinary correction semantics.
+Deactivating a namespace stops new issuance and nothing else: the counter, the exclusions and every issued record survive, so reactivation resumes the same namespace.
+
+One managed GCP belongs to one Group, because Group membership is currently the only authorization Kannabi has; this is a Kannabi authority boundary, not a GS1 organizational claim.
+Any current Group member may configure a namespace and allocate from it, which is deliberately broader than the eventual model and will be narrowed by Group-scoped privileges without changing allocation semantics or ledger data.
+
 Asset links use `/asset/{id}`, and Asset-scoped photo requests use `/api/assets/{id}/photos/{key}`.
 There is one canonical Asset URI, and it carries no external identifier.
 GS1 Digital Link, company-prefix inference, resolver semantics, and identifier allocation remain deferred and will be designed as explicit external interfaces.

@@ -174,9 +174,11 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.asset, expected);
-      // The native Asset id belongs to the legitimate public representation.
+      // The native Asset id and issuance provenance both belong to the
+      // legitimate public representation; provenance is ledger-derived, so no
+      // identifier carries an origin flag of its own.
       assert.deepEqual(Object.keys(result.asset).sort(),
-        ['groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+        ['allocation', 'groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
       assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);
       assert.equal('role' in result.asset.reportedBy, false);
@@ -186,6 +188,56 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     }
     assert.equal((await member.request(assetPath, 'PATCH', { isPublic: false })).status, 200);
     assert.equal((await anonymous.request(assetPath)).status, 404);
+  });
+
+  await t.test('GIAI allocation is Group-authorized and idempotent over the API', async () => {
+    // Configuring a prefix is a Group-member act; outsiders cannot reach it.
+    assert.equal((await stranger.request(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '0614141' })).status, 404);
+    assert.equal((await anonymous.request(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '0614141' })).status, 401);
+    const configured = await member.request(`/groups/${groupKey}/giai-namespaces`, 'POST',
+      { gcp: '0614141', exclusions: [{ from: 1, to: 4 }] });
+    assert.equal(configured.status, 201, await configured.clone().text());
+    const namespace = (await configured.json()).namespace;
+    assert.equal(namespace.gcp, '0614141');
+    assert.deepEqual(namespace.exclusions, [{ from: 1, to: 4 }]);
+    // A second Group cannot claim a managed prefix while Group membership is
+    // the only authorization model.
+    assert.equal((await member.request(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '0614141' })).status, 409);
+    assert.equal((await member.request(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '06141A1' })).status, 400);
+
+    const allocatePath = assetPath + '/giai';
+    assert.equal((await anonymous.request(allocatePath, 'POST', { namespaceKey: namespace.key })).status, 401);
+    assert.equal((await stranger.request(allocatePath, 'POST', { namespaceKey: namespace.key })).status, 404);
+    const allocated = await member.request(allocatePath, 'POST', { namespaceKey: namespace.key });
+    assert.equal(allocated.status, 200, await allocated.clone().text());
+    const allocation = (await allocated.json()).asset.allocation;
+    // Exclusions are honoured, and provenance is derived from the ledger rather
+    // than from any flag on the identifier itself.
+    assert.equal(allocation.sequence, 5);
+    assert.equal(allocation.value, '06141415');
+    assert.equal(allocation.allocatedForAssetId, assetPath.slice('/assets/'.length));
+    // Public provenance matches reportedBy: attribution, not an internal key,
+    // and nothing private rides along with it.
+    assert.deepEqual(Object.keys(allocation.allocatedBy).sort(), ['key', 'name', 'status']);
+    assert.deepEqual(allocation.allocatedBy, { ...people[1], status: 'active' });
+    for (const field of ['email', 'role', 'password']) {
+      assert.equal(field in allocation.allocatedBy, false, field);
+    }
+    const identifiers = (await (await member.request(assetPath)).json()).asset.identifiers;
+    assert.ok(identifiers.some((identifier: { canonical: string }) => identifier.canonical === '(8004)06141415'));
+    assert.ok(identifiers.every((identifier: Record<string, unknown>) => !('origin' in identifier)));
+    // Repeating returns the same issuance.
+    const repeated = await member.request(allocatePath, 'POST', { namespaceKey: namespace.key });
+    assert.deepEqual((await repeated.json()).asset.allocation, allocation);
+
+    // Deactivation is Group-scoped too, and blocks only new issuance.
+    assert.equal((await stranger.request(`/giai-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
+    assert.equal((await member.request(`/giai-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 200);
+    assert.equal((await member.request(`/giai-namespaces/${namespace.key}`, 'PATCH', { active: 'no' })).status, 400);
+    assert.deepEqual((await (await member.request(assetPath)).json()).asset.allocation, allocation);
+    assert.equal((await member.request(`/giai-namespaces/${namespace.key}`, 'PATCH', { active: true })).status, 200);
+    // Anonymous readers of a public Asset see provenance but get no controls.
+    assert.deepEqual((await (await stranger.request('/giai-namespaces')).json()).namespaces, []);
   });
 
   await t.test('leaving Group revokes reporter access while provenance stays immutable', async () => {

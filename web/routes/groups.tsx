@@ -2,13 +2,16 @@ import { Form, redirect, useNavigation } from 'react-router';
 import { useEffect, useRef } from 'react';
 import { api, unwrap } from '../api';
 import { TransientSuccess } from '../transient-success';
+import { formatExclusionRanges, parseExclusionRanges } from '../../server/giai-allocation.js';
+import type { GiaiNamespace } from '../../server/identity-store.js';
 import type { Route } from './+types/groups';
 
 export async function clientLoader() {
   const { user } = await unwrap(await api.me.$get());
   if (!user) throw redirect('/signin');
-  const { groups } = await unwrap(await api.groups.$get());
-  return { user, groups };
+  const [{ groups }, { namespaces }] = await Promise.all([
+    api.groups.$get().then(unwrap), api['giai-namespaces'].$get().then(unwrap)]);
+  return { user, groups, namespaces };
 }
 type GroupAction = { intent: string; groupKey: string | null;
   status: 'added' | 'already-member' | 'error'; message: string };
@@ -32,6 +35,15 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
       case 'leave':
         await unwrap(await api.groups[':key'].membership.$delete({ param: { key: text('groupKey') } }));
         break;
+      case 'namespace':
+        if (!groupKey) throw new Error('Group is required');
+        await unwrap(await api.groups[':key']['giai-namespaces'].$post({ param: { key: groupKey },
+          json: { gcp: text('gcp'), exclusions: parseExclusionRanges(text('exclusions')) } }));
+        break;
+      case 'namespace-active':
+        await unwrap(await api['giai-namespaces'][':key'].$patch({ param: { key: text('namespaceKey') },
+          json: { active: text('active') === 'true' } }));
+        break;
 
       default: throw new Error('Unknown action');
     }
@@ -41,7 +53,7 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
       message: error instanceof Error ? error.message : 'Group update failed' };
   }
 }
-export default function Groups({ loaderData: { user, groups }, actionData }: Route.ComponentProps) {
+export default function Groups({ loaderData: { user, groups, namespaces }, actionData }: Route.ComponentProps) {
   const busy = useNavigation().state !== 'idle';
   return <>
     <div className="page-heading"><div><p className="eyebrow">Collaboration</p><h1>Groups</h1><p>Manage the people you share Asset access with.</p></div></div>
@@ -55,6 +67,8 @@ export default function Groups({ loaderData: { user, groups }, actionData }: Rou
         {!groups.length && <p>Create a Group, or ask an existing member to add you.</p>}
         {groups.map((group) => <details key={group.key}><summary>{group.name}</summary>
           <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />
+          <GiaiNamespaces groupKey={group.key} busy={busy}
+            namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
           <Form method="post"><input type="hidden" name="groupKey" value={group.key} />
             <p className="hint">Leaving removes your access to this Group’s private Assets, including those you reported.</p>
             <button name="intent" value="leave" disabled={busy} className="secondary">Leave Group</button>
@@ -78,6 +92,42 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
           : result?.status === 'error' ? <span className="settings-status-pill error" role="alert">{result.message}</span> : null}
     </div>
   </Form>;
+}
+
+function GiaiNamespaces({ groupKey, namespaces, busy }: {
+  groupKey: string; namespaces: GiaiNamespace[]; busy: boolean;
+}) {
+  return <div className="giai-namespaces">
+    <h3>GS1 Company Prefixes</h3>
+    <p className="hint">Configuring a prefix lets this Group allocate GIAIs for its Assets.
+      Kannabi records the prefix you assert here; it cannot verify who licensed it.</p>
+    {!namespaces.length ? <p>No prefix configured. This Group cannot allocate GIAIs.</p>
+      : <ul className="giai-namespace-list">{namespaces.map((namespace) => <li key={namespace.key}>
+        <div>
+          <code>{namespace.gcp}</code>
+          <span className={'badge ' + (namespace.active ? 'public' : '')}>
+            {namespace.active ? 'Active' : 'Inactive'}</span>
+          <span className="hint">Next reference {namespace.nextSequence}
+            {namespace.exclusions.length
+              ? ` · existing use ${formatExclusionRanges(namespace.exclusions)}` : ''}</span>
+        </div>
+        <Form method="post" className="inline">
+          <input type="hidden" name="intent" value="namespace-active" />
+          <input type="hidden" name="namespaceKey" value={namespace.key} />
+          <input type="hidden" name="active" value={namespace.active ? 'false' : 'true'} />
+          <button className="secondary" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</button>
+        </Form>
+      </li>)}</ul>}
+    <Form method="post" className="inline">
+      <input type="hidden" name="intent" value="namespace" />
+      <input type="hidden" name="groupKey" value={groupKey} />
+      <label>GS1 Company Prefix<input name="gcp" inputMode="numeric" required /></label>
+      <label>Already-used references<input name="exclusions" placeholder="1-4,9-11,200-300" />
+        <span className="hint">Optional. References issued before Kannabi, which it must never allocate.</span>
+      </label>
+      <button disabled={busy}>Configure prefix</button>
+    </Form>
+  </div>;
 }
 
 export { WorkspaceError as ErrorBoundary } from '../route-error';

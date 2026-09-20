@@ -175,6 +175,13 @@ kbd { font: inherit; }
 .panel summary { cursor: pointer; margin-bottom: 1rem; font-weight: 600; }
 dl { display: grid; grid-template-columns: 11rem 1fr; gap: .8rem; font-size: .9rem; }
 dt { color: var(--color-text-muted); } dd { margin: 0; overflow-wrap: anywhere; }
+.giai-allocation { margin-bottom: 1.5rem; }
+.giai-provenance { margin: 0 0 1.5rem; font-size: .85rem; color: var(--color-text-muted); }
+.giai-namespaces { margin: 1rem 0; }
+.giai-namespaces h3 { margin-bottom: .25rem; font-size: .95rem; }
+.giai-namespace-list { list-style: none; margin: .5rem 0; padding: 0; display: grid; gap: .5rem; }
+.giai-namespace-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .6rem .8rem; background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: .5rem; }
+.giai-namespace-list code { margin-right: .5rem; }
 .identifier-list { list-style: none; margin: 0 0 1.5rem; padding: 0; display: grid; gap: .75rem; }
 .identifier-list li { position: relative; padding: .85rem 3rem .85rem 1rem; background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: .5rem; }
 .identifier-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }

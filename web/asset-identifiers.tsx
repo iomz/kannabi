@@ -3,7 +3,7 @@ import {
   identifierSchemes, levelLabels, schemeDescriptions, schemeInputs, schemeLabels,
   type IdentifierScheme,
 } from '../server/gs1.js';
-import type { AttachedIdentifier } from '../server/identity-store.js';
+import type { AttachedIdentifier, GiaiAllocation } from '../server/identity-store.js';
 import { Icon } from './icon';
 import { TransientSuccess } from './transient-success';
 
@@ -36,6 +36,39 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
       aria-label={'Detach ' + schemeLabels[identifier.scheme] + ' ' + identifier.canonical}
       onClick={() => onDetach(identifier.key)}><Icon name="trash" /></button>}
   </li>)}</ul>;
+}
+
+/** Allocation is offered only when the Asset's Group actually manages an active
+ * namespace. Once Kannabi has issued one, provenance replaces the control:
+ * there is no second allocation to offer. */
+export function AllocateGiai({ namespaces, allocation, busy, error, saved }: {
+  namespaces: readonly { key: string; gcp: string }[];
+  allocation: GiaiAllocation | null;
+  busy: boolean; error: string | null; saved: string | null;
+}) {
+  if (allocation) {
+    return <p className="giai-provenance">Kannabi issued <code>{allocation.value}</code> for this Asset
+      from prefix <code>{allocation.gcp}</code> as reference {allocation.sequence}.</p>;
+  }
+  if (!namespaces.length) {
+    return <p className="hint">This Asset’s Group has no active GS1 Company Prefix, so Kannabi cannot
+      allocate a GIAI for it. Configure one from Groups.</p>;
+  }
+  return <fieldset disabled={busy} aria-busy={busy}>
+    <input type="hidden" name="intent" value="allocate-giai" />
+    {namespaces.length === 1
+      ? <input type="hidden" name="namespaceKey" value={namespaces[0].key} />
+      : <label>GS1 Company Prefix<select name="namespaceKey">
+        {namespaces.map((namespace) =>
+          <option key={namespace.key} value={namespace.key}>{namespace.gcp}</option>)}
+      </select></label>}
+    {error && <p role="alert">{error}</p>}
+    <div className="asset-action-row"><button>{busy ? 'Allocating…' : 'Allocate GIAI'}</button>
+      <div className="asset-action-status" role="status" aria-live="polite" aria-atomic="true">
+        <TransientSuccess trigger={saved} label="Allocated" />
+      </div>
+    </div>
+  </fieldset>;
 }
 
 export function IdentifierForm({ busy, error, saved }: {

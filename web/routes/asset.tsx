@@ -10,7 +10,7 @@ import { Switch } from '../switch';
 import { Icon } from '../icon';
 import { PhotoDeleteConfirmation } from '../photo-delete-confirmation';
 import { TransientSuccess } from '../transient-success';
-import { IdentifierForm, IdentifierList } from '../asset-identifiers';
+import { AllocateGiai, IdentifierForm, IdentifierList } from '../asset-identifiers';
 import type { Route } from './+types/asset';
 
 export const handle = publicShellHandle;
@@ -21,11 +21,17 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
     api.assets[':id'].$get({ param: { id } }),
     unwrap(await api.me.$get()),
   ]);
+  // Display only: the server re-checks the Group join on every allocation.
+  const { namespaces } = account.user
+    ? await unwrap(await api['giai-namespaces'].$get()) : { namespaces: [] };
   if (!response.ok) throw new Response('Asset not found or access unavailable.', { status: response.status });
   const result = await response.json();
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
   const { settings } = await unwrap(await api.settings.$get());
+  const groupKeys = new Set(result.asset.groups.map((group) => group.key));
   return { ...result, settings, authenticated: account.user !== null,
+    namespaces: namespaces.filter((namespace) =>
+      namespace.active && namespace.group && groupKeys.has(namespace.group.key)),
     assetUri: new URL(assetPath(result.asset.id), request.url).toString() };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
@@ -34,7 +40,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   const kind = intent === 'photo' ? 'photo' as const
     : intent === 'delete-photo' ? 'delete-photo' as const
       : intent === 'attach-identifier' ? 'attach-identifier' as const
-        : intent === 'detach-identifier' ? 'detach-identifier' as const : 'edit' as const;
+        : intent === 'detach-identifier' ? 'detach-identifier' as const
+          : intent === 'allocate-giai' ? 'allocate-giai' as const : 'edit' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
     const id = params.id;
@@ -63,6 +70,11 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         param: { id, key: String(data.get('identifierKey') ?? '') } }));
       return { kind, saved: true as const, error: null, photoKey: null };
     }
+    if (kind === 'allocate-giai') {
+      await unwrap(await api.assets[':id'].giai.$post({ param: { id },
+        json: { namespaceKey: String(data.get('namespaceKey') ?? '') } }));
+      return { kind, saved: true as const, error: null, photoKey: null };
+    }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
     } }));
@@ -73,15 +85,17 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         : kind === 'photo' ? 'Upload failed'
           : kind === 'delete-photo' ? 'Delete failed'
             : kind === 'attach-identifier' ? 'Identifier could not be added'
-              : kind === 'detach-identifier' ? 'Identifier could not be detached' : 'Update failed',
+              : kind === 'detach-identifier' ? 'Identifier could not be detached'
+                : kind === 'allocate-giai' ? 'GIAI could not be allocated' : 'Update failed',
       photoKey: requestedPhotoKey };
   }
 }
-export default function AssetPage({ loaderData: { asset, canEdit, settings, authenticated, assetUri } }: Route.ComponentProps) {
+export default function AssetPage({ loaderData: { asset, canEdit, settings, authenticated, assetUri, namespaces } }: Route.ComponentProps) {
   const upload = useFetcher<typeof clientAction>();
   const edit = useFetcher<typeof clientAction>();
   const deletePhoto = useFetcher<typeof clientAction>();
   const identifiers = useFetcher<typeof clientAction>();
+  const allocate = useFetcher<typeof clientAction>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
   const uploadResult = upload.data?.kind === 'photo' ? upload.data : null;
@@ -90,6 +104,8 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
   const identifierResult = identifiers.data?.kind === 'attach-identifier'
     || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
   const identifierBusy = identifiers.state !== 'idle';
+  const allocateResult = allocate.data?.kind === 'allocate-giai' ? allocate.data : null;
+  const allocateBusy = allocate.state !== 'idle';
   const uploadBusy = upload.state !== 'idle';
   const editBusy = edit.state !== 'idle';
   const deleteBusy = deletePhoto.state !== 'idle';
@@ -117,6 +133,13 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
       <div className="asset-photo-status" role="status" aria-live="polite" aria-atomic="true">
         <TransientSuccess trigger={identifierResult?.kind === 'detach-identifier' && identifierResult.saved ? 'detached' : null} label="Detached" />
       </div>
+      {canEdit && <allocate.Form method="post" className="giai-allocation">
+        <AllocateGiai namespaces={namespaces} allocation={asset.allocation} busy={allocateBusy}
+          error={allocateResult?.error ?? null}
+          saved={allocateResult?.saved ? 'allocated' : null} />
+      </allocate.Form>}
+      {!canEdit && asset.allocation && <p className="giai-provenance">Kannabi issued
+        <code> {asset.allocation.value} </code>for this Asset.</p>}
       {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
         <IdentifierForm busy={identifierBusy}
           error={identifierResult?.error ?? null}

@@ -365,6 +365,183 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await assert.rejects(store.getAsset('not-a-native-id', user.key), ValidationError);
   });
 
+  await t.test('a GIAI namespace belongs to one Group and its prefix is immutable', async () => {
+    const owner = await store.createUser('Namespace owner');
+    const otherOwner = await store.createUser('Other namespace owner');
+    const nsGroup = await store.createReportingGroup('Allocating team', owner.key);
+    const rival = await store.createReportingGroup('Rival team', otherOwner.key);
+    const plain = await store.configureGiaiNamespace(owner.key, nsGroup.key, { gcp: '0614141' });
+    assert.equal(plain.gcp, '0614141');
+    assert.equal(plain.active, true);
+    assert.equal(plain.nextSequence, 1);
+    assert.deepEqual(plain.exclusions, []);
+    assert.equal(plain.configuredBy, owner.key);
+    assert.deepEqual(plain.group, nsGroup);
+    // Overlapping and adjacent input normalises on the way in.
+    const excluded = await store.configureGiaiNamespace(owner.key, nsGroup.key, {
+      gcp: '9521234', exclusions: [{ from: 9, to: 11 }, { from: 1, to: 4 }, { from: 3, to: 4 }, { from: 200, to: 300 }],
+    });
+    assert.deepEqual(excluded.exclusions, [{ from: 1, to: 4 }, { from: 9, to: 11 }, { from: 200, to: 300 }]);
+    for (const invalid of [
+      { gcp: '06141A1' }, { gcp: '' }, { gcp: '9'.repeat(30) },
+      { gcp: '1112223', exclusions: [{ from: 0 }] },
+      { gcp: '1112223', exclusions: [{ from: 9, to: 4 }] },
+      { gcp: '1112223', exclusions: 'ranges' },
+      { gcp: '1112223', prefix: 'extra' },
+    ]) await assert.rejects(store.configureGiaiNamespace(owner.key, nsGroup.key, invalid), ValidationError, JSON.stringify(invalid));
+    // One managed GCP, one counter, one Group.
+    await assert.rejects(store.configureGiaiNamespace(owner.key, nsGroup.key, { gcp: '0614141' }),
+      (error: Error) => error instanceof DuplicateIdentityError && /already configured for this Group/.test(error.message));
+    await assert.rejects(store.configureGiaiNamespace(otherOwner.key, rival.key, { gcp: '0614141' }),
+      (error: Error) => error instanceof DuplicateIdentityError && /managed by another Group/.test(error.message));
+    // The prefix is not an editable field at all: there is no path to change it.
+    assert.equal((await store.listGiaiNamespaces(owner.key)).map((n) => n.gcp).join(), '0614141,9521234');
+    assert.deepEqual(await store.listGiaiNamespaces(otherOwner.key), []);
+    // Namespace keys are not authority; a non-member sees and changes nothing.
+    await assert.rejects(store.setGiaiNamespaceActive(otherOwner.key, plain.key, false), ReferenceError);
+    await assert.rejects(store.configureGiaiNamespace(otherOwner.key, nsGroup.key, { gcp: '7778889' }), ReferenceError);
+  });
+
+  await t.test('allocation issues monotonic references, skipping existing use', async () => {
+    const owner = (await store.listGiaiNamespaces((await store.createUser('unused')).key), await store.createUser('Allocator'));
+    const group = await store.createReportingGroup('Allocation group', owner.key);
+    const namespace = await store.configureGiaiNamespace(owner.key, group.key,
+      { gcp: '0455123', exclusions: [{ from: 1, to: 4 }, { from: 9, to: 11 }] });
+    const context = { actorKey: owner.key, groupKey: group.key };
+    const assets = [];
+    for (let n = 0; n < 5; n++) assets.push(await store.reportAsset({ name: `Allocated ${n}` }, context));
+    const issued = [];
+    for (const asset of assets) issued.push(await store.allocateGiai(asset.id, owner.key, namespace.key));
+    // Excluded references are skipped by range, never issued.
+    assert.deepEqual(issued.map((asset) => asset.allocation!.sequence), [5, 6, 7, 8, 12]);
+    assert.deepEqual(issued.map((asset) => asset.allocation!.value),
+      ['04551235', '04551236', '04551237', '04551238', '045512312']);
+    for (const asset of issued) {
+      assert.equal(asset.allocation!.gcp, '0455123');
+      // Allocation provenance follows the same public shape as reportedBy:
+      // attribution, never the bare actor key the ledger stores internally.
+      assert.deepEqual(asset.allocation!.allocatedBy, { ...owner, status: 'active' });
+      assert.equal(asset.allocation!.allocatedForAssetId, asset.id);
+      // The issued GIAI is attached through ordinary Phase 2 semantics.
+      assert.ok(asset.identifiers.some((identifier) =>
+        identifier.scheme === 'giai' && identifier.components.assetReference === asset.allocation!.value));
+    }
+    // Repeating returns the existing issuance and consumes no sequence.
+    const before = (await store.listGiaiNamespaces(owner.key)).find((n) => n.key === namespace.key)!.nextSequence;
+    const repeated = await store.allocateGiai(assets[0].id, owner.key, namespace.key);
+    assert.deepEqual(repeated.allocation, issued[0].allocation);
+    assert.equal((await store.listGiaiNamespaces(owner.key)).find((n) => n.key === namespace.key)!.nextSequence, before);
+  });
+
+  await t.test('an issued GIAI is bound to its Asset for good', async () => {
+    const owner = await store.createUser('Ledger owner');
+    const group = await store.createReportingGroup('Ledger group', owner.key);
+    const namespace = await store.configureGiaiNamespace(owner.key, group.key, { gcp: '0771234' });
+    const context = { actorKey: owner.key, groupKey: group.key };
+    const first = await store.reportAsset({ name: 'Issued Asset' }, context);
+    const second = await store.reportAsset({ name: 'Other Asset' }, context);
+    const allocated = await store.allocateGiai(first.id, owner.key, namespace.key);
+    const value = allocated.allocation!.value;
+    const attachment = allocated.identifiers.find((identifier) => identifier.scheme === 'giai')!.key;
+
+    // Detaching removes the identifier and leaves the issuance untouched.
+    const detached = await store.detachIdentifier(first.id, owner.key, attachment);
+    assert.deepEqual(detached.identifiers, []);
+    assert.equal(detached.allocation!.value, value);
+    // Allocating again returns the same issuance rather than a second one.
+    const again = await store.allocateGiai(first.id, owner.key, namespace.key);
+    assert.deepEqual(again.allocation, allocated.allocation);
+    // It may return to the Asset it was issued for, and only to that Asset.
+    await assert.rejects(store.attachIdentifier(second.id, owner.key,
+      { scheme: 'giai', assetReference: value }), (error: Error) =>
+      error instanceof ValidationError && /issued that GIAI for another Asset/.test(error.message));
+    const restored = await store.attachIdentifier(first.id, owner.key, { scheme: 'giai', assetReference: value });
+    assert.ok(restored.identifiers.some((identifier) => identifier.components.assetReference === value));
+    // An externally assigned GIAI keeps Phase 2 correction semantics.
+    const external = { scheme: 'giai' as const, assetReference: 'EXTERNAL-0001' };
+    const wrong = await store.attachIdentifier(second.id, owner.key, external);
+    const wrongKey = wrong.identifiers.find((identifier) => identifier.scheme === 'giai')!.key;
+    await store.detachIdentifier(second.id, owner.key, wrongKey);
+    const third = await store.reportAsset({ name: 'Correct Asset' }, context);
+    assert.ok((await store.attachIdentifier(third.id, owner.key, external)).identifiers.length);
+    // The ledger survives the Asset itself.
+    await query('MATCH (a:Asset {id: $id}) DETACH DELETE a', { id: first.id });
+    const orphaned = await query('MATCH (l:GiaiAllocation {value: $value}) RETURN l.allocatedForAssetId AS assetId',
+      { value });
+    assert.equal(orphaned.records[0].get('assetId'), first.id);
+  });
+
+  await t.test('allocation provenance degrades to a tombstone like reportedBy', async () => {
+    const leaving = await store.createUser('Departing allocator');
+    const group = await store.createReportingGroup('Tombstone group', leaving.key);
+    const namespace = await store.configureGiaiNamespace(leaving.key, group.key, { gcp: '0334455' });
+    const asset = await store.reportAsset({ name: 'Outliving its allocator' },
+      { actorKey: leaving.key, groupKey: group.key });
+    const allocated = await store.allocateGiai(asset.id, leaving.key, namespace.key);
+    assert.deepEqual(allocated.allocation!.allocatedBy, { ...leaving, status: 'active' });
+    // Tombstone the allocator exactly as member deactivation does.
+    await query(`MATCH (u:User {key: $key})
+      SET u.provenanceName = u.name, u.accountDeletedAt = datetime() REMOVE u.name`, { key: leaving.key });
+    const after = (await query(`MATCH (a:Asset {id: $id}) RETURN a`, { id: asset.id })).records.length;
+    assert.equal(after, 1);
+    const reread = await store.getAsset(asset.id, leaving.key);
+    assert.deepEqual(reread!.allocation!.allocatedBy,
+      { key: leaving.key, name: 'Departing allocator', status: 'deleted' });
+    // No email, role or credential material reaches the public representation.
+    for (const field of ['email', 'role', 'password', 'id', 'accountDeletedAt', 'provenanceName']) {
+      assert.equal(field in reread!.allocation!.allocatedBy, false, field);
+    }
+    assert.deepEqual(Object.keys(reread!.allocation!.allocatedBy).sort(), ['key', 'name', 'status']);
+    assert.deepEqual(Object.keys(reread!.allocation!).sort(),
+      ['allocatedAt', 'allocatedBy', 'allocatedForAssetId', 'gcp', 'sequence', 'value']);
+  });
+
+  await t.test('deactivation stops issuance and preserves the counter', async () => {
+    const owner = await store.createUser('Lifecycle owner');
+    const group = await store.createReportingGroup('Lifecycle group', owner.key);
+    const namespace = await store.configureGiaiNamespace(owner.key, group.key,
+      { gcp: '0881234', exclusions: [{ from: 1, to: 2 }] });
+    const context = { actorKey: owner.key, groupKey: group.key };
+    const first = await store.reportAsset({ name: 'Before deactivation' }, context);
+    assert.equal((await store.allocateGiai(first.id, owner.key, namespace.key)).allocation!.sequence, 3);
+
+    const inactive = await store.setGiaiNamespaceActive(owner.key, namespace.key, false);
+    assert.equal(inactive.active, false);
+    assert.equal(inactive.nextSequence, 4);
+    assert.deepEqual(inactive.exclusions, [{ from: 1, to: 2 }]);
+    const blocked = await store.reportAsset({ name: 'During deactivation' }, context);
+    await assert.rejects(store.allocateGiai(blocked.id, owner.key, namespace.key),
+      (error: Error) => error instanceof ValidationError && /deactivated/.test(error.message));
+    // An existing issuance is still returned while the namespace is inactive.
+    assert.equal((await store.allocateGiai(first.id, owner.key, namespace.key)).allocation!.sequence, 3);
+
+    const active = await store.setGiaiNamespaceActive(owner.key, namespace.key, true);
+    assert.equal(active.active, true);
+    // The same namespace resumes; no new counter was created for this prefix.
+    assert.equal((await store.allocateGiai(blocked.id, owner.key, namespace.key)).allocation!.sequence, 4);
+    assert.equal((await query('MATCH (n:GiaiNamespace {gcp: $gcp}) RETURN count(n) AS n',
+      { gcp: '0881234' })).records[0].get('n').toNumber(), 1);
+  });
+
+  await t.test('allocation authority comes from the namespace Group, not from the Asset alone', async () => {
+    const owner = await store.createUser('Authority owner');
+    const collaborator = await store.createUser('Authority collaborator');
+    const stranger = await store.createUser('Authority stranger');
+    const group = await store.createReportingGroup('Authority group', owner.key);
+    const detached = await store.createReportingGroup('Namespace only group', collaborator.key);
+    await store.addGroupMember(owner.key, group.key, collaborator.key);
+    const namespace = await store.configureGiaiNamespace(owner.key, group.key, { gcp: '0991234' });
+    const foreign = await store.configureGiaiNamespace(collaborator.key, detached.key, { gcp: '0991235' });
+    const asset = await store.reportAsset({ name: 'Authority Asset' }, { actorKey: owner.key, groupKey: group.key });
+    // A stranger, and a member of a Group that manages a namespace but does not
+    // collaborate on the Asset, are both refused.
+    await assert.rejects(store.allocateGiai(asset.id, stranger.key, namespace.key), ReferenceError);
+    await assert.rejects(store.allocateGiai(asset.id, collaborator.key, foreign.key), ReferenceError);
+    await assert.rejects(store.allocateGiai(asset.id, owner.key, 'not-a-namespace'), ReferenceError);
+    // A Group member of the namespace-owning Group that collaborates succeeds.
+    assert.ok((await store.allocateGiai(asset.id, collaborator.key, namespace.key)).allocation);
+  });
+
   await t.test('schema initialization fails closed when a constraint name masks the required schema', async () => {
     // This test runs last and only against the disposable database.
     await query('DROP CONSTRAINT individual_identifier');

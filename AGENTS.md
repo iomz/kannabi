@@ -26,6 +26,14 @@ Preserve the README naming story at the bottom of README.
 - Kannabi must never present its own Syntax Dictionary to General Specifications mapping as a GS1 assertion.
 - A GS1 policy bump governs future acceptance only; stored identifiers are never revalidated or rewritten, and a scheme's canonical layout may not change without a data migration.
 - Each stored external identifier records the policy version that accepted it as historical provenance; a missing stamp is rejected, never replaced with the active version.
+- Conformance rules apply to the semantic object the standard governs. Enforcing a rule strictly at the wrong boundary is itself incorrect, not merely over-strict.
+- Allocation authority comes from a configured namespace plus an immutable allocation record; possessing or storing an identifier never implies Kannabi issued it.
+- Kannabi can guarantee the configured prefix boundary for values it issues, and makes no equivalent authority claim about values it merely stores. Never promote a plausible-looking heuristic into a standards rule.
+- A Kannabi-issued GIAI is never reused. It may be detached from its Asset, but the ledger permanently binds the issuance to that Asset, so it can only ever return there.
+- Existing-use exclusion ranges protect references that were already unavailable when a namespace was configured; they are namespace configuration, distinct from the issuance ledger, and are never a free list.
+- `GiaiNamespace.active` is configuration state, not allocation lifecycle. Deactivation stops new issuance and preserves the counter, exclusions and every issued record.
+- One managed GCP belongs to one Group. This is a Kannabi authorization-boundary restriction for the current model, not a claim about GS1 organizational semantics.
+- Any current Group member may configure a GCP namespace and allocate from it. This is a temporary assumption that Issue #20 will narrow without changing namespace or allocation semantics or any ledger data.
 - Identification level is derived from GS1 semantics and is never user-supplied or independently editable.
 - A class-level identifier may describe many Assets; an individual-level identifier identifies exactly one, enforced by schema constraints rather than application sequencing.
 - Allocation authority is never inferred from possession of an identifier; a stored identifier is not evidence that Kannabi allocated it.

@@ -257,6 +257,28 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const asset = await store.detachIdentifier(assetId(c.req.param('id')), actor(c.get('user')), c.req.param('key'));
       return c.json({ asset });
     })
+    // Allocation is idempotent: a repeat call returns the existing issuance.
+    // Knowing a namespace key grants nothing; the Group join is re-checked here.
+    .post('/assets/:id/giai', validator('json', (value) => {
+      const input = record(value, ['namespaceKey']);
+      return { namespaceKey: requiredText(input.namespaceKey, 'namespaceKey') };
+    }), async (c) => {
+      const asset = await store.allocateGiai(assetId(c.req.param('id')), actor(c.get('user')),
+        c.req.valid('json').namespaceKey);
+      return c.json({ asset });
+    })
+    .get('/giai-namespaces', async (c) =>
+      c.json({ namespaces: await store.listGiaiNamespaces(actor(c.get('user'))) }))
+    .post('/groups/:key/giai-namespaces', validator('json', (value) =>
+      record(value, ['gcp', 'exclusions'])), async (c) =>
+      c.json({ namespace: await store.configureGiaiNamespace(actor(c.get('user')),
+        c.req.param('key'), c.req.valid('json')) }, 201))
+    .patch('/giai-namespaces/:key', validator('json', (value) => {
+      const input = record(value, ['active']);
+      if (typeof input.active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
+      return { active: input.active };
+    }), async (c) => c.json({ namespace: await store.setGiaiNamespaceActive(actor(c.get('user')),
+      c.req.param('key'), c.req.valid('json').active) }))
     .onError((error, c) => {
       if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
       if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);
