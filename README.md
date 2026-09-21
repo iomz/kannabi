@@ -260,7 +260,7 @@ That boundary is what lets a client report that Kannabi does not hold something 
 The server is read-only. It attaches to a database Kannabi has already opened, verifying the uniqueness constraints instead of installing them, and exposes no write, Cypher, or graph-traversal tool.
 Generic graph access, EPCIS, and observation stores stay independent MCP servers rather than being proxied here; [Neo4j's own MCP server](https://github.com/neo4j/mcp) already provides schema inspection and read-only Cypher for the underlying graph.
 
-**Security, current limitation.** The MCP process reads the entire Kannabi graph, including Assets private to a Group and the Group structure itself. It does not apply Kannabi's per-User readability, because a locally launched stdio process carries no Kannabi principal. Treat it as trusted local system-wide read access, run it only where that is acceptable, and never expose it over a network. Asset reads take an explicit audience, so a future principal or policy layer can narrow what the server sees without changing the tool surface.
+**Security, current limitation.** The MCP process reads the entire Kannabi graph, including Assets private to a Group and the Group structure itself. It does not apply Kannabi's per-User readability, because a locally launched stdio process carries no Kannabi principal. Treat it as trusted system-wide read access and run it only where that is acceptable. Network access must be authenticated, and any gateway must target an instance where Group boundaries need not hold. Asset reads take an explicit audience, so a future principal or policy layer can narrow what the server sees without changing the tool surface.
 
 ## Authentication and Group access
 
