@@ -260,7 +260,23 @@ That boundary is what lets a client report that Kannabi does not hold something 
 The server is read-only. It attaches to a database Kannabi has already opened, verifying the uniqueness constraints instead of installing them, and exposes no write, Cypher, or graph-traversal tool.
 Generic graph access, EPCIS, and observation stores stay independent MCP servers rather than being proxied here; [Neo4j's own MCP server](https://github.com/neo4j/mcp) already provides schema inspection and read-only Cypher for the underlying graph.
 
-**Security, current limitation.** The MCP process reads the entire Kannabi graph, including Assets private to a Group and the Group structure itself. It does not apply Kannabi's per-User readability, because a locally launched stdio process carries no Kannabi principal. Whatever can reach the process can read everything the process can read, and putting an authenticated gateway in front of it does not change that: the gateway authenticates a person, while Kannabi still answers with the whole instance. Expose it only to readers already entitled to every Asset it holds. Asset reads take an explicit audience, so a future principal or policy layer can narrow what the server sees without changing the tool surface.
+### Whose view the server answers with
+
+`KANNABI_MCP_AUDIENCE` chooses between two postures.
+
+`system`, the default, reads the entire Kannabi graph, including Assets private to a Group and the Group structure itself, applying none of Kannabi's per-User readability. Whatever can reach the process can read everything the process can read, and putting an authenticated gateway in front of it does not change that: the gateway authenticates a person, while Kannabi still answers with the whole instance. Run it this way only where every reader is already entitled to every Asset the instance holds.
+
+`principal` answers only for an authenticated User. The gateway that launched the process asserts who it authenticated, in the `_meta` of each `tools/call`, and Kannabi resolves that assertion to one of its own Users and answers under that User's ordinary Group access — the same view the web application would give them. A request carrying no principal, an assertion Kannabi cannot read, a subject that is not a person, and an identity nobody has linked are all refused.
+
+That assertion is trusted because of where it arrives, not because of anything it carries: on stdio the only writer to this process's stdin is whatever spawned it. It is therefore worth exactly as much as the decision to launch the server from a trusted gateway, and carries no cryptographic guarantee of its own.
+
+An external identity is keyed by its issuer and subject together, never by email: two issuers may assert the same address for different people, and an address can be reassigned. Linking one to a Kannabi User is administrative and deliberately outside every request path, so an authenticated stranger reaches nothing until someone says whose identity it is:
+
+```sh
+pnpm identity:link alex@example.com https://idp.example.com idp-subject-1
+```
+
+The server stays read-only in both postures. Group membership remains the whole of the authorization decision; a gateway's scopes describe what it let through and never widen what Kannabi permits.
 
 ## Authentication and Group access
 

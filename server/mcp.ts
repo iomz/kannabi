@@ -2,6 +2,7 @@ import neo4j from 'neo4j-driver';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { IdentityStore } from './identity-store.js';
 import { createMcpServer } from './mcp-tools.js';
+import { principalAudienceResolver, systemAudienceResolver } from './mcp-principal.js';
 
 /** Kannabi's domain MCP server, spoken over stdio.
  *
@@ -13,10 +14,16 @@ import { createMcpServer } from './mcp-tools.js';
  * Read-only. It attaches to a database Kannabi has already opened rather than
  * installing constraints or migrating, so running it never modifies data.
  *
- * SECURITY: this process reads the entire Kannabi graph, including Assets that
- * are private to a Group and the Group structure itself. It does not apply
- * Kannabi's per-User readability. Launch it only as a trusted local process,
- * and never expose it over a network.
+ * SECURITY: by default this process reads the entire Kannabi graph, including
+ * Assets private to a Group and the Group structure itself, applying none of
+ * Kannabi's per-User readability. Launch it that way only as a trusted local
+ * process.
+ *
+ * `KANNABI_MCP_AUDIENCE=principal` instead answers only for an authenticated
+ * User asserted by whatever launched this process, under that User's ordinary
+ * Group access. That assertion is trusted because of the stdio process
+ * boundary — the only writer to this stdin is the parent — so it is worth no
+ * more than the decision to launch this process from a trusted gateway.
  *
  * stdout carries the MCP protocol. Every diagnostic goes to stderr.
  */
@@ -30,10 +37,19 @@ const driver = neo4j.driver(
 );
 const store = await IdentityStore.attachReadOnly(driver);
 
-const connection = await serveStdio(() => createMcpServer(store), {
+const modes = ['system', 'principal'] as const;
+const mode = process.env.KANNABI_MCP_AUDIENCE ?? 'system';
+if (!(modes as readonly string[]).includes(mode)) {
+  throw new Error(`KANNABI_MCP_AUDIENCE must be one of ${modes.join(', ')}`);
+}
+const resolveAudience = mode === 'principal'
+  ? principalAudienceResolver(store) : systemAudienceResolver();
+
+const connection = await serveStdio(() => createMcpServer(store, resolveAudience), {
   onerror: (error) => console.error('Kannabi MCP error', error),
 });
-console.error('Kannabi MCP server ready on stdio (read-only, system-wide access)');
+console.error(`Kannabi MCP server ready on stdio (read-only, ${mode === 'principal'
+  ? 'per-User access for the asserted principal' : 'system-wide access'})`);
 
 let closing = false;
 /** Release the connection and the Neo4j pool exactly once, however the session
