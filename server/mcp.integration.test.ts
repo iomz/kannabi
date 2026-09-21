@@ -24,7 +24,6 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver);
 
-  /** Run a setup or inspection query and always release its session. */
   async function query(cypher: string, params: Record<string, unknown> = {}) {
     const session = driver.session();
     try { return await session.run(cypher, params); } finally { await session.close(); }
@@ -96,20 +95,17 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   await client.connect(transport);
   t.after(() => client.close());
 
-  /** Call a tool and return its successful structured response. */
   async function call(name: string, args: Json = {}): Promise<Json> {
     const response = await client.callTool({ name, arguments: args }) as ToolResult;
     assert.ok(!response.isError, `${name} failed: ${response.content?.[0]?.text}`);
     assert.ok(response.structuredContent, `${name} returned no structured content`);
     return response.structuredContent;
   }
-  /** Call a tool expected to reject its arguments and return its message. */
   async function rejects(name: string, args: Json): Promise<string> {
     const response = await client.callTool({ name, arguments: args }) as ToolResult;
     assert.equal(response.isError, true, `${name} accepted ${JSON.stringify(args)}`);
     return response.content?.[0]?.text ?? '';
   }
-  /** Extract native Asset IDs from one paged tool response. */
   const ids = (page: Json, field = 'assets') =>
     (page[field] as Json[]).map((entry) => entry.assetId as string);
 

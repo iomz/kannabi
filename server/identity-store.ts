@@ -388,7 +388,6 @@ const assetProjection = `
 export class IdentityStore {
   private constructor(private readonly driver: Driver) {}
 
-  /** Open the store for application use, installing and verifying its schema. */
   static async open(driver: Driver): Promise<IdentityStore> {
     const session = driver.session();
     try {
@@ -687,7 +686,6 @@ export class IdentityStore {
     }
   }
 
-  /** Return an Asset by native identity when it is readable by the audience. */
   async getAsset(id: string, audience: AudienceInput): Promise<Asset | null> {
     const session = this.driver.session();
     try {
@@ -756,7 +754,6 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
-  /** Search readable Assets with deterministic filtering, ordering, and paging. */
   async findAssets(audience: NamedAudienceInput, request: AssetPageRequest): Promise<AssetPage> {
     const { q: text, scope, sort, dir, filters, limit, after } = request;
     const order = orderClause(sort, dir);

@@ -104,7 +104,6 @@ const allocationSchema = z.object({
   allocatedBy: attributionSchema,
 });
 
-/** Project the complete MCP representation of one Asset. */
 function detail(asset: Asset) {
   return {
     ...summarise(asset),
@@ -148,7 +147,6 @@ const namespaceSchema = z.object({
   configuredAt: z.string().describe('When a Group asserted this prefix. Kannabi cannot verify GS1 licensing.'),
 });
 
-/** Project a managed GIAI namespace into its agent-facing representation. */
 function describeNamespace(namespace: GiaiNamespace) {
   return {
     namespaceKey: namespace.key,
@@ -164,7 +162,6 @@ function describeNamespace(namespace: GiaiNamespace) {
   };
 }
 
-/** Project one ledger entry and its current attachment state for MCP output. */
 function describeIssuance(issuance: GiaiIssuance) {
   const { allocation, asset } = issuance;
   return {
@@ -186,7 +183,6 @@ function result<T>(value: T) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value };
 }
 
-/** Convert a domain or validation failure into an MCP tool error result. */
 function failed(error: unknown) {
   if (error instanceof ValidationError || error instanceof DomainReferenceError) {
     return { content: [{ type: 'text' as const, text: error.message }], isError: true };
@@ -255,7 +251,6 @@ Two distinctions matter here and must not be collapsed:
 
 Every tool here is read-only. This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
 
-/** Build the read-only Kannabi MCP server around an attached domain store. */
 export function createMcpServer(store: IdentityStore): McpServer {
   const server = new McpServer(serverInfo, { capabilities: { tools: {} }, instructions });
   const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;

@@ -42,7 +42,7 @@ Preserve the README naming story at the bottom of README.
 - Deleted reporters become non-active tombstones that retain only the deletion-time display name required for human-readable provenance; they must not behave as discoverable Users.
 - Tombstones do not retain email, credentials, sessions, preferences, administrator roles, or Group memberships.
 - Deleting a Group's final member does not delete the Group; empty Groups are valid.
-- Every Asset read takes an explicit audience. A `system` audience reads system-wide for a trusted process; it is never a claim that User/Group authorization was applied. Network access must be authenticated, and any gateway must target an instance where Group boundaries need not hold.
+- Every Asset read takes an explicit audience. A `system` audience reads system-wide and is never a claim that User/Group authorization was applied. Whatever can reach a `system`-audience process can read the entire instance, so putting an authenticated gateway in front of one changes nothing: the gateway authenticates a person while Kannabi still answers with everything. Its reach must stay limited to readers already entitled to every Asset it returns.
 - MCP tools reuse the same domain operations the HTTP API uses. MCP never calls Kannabi over HTTP and never reimplements persistence or domain semantics.
 - Kannabi's MCP exposes only Kannabi-owned semantics. Generic graph access, EPCIS, and observation sources remain independent MCP servers; Kannabi never proxies them and exposes no Cypher or graph traversal.
 - The MCP server states Kannabi's knowledge boundary in its connection instructions, naming the facts other systems own. An empty result must never be presentable as evidence about a fact Kannabi does not hold.

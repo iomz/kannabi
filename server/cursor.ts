@@ -43,7 +43,6 @@ export function cursorText(payload: Record<string, unknown>, field: string): str
   return value;
 }
 
-/** Read one safe-integer field from a decoded cursor payload. */
 export function cursorInteger(payload: Record<string, unknown>, field: string): number {
   const value = payload[field];
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new ValidationError('Invalid cursor');
