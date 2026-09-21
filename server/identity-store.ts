@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
-import { int } from 'neo4j-driver';
+import neo4j, { int } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
   type AssetSort,
 } from './asset-page.js';
 import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
+import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
+import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import {
@@ -131,6 +133,17 @@ export type AssetLookup = Readonly<{
   matching: number;
   nextCursor: string | null;
 }>;
+/** One ledger row together with the Asset it was issued for, when the audience
+ * may read that Asset. `asset` is null for an issuance whose Asset is not
+ * readable: the issuance is a Kannabi-owned fact, but it grants no Asset
+ * access. */
+export type GiaiIssuance = Readonly<{ allocation: GiaiAllocation; asset: Asset | null }>;
+export type GiaiIssuancePage = Readonly<{
+  namespace: GiaiNamespace;
+  issuances: readonly GiaiIssuance[];
+  matching: number;
+  nextCursor: string | null;
+}>;
 export type ReportAsset = {
   name: string;
   /** Optional. An Asset exists independently of GS1 identification. */
@@ -236,19 +249,25 @@ const attachIdentifiers = `
       ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
     MERGE (a)-[:CLASSIFIED_AS]->(n))`;
 
-const identifierProjection = `
-    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
-        x { .key, .canonical, .scheme, .policyVersion }]
-      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
-        y { .key, .canonical, .scheme, .policyVersion }],
-    allocation: issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
+/** One issuance as the domain sees it. Requires `issuance` and `allocator` in
+ * scope. Shared by the Asset projection and by the ledger read, so an Asset's
+ * allocation and a namespace's issuance can never describe the same record
+ * differently. */
+const allocationProjection = `issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
       allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
       allocatedBy: { key: issuance.allocatedBy,
         name: CASE WHEN allocator IS NULL THEN 'Deleted member'
           WHEN allocator.accountDeletedAt IS NULL THEN allocator.name
           ELSE coalesce(allocator.provenanceName, allocator.name, 'Deleted member') END,
         status: CASE WHEN allocator IS NOT NULL AND allocator.accountDeletedAt IS NULL
-          THEN 'active' ELSE 'deleted' END } },`
+          THEN 'active' ELSE 'deleted' END } }`;
+
+const identifierProjection = `
+    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
+        x { .key, .canonical, .scheme, .policyVersion }]
+      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
+        y { .key, .canonical, .scheme, .policyVersion }],
+    allocation: ${allocationProjection},`
 
 // The ledger row is found by the Asset id it records, which is unique, so this
 // cannot multiply rows and needs no relationship to the Asset to survive one.
@@ -331,10 +350,24 @@ const assetRowsProjection = (order: string) => `
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
+/** Which GIAI namespaces an audience may see. Requires `n` in scope. */
+const visibleNamespace = `($systemRead OR EXISTS {
+  MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n) })`;
+
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:CAN_COLLABORATE]->(a)
 }`;
+/** The one readability rule, as Cypher. Requires `a` in scope and the
+ * parameters `audienceParameters` produces.
+ *
+ * `$systemRead` is the accepted system-wide audience of the local MCP process;
+ * it is a parameter rather than a second query so every read path provably
+ * shares this predicate and a narrower audience can be introduced later without
+ * touching a query. `$actorKey` is null for every audience but `user`, so the
+ * collaboration branch is simply unsatisfied there.
+ */
+const readableAsset = `($systemRead OR a.isPublic = true OR ${collaboration})`;
 const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
@@ -382,25 +415,47 @@ export class IdentityStore {
       await session.run(`MATCH (u:User) WHERE u.id IS NOT NULL
         SET u.role = CASE WHEN u.isAdmin = true THEN 'admin' ELSE coalesce(u.role, 'user') END
         REMOVE u.isAdmin`);
-      const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
-      for (const [label, properties] of [
-        ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
-        ['Migration', ['key']], ['Asset', ['id']],
-        ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
-        ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
-        ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
-        ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
-      ] as const) {
-        if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
-          && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
-          && JSON.stringify(row.get('properties')) === JSON.stringify(properties))) {
-          throw new Error(`Required uniqueness constraint is missing for ${label}`);
-        }
-      }
+      await IdentityStore.verifyConstraints(session);
     } finally {
       await session.close();
     }
     return new IdentityStore(driver);
+  }
+
+  /** Attach to a database Kannabi has already opened, without writing to it.
+   *
+   * `open` installs constraints, backfills native Asset ids and migrates
+   * identifiers, all of which are writes. A read-only consumer — the stdio MCP
+   * server — must do none of that, so it verifies the same invariants instead
+   * and fails closed on a database the application has never opened. It never
+   * repairs one.
+   */
+  static async attachReadOnly(driver: Driver): Promise<IdentityStore> {
+    const session = driver.session({ defaultAccessMode: neo4j.session.READ });
+    try { await IdentityStore.verifyConstraints(session); }
+    finally { await session.close(); }
+    return new IdentityStore(driver);
+  }
+
+  /** Startup invariant: every uniqueness constraint the domain relies on is
+   * installed. Reading `SHOW CONSTRAINTS` never modifies the database, so both
+   * the read-write and the read-only entry can assert it. */
+  private static async verifyConstraints(session: Session): Promise<void> {
+    const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
+    for (const [label, properties] of [
+      ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
+      ['Migration', ['key']], ['Asset', ['id']],
+      ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
+      ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
+      ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
+      ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
+    ] as const) {
+      if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
+        && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
+        && JSON.stringify(row.get('properties')) === JSON.stringify(properties))) {
+        throw new Error(`Required uniqueness constraint is missing for ${label}`);
+      }
+    }
   }
 
   /** Assign a native identity to Assets reported before Phase 1.
@@ -536,12 +591,17 @@ export class IdentityStore {
     });
   }
 
-  async listGroups(actorKey: string): Promise<Entity[]> {
+  /** The Groups the audience may see: its own memberships, or every Group
+   * under the system audience. A Group is a discovery vocabulary, never an
+   * access grant: naming one still reaches only Assets the audience may read. */
+  async listGroups(audience: NamedAudienceInput): Promise<Entity[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)
-        RETURN DISTINCT g { .key, .name } AS entity ORDER BY entity.name`, { actorKey }));
+        MATCH (g:Group)
+        WHERE $systemRead OR EXISTS { MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g) }
+        RETURN DISTINCT g { .key, .name } AS entity ORDER BY entity.name`,
+      audienceParameters(audience)));
       return result.records.map((row) => row.get('entity') as Entity);
     } finally { await session.close(); }
   }
@@ -626,12 +686,12 @@ export class IdentityStore {
     }
   }
 
-  async getAsset(id: string, actorKey: string | null): Promise<Asset | null> {
+  async getAsset(id: string, audience: AudienceInput): Promise<Asset | null> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(
-        `${assetMatch} WHERE a.isPublic = true OR ${collaboration} ${assetProjection}`,
-        { assetId: assetId(id), actorKey },
+        `${assetMatch} WHERE ${readableAsset} ${assetProjection}`,
+        { assetId: assetId(id), ...audienceParameters(audience) },
       ));
       return result.records.length ? assetFrom(result.records[0].get('asset')) : null;
     } finally { await session.close(); }
@@ -647,10 +707,10 @@ export class IdentityStore {
    * unique-constrained node for its level — never by substring, and never by
    * treating a prefix as allocation provenance.
    */
-  async lookupAssets(actorKey: string, request: AssetLookupRequest): Promise<AssetLookup> {
+  async lookupAssets(audience: NamedAudienceInput, request: AssetLookupRequest): Promise<AssetLookup> {
     const { identity: query, limit, after } = request;
     if (query.kind === 'assetId') {
-      const asset = await this.getAsset(query.id, actorKey);
+      const asset = await this.getAsset(query.id, audience);
       return Object.freeze({ identity: Object.freeze({ kind: 'assetId' as const, id: query.id }),
         assets: asset ? [asset] : [], matching: asset ? 1 : 0, nextCursor: null });
     }
@@ -668,19 +728,19 @@ export class IdentityStore {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
           ${identifierMatch}
-          WHERE a.isPublic = true OR ${collaboration}
+          WHERE ${readableAsset}
           RETURN count(a) AS matching
         }
         CALL {
           ${identifierMatch}
-          WHERE (a.isPublic = true OR ${collaboration})
+          WHERE ${readableAsset}
             AND ($after IS NULL OR a.name > $after.name
               OR (a.name = $after.name AND a.id > $after.id))
           WITH a ${order} LIMIT $fetchSize
           ${assetRowsProjection(order)}
         }
         RETURN matching, rows`,
-      { actorKey, canonical, after, fetchSize: int(limit + 1) }));
+      { canonical, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map(assetFrom);
@@ -694,7 +754,7 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
-  async findAssets(actorKey: string, request: AssetPageRequest): Promise<AssetPage> {
+  async findAssets(audience: NamedAudienceInput, request: AssetPageRequest): Promise<AssetPage> {
     const { q: text, scope, sort, dir, filters, limit, after } = request;
     const order = orderClause(sort, dir);
     const session = this.driver.session();
@@ -702,7 +762,7 @@ export class IdentityStore {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
           MATCH (a:Asset)
-          WHERE a.isPublic = true OR ${collaboration}
+          WHERE ${readableAsset}
           WITH a, (toLower(a.name) CONTAINS toLower($text) AND ${filterPredicate}) AS matches,
             ${collaboration} AS inGroup,
             EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) } AS mine
@@ -714,7 +774,7 @@ export class IdentityStore {
         }
         CALL {
           MATCH (a:Asset)
-          WHERE (a.isPublic = true OR ${collaboration}) AND toLower(a.name) CONTAINS toLower($text)
+          WHERE ${readableAsset} AND toLower(a.name) CONTAINS toLower($text)
             AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
               OR ($scope = 'group' AND ${collaboration})
@@ -724,7 +784,8 @@ export class IdentityStore {
           ${assetRowsProjection(order)}
         }
         RETURN total, scopes, rows`,
-      { actorKey, text, scope, after, fetchSize: int(limit + 1), ...filterParameters(filters) }));
+      { text, scope, after, fetchSize: int(limit + 1),
+        ...audienceParameters(audience), ...filterParameters(filters) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map(assetFrom);
@@ -982,14 +1043,67 @@ export class IdentityStore {
       { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
   }
 
-  /** GIAI namespaces the actor can reach, newest configuration last. */
-  async listGiaiNamespaces(actorKey: string): Promise<GiaiNamespace[]> {
+  /** GIAI namespaces the audience can reach, ordered by prefix. */
+  async listGiaiNamespaces(audience: NamedAudienceInput): Promise<GiaiNamespace[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace)
-        RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`, { actorKey }));
+        MATCH (n:GiaiNamespace) WHERE ${visibleNamespace}
+        RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`,
+      audienceParameters(audience)));
       return result.records.map((row) => namespaceFrom(row.get('namespace')));
+    } finally { await session.close(); }
+  }
+
+  /** Read a namespace's GIAI issuance ledger.
+   *
+   * This is the only answer Kannabi can give to "which Assets did Kannabi
+   * allocate from this namespace". Matching a stored identifier against the
+   * prefix would answer a different question — which values happen to begin
+   * with those digits — and would credit Kannabi with issuing values it merely
+   * stores. The ledger is read here, and nothing else is consulted.
+   *
+   * An issuance permanently names the Asset it was issued for, even after the
+   * identifier is detached. The Asset itself is attached only where the
+   * audience may read it, so the ledger never widens Asset access.
+   */
+  async giaiIssuances(audience: NamedAudienceInput, request: GiaiLedgerRequest): Promise<GiaiIssuancePage> {
+    const { namespaceKey, limit, after } = request;
+    const parameters = audienceParameters(audience);
+    const session = this.driver.session();
+    try {
+      return await session.executeRead(async (tx) => {
+        const found = await tx.run(`
+          MATCH (n:GiaiNamespace {key: $namespaceKey}) WHERE ${visibleNamespace}
+          OPTIONAL MATCH (:GiaiAllocation)-[issued:ALLOCATED_FROM]->(n)
+          RETURN ${namespaceProjection} AS namespace, count(issued) AS matching`,
+        { namespaceKey, ...parameters });
+        if (!found.records.length) throw new ReferenceError('Allocation namespace not found');
+        const page = await tx.run(`
+          MATCH (issuance:GiaiAllocation)-[:ALLOCATED_FROM]->(:GiaiNamespace {key: $namespaceKey})
+          WHERE $after IS NULL OR issuance.sequence > $after
+          WITH issuance ORDER BY issuance.sequence ASC LIMIT $fetchSize
+          OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})
+          WITH issuance, allocator ORDER BY issuance.sequence ASC
+          RETURN collect(${allocationProjection}) AS rows`,
+        { namespaceKey, after: after === null ? null : int(after), fetchSize: int(limit + 1) });
+        const rows = page.records[0].get('rows') as GiaiAllocation[];
+        const allocations = rows.slice(0, limit);
+        const readable = await tx.run(`
+          MATCH (a:Asset) WHERE a.id IN $ids AND ${readableAsset}
+          ${assetRowsProjection('ORDER BY a.name ASC, a.id ASC')}`,
+        { ids: allocations.map((allocation) => allocation.allocatedForAssetId), ...parameters });
+        const assets = new Map((readable.records[0].get('rows') as StoredAsset[])
+          .map((stored) => [stored.id, assetFrom(stored)]));
+        return Object.freeze({
+          namespace: namespaceFrom(found.records[0].get('namespace')),
+          matching: found.records[0].get('matching').toNumber(),
+          issuances: allocations.map((allocation) => Object.freeze({
+            allocation, asset: assets.get(allocation.allocatedForAssetId) ?? null })),
+          nextCursor: rows.length > limit
+            ? giaiLedgerCursor(namespaceKey, allocations.at(-1)!.sequence) : null,
+        });
+      });
     } finally { await session.close(); }
   }
 
