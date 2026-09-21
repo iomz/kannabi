@@ -7,6 +7,7 @@ import {
   type AssetSort,
 } from './asset-page.js';
 import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
+import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import {
@@ -331,10 +332,24 @@ const assetRowsProjection = (order: string) => `
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
+/** Which GIAI namespaces an audience may see. Requires `n` in scope. */
+const visibleNamespace = `($systemRead OR EXISTS {
+  MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n) })`;
+
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:CAN_COLLABORATE]->(a)
 }`;
+/** The one readability rule, as Cypher. Requires `a` in scope and the
+ * parameters `audienceParameters` produces.
+ *
+ * `$systemRead` is the accepted system-wide audience of the local MCP process;
+ * it is a parameter rather than a second query so every read path provably
+ * shares this predicate and a narrower audience can be introduced later without
+ * touching a query. `$actorKey` is null for every audience but `user`, so the
+ * collaboration branch is simply unsatisfied there.
+ */
+const readableAsset = `($systemRead OR a.isPublic = true OR ${collaboration})`;
 const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
@@ -536,12 +551,17 @@ export class IdentityStore {
     });
   }
 
-  async listGroups(actorKey: string): Promise<Entity[]> {
+  /** The Groups the audience may see: its own memberships, or every Group
+   * under the system audience. A Group is a discovery vocabulary, never an
+   * access grant: naming one still reaches only Assets the audience may read. */
+  async listGroups(audience: NamedAudienceInput): Promise<Entity[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)
-        RETURN DISTINCT g { .key, .name } AS entity ORDER BY entity.name`, { actorKey }));
+        MATCH (g:Group)
+        WHERE $systemRead OR EXISTS { MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g) }
+        RETURN DISTINCT g { .key, .name } AS entity ORDER BY entity.name`,
+      audienceParameters(audience)));
       return result.records.map((row) => row.get('entity') as Entity);
     } finally { await session.close(); }
   }
@@ -626,12 +646,12 @@ export class IdentityStore {
     }
   }
 
-  async getAsset(id: string, actorKey: string | null): Promise<Asset | null> {
+  async getAsset(id: string, audience: AudienceInput): Promise<Asset | null> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(
-        `${assetMatch} WHERE a.isPublic = true OR ${collaboration} ${assetProjection}`,
-        { assetId: assetId(id), actorKey },
+        `${assetMatch} WHERE ${readableAsset} ${assetProjection}`,
+        { assetId: assetId(id), ...audienceParameters(audience) },
       ));
       return result.records.length ? assetFrom(result.records[0].get('asset')) : null;
     } finally { await session.close(); }
@@ -647,10 +667,10 @@ export class IdentityStore {
    * unique-constrained node for its level — never by substring, and never by
    * treating a prefix as allocation provenance.
    */
-  async lookupAssets(actorKey: string, request: AssetLookupRequest): Promise<AssetLookup> {
+  async lookupAssets(audience: NamedAudienceInput, request: AssetLookupRequest): Promise<AssetLookup> {
     const { identity: query, limit, after } = request;
     if (query.kind === 'assetId') {
-      const asset = await this.getAsset(query.id, actorKey);
+      const asset = await this.getAsset(query.id, audience);
       return Object.freeze({ identity: Object.freeze({ kind: 'assetId' as const, id: query.id }),
         assets: asset ? [asset] : [], matching: asset ? 1 : 0, nextCursor: null });
     }
@@ -668,19 +688,19 @@ export class IdentityStore {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
           ${identifierMatch}
-          WHERE a.isPublic = true OR ${collaboration}
+          WHERE ${readableAsset}
           RETURN count(a) AS matching
         }
         CALL {
           ${identifierMatch}
-          WHERE (a.isPublic = true OR ${collaboration})
+          WHERE ${readableAsset}
             AND ($after IS NULL OR a.name > $after.name
               OR (a.name = $after.name AND a.id > $after.id))
           WITH a ${order} LIMIT $fetchSize
           ${assetRowsProjection(order)}
         }
         RETURN matching, rows`,
-      { actorKey, canonical, after, fetchSize: int(limit + 1) }));
+      { canonical, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map(assetFrom);
@@ -694,7 +714,7 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
-  async findAssets(actorKey: string, request: AssetPageRequest): Promise<AssetPage> {
+  async findAssets(audience: NamedAudienceInput, request: AssetPageRequest): Promise<AssetPage> {
     const { q: text, scope, sort, dir, filters, limit, after } = request;
     const order = orderClause(sort, dir);
     const session = this.driver.session();
@@ -702,7 +722,7 @@ export class IdentityStore {
       const result = await session.executeRead((tx) => tx.run(`
         CALL {
           MATCH (a:Asset)
-          WHERE a.isPublic = true OR ${collaboration}
+          WHERE ${readableAsset}
           WITH a, (toLower(a.name) CONTAINS toLower($text) AND ${filterPredicate}) AS matches,
             ${collaboration} AS inGroup,
             EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) } AS mine
@@ -714,7 +734,7 @@ export class IdentityStore {
         }
         CALL {
           MATCH (a:Asset)
-          WHERE (a.isPublic = true OR ${collaboration}) AND toLower(a.name) CONTAINS toLower($text)
+          WHERE ${readableAsset} AND toLower(a.name) CONTAINS toLower($text)
             AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
               OR ($scope = 'group' AND ${collaboration})
@@ -724,7 +744,8 @@ export class IdentityStore {
           ${assetRowsProjection(order)}
         }
         RETURN total, scopes, rows`,
-      { actorKey, text, scope, after, fetchSize: int(limit + 1), ...filterParameters(filters) }));
+      { text, scope, after, fetchSize: int(limit + 1),
+        ...audienceParameters(audience), ...filterParameters(filters) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map(assetFrom);
@@ -982,13 +1003,14 @@ export class IdentityStore {
       { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
   }
 
-  /** GIAI namespaces the actor can reach, newest configuration last. */
-  async listGiaiNamespaces(actorKey: string): Promise<GiaiNamespace[]> {
+  /** GIAI namespaces the audience can reach, ordered by prefix. */
+  async listGiaiNamespaces(audience: NamedAudienceInput): Promise<GiaiNamespace[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace)
-        RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`, { actorKey }));
+        MATCH (n:GiaiNamespace) WHERE ${visibleNamespace}
+        RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`,
+      audienceParameters(audience)));
       return result.records.map((row) => namespaceFrom(row.get('namespace')));
     } finally { await session.close(); }
   }
