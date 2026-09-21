@@ -40,5 +40,10 @@ RUN pnpm install --prod --frozen-lockfile
 COPY --from=levitate-build /app/dist ./dist
 COPY --from=levitate-src assets ./assets
 COPY --from=kannabi /kannabi /opt/kannabi-mcp
+# The state directory is a named volume at run time. Creating it here, owned by
+# the user the process runs as, is what makes the empty volume writable on a
+# first start: Docker seeds a fresh volume from the image path, ownership
+# included.
+RUN mkdir -p /app/state && chown node:node /app/state
 USER node
 EXPOSE 18788

@@ -8,13 +8,25 @@
 #
 #   docker compose up -d --wait neo4j alarik
 #   pnpm demo:seed                       # first run only
-#   KANNABI_LEVITATE_ORIGIN=https://... docker compose -f docker/levitate.compose.yml up -d --build --wait
+#   docker compose --env-file .env --env-file docker/.env \
+#     -f docker/levitate.compose.yml up -d --build --wait
+#
+# Run from the repository root. Both env files are named explicitly because
+# passing --env-file replaces the automatic lookup: .env supplies the Neo4j
+# password for interpolation, docker/.env the public origin. Only the Neo4j
+# credential is placed in the container; the rest of .env stays out of the
+# gateway process.
+#
+# Every subcommand for this project interpolates the same variables, so pass
+# both files to each of them, not only to `up`.
 #
 # Authentication is Levitate's own OAuth authorization server with manual
 # approval, so the origin must be a public HTTPS origin that reaches this
-# instance. Read the approval secret once with:
+# instance. Read the approval secret from the running container, which is the
+# only place it is written:
 #
-#   LEVITATE_LOG_APPROVAL_SECRET=1 docker compose -f docker/levitate.compose.yml logs
+#   docker compose --env-file .env --env-file docker/.env \
+#     -f docker/levitate.compose.yml exec levitate cat /app/state/approval-secret
 #
 # The MCP server is read-only but reads the whole instance, ignoring per-User
 # readability. Point this at a demo or evaluation database, never at data whose
@@ -28,27 +40,31 @@ services:
       context: .
       dockerfile: levitate.Dockerfile
       additional_contexts:
-        # Relative to this file. The default suits a ghq checkout holding both
-        # repositories side by side; override LEVITATE_SRC for any other layout.
-        kannabi-src: ..
+        # Relative to this file. The defaults suit a ghq checkout holding both
+        # repositories side by side; override either for another layout.
+        kannabi-src: ${KANNABI_SRC:-..}
         levitate-src: ${LEVITATE_SRC:-../../levitate}
     init: true
     restart: unless-stopped
     stop_grace_period: 10s
     ports:
       - "127.0.0.1:${KANNABI_LEVITATE_PORT:-18788}:18788"
-    # Supplies NEO4J_PASSWORD. NEO4J_URI is overridden below because the value
-    # in .env names the host loopback, which no container can reach.
-    env_file:
-      - ../.env
+    # Only the Neo4j credential the backend needs. The repository .env also
+    # holds the Better Auth secret and the object-store keys, and a gateway
+    # process reachable from the network has no use for any of them.
+    # NEO4J_URI is set here rather than taken from .env, whose value names the
+    # host loopback that no container can reach.
     environment:
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD, normally by passing --env-file .env}
       KANNABI_LEVITATE_ORIGIN: ${KANNABI_LEVITATE_ORIGIN:?Set the public HTTPS origin that reaches this instance}
-      LEVITATE_LOG_APPROVAL_SECRET: "${LEVITATE_LOG_APPROVAL_SECRET:-0}"
     volumes:
       # OAuth signing key, client store, refresh tokens and approval secret.
-      - ./state:/app/state
+      # A named volume rather than a bind mount: the contents are secrets this
+      # profile generates, they belong to the container's user, and nothing on
+      # the host should read or version them.
+      - levitate-state:/app/state
     networks:
       - kannabi
     command:
@@ -74,9 +90,6 @@ services:
             process.stdout.write(privateKey.export({type:"pkcs8",format:"pem"}))' > "$${private_key_file}.tmp"
           mv "$${private_key_file}.tmp" "$${private_key_file}"
         fi
-        if [ "$${LEVITATE_LOG_APPROVAL_SECRET}" = "1" ]; then
-          printf '%s\n' "$${LEVITATE_APPROVAL_SECRET}"
-        fi
         # Levitate serves instructions only from its own configuration and drops
         # the backend's, so an agent would otherwise never learn what Kannabi
         # does not know: https://github.com/iomz/levitate/issues/26
@@ -86,6 +99,19 @@ services:
         # Written at start-up because Levitate takes backend env as literal
         # strings with no interpolation: the Neo4j password would otherwise have
         # to be committed to a configuration file.
+        #
+        # Every interpolated value is serialised as a TOML basic string first. A
+        # password containing a quote or a backslash is valid, and pasting one
+        # in raw would either break the parse or silently change the value.
+        # JSON string syntax is a subset of TOML's, escapes included, so
+        # JSON.stringify produces the quoted literal to emit verbatim.
+        toml_string() {
+          node -e 'process.stdout.write(JSON.stringify(String(process.env.TOML_VALUE ?? "")))'
+        }
+        neo4j_uri_toml="$$(TOML_VALUE="$${NEO4J_URI}" toml_string)"
+        neo4j_username_toml="$$(TOML_VALUE="$${NEO4J_USERNAME}" toml_string)"
+        neo4j_password_toml="$$(TOML_VALUE="$${NEO4J_PASSWORD}" toml_string)"
+        origin_toml="$$(TOML_VALUE="$${KANNABI_LEVITATE_ORIGIN}" toml_string)"
         cat > /tmp/kannabi.toml <<TOML
         [server]
         name = "kannabi"
@@ -102,13 +128,13 @@ services:
         [oauth.resource]
         enabled = true
         mode = "gateway"
-        resource = "$${KANNABI_LEVITATE_ORIGIN}"
-        authorization_servers = ["$${KANNABI_LEVITATE_ORIGIN}"]
+        resource = $${origin_toml}
+        authorization_servers = [$${origin_toml}]
         scopes_supported = ["gateway:access"]
 
         [oauth.as]
         enabled = true
-        issuer = "$${KANNABI_LEVITATE_ORIGIN}"
+        issuer = $${origin_toml}
         subject = "local-owner"
         approval = "manual"
         approval_secret_env = "LEVITATE_APPROVAL_SECRET"
@@ -151,9 +177,9 @@ services:
         args = ["/opt/kannabi-mcp/dist/server/mcp.js"]
 
         [backends.kannabi.env]
-        NEO4J_URI = "$${NEO4J_URI}"
-        NEO4J_USERNAME = "$${NEO4J_USERNAME}"
-        NEO4J_PASSWORD = "$${NEO4J_PASSWORD}"
+        NEO4J_URI = $${neo4j_uri_toml}
+        NEO4J_USERNAME = $${neo4j_username_toml}
+        NEO4J_PASSWORD = $${neo4j_password_toml}
         TOML
         exec node dist/src/index.js --config /tmp/kannabi.toml
     healthcheck:
@@ -175,6 +201,9 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+volumes:
+  levitate-state:
 
 networks:
   # Created by the main compose project; start it first.
