@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
-import { int } from 'neo4j-driver';
+import neo4j, { int } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
   type AssetSort,
 } from './asset-page.js';
 import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
+import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
@@ -132,6 +133,17 @@ export type AssetLookup = Readonly<{
   matching: number;
   nextCursor: string | null;
 }>;
+/** One ledger row together with the Asset it was issued for, when the audience
+ * may read that Asset. `asset` is null for an issuance whose Asset is not
+ * readable: the issuance is a Kannabi-owned fact, but it grants no Asset
+ * access. */
+export type GiaiIssuance = Readonly<{ allocation: GiaiAllocation; asset: Asset | null }>;
+export type GiaiIssuancePage = Readonly<{
+  namespace: GiaiNamespace;
+  issuances: readonly GiaiIssuance[];
+  matching: number;
+  nextCursor: string | null;
+}>;
 export type ReportAsset = {
   name: string;
   /** Optional. An Asset exists independently of GS1 identification. */
@@ -237,19 +249,25 @@ const attachIdentifiers = `
       ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
     MERGE (a)-[:CLASSIFIED_AS]->(n))`;
 
-const identifierProjection = `
-    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
-        x { .key, .canonical, .scheme, .policyVersion }]
-      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
-        y { .key, .canonical, .scheme, .policyVersion }],
-    allocation: issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
+/** One issuance as the domain sees it. Requires `issuance` and `allocator` in
+ * scope. Shared by the Asset projection and by the ledger read, so an Asset's
+ * allocation and a namespace's issuance can never describe the same record
+ * differently. */
+const allocationProjection = `issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
       allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
       allocatedBy: { key: issuance.allocatedBy,
         name: CASE WHEN allocator IS NULL THEN 'Deleted member'
           WHEN allocator.accountDeletedAt IS NULL THEN allocator.name
           ELSE coalesce(allocator.provenanceName, allocator.name, 'Deleted member') END,
         status: CASE WHEN allocator IS NOT NULL AND allocator.accountDeletedAt IS NULL
-          THEN 'active' ELSE 'deleted' END } },`
+          THEN 'active' ELSE 'deleted' END } }`;
+
+const identifierProjection = `
+    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
+        x { .key, .canonical, .scheme, .policyVersion }]
+      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
+        y { .key, .canonical, .scheme, .policyVersion }],
+    allocation: ${allocationProjection},`
 
 // The ledger row is found by the Asset id it records, which is unique, so this
 // cannot multiply rows and needs no relationship to the Asset to survive one.
@@ -397,25 +415,47 @@ export class IdentityStore {
       await session.run(`MATCH (u:User) WHERE u.id IS NOT NULL
         SET u.role = CASE WHEN u.isAdmin = true THEN 'admin' ELSE coalesce(u.role, 'user') END
         REMOVE u.isAdmin`);
-      const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
-      for (const [label, properties] of [
-        ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
-        ['Migration', ['key']], ['Asset', ['id']],
-        ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
-        ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
-        ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
-        ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
-      ] as const) {
-        if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
-          && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
-          && JSON.stringify(row.get('properties')) === JSON.stringify(properties))) {
-          throw new Error(`Required uniqueness constraint is missing for ${label}`);
-        }
-      }
+      await IdentityStore.verifyConstraints(session);
     } finally {
       await session.close();
     }
     return new IdentityStore(driver);
+  }
+
+  /** Attach to a database Kannabi has already opened, without writing to it.
+   *
+   * `open` installs constraints, backfills native Asset ids and migrates
+   * identifiers, all of which are writes. A read-only consumer — the stdio MCP
+   * server — must do none of that, so it verifies the same invariants instead
+   * and fails closed on a database the application has never opened. It never
+   * repairs one.
+   */
+  static async attachReadOnly(driver: Driver): Promise<IdentityStore> {
+    const session = driver.session({ defaultAccessMode: neo4j.session.READ });
+    try { await IdentityStore.verifyConstraints(session); }
+    finally { await session.close(); }
+    return new IdentityStore(driver);
+  }
+
+  /** Startup invariant: every uniqueness constraint the domain relies on is
+   * installed. Reading `SHOW CONSTRAINTS` never modifies the database, so both
+   * the read-write and the read-only entry can assert it. */
+  private static async verifyConstraints(session: Session): Promise<void> {
+    const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
+    for (const [label, properties] of [
+      ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
+      ['Migration', ['key']], ['Asset', ['id']],
+      ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
+      ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
+      ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
+      ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
+    ] as const) {
+      if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
+        && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
+        && JSON.stringify(row.get('properties')) === JSON.stringify(properties))) {
+        throw new Error(`Required uniqueness constraint is missing for ${label}`);
+      }
+    }
   }
 
   /** Assign a native identity to Assets reported before Phase 1.
@@ -1012,6 +1052,58 @@ export class IdentityStore {
         RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`,
       audienceParameters(audience)));
       return result.records.map((row) => namespaceFrom(row.get('namespace')));
+    } finally { await session.close(); }
+  }
+
+  /** Read a namespace's GIAI issuance ledger.
+   *
+   * This is the only answer Kannabi can give to "which Assets did Kannabi
+   * allocate from this namespace". Matching a stored identifier against the
+   * prefix would answer a different question — which values happen to begin
+   * with those digits — and would credit Kannabi with issuing values it merely
+   * stores. The ledger is read here, and nothing else is consulted.
+   *
+   * An issuance permanently names the Asset it was issued for, even after the
+   * identifier is detached. The Asset itself is attached only where the
+   * audience may read it, so the ledger never widens Asset access.
+   */
+  async giaiIssuances(audience: NamedAudienceInput, request: GiaiLedgerRequest): Promise<GiaiIssuancePage> {
+    const { namespaceKey, limit, after } = request;
+    const parameters = audienceParameters(audience);
+    const session = this.driver.session();
+    try {
+      return await session.executeRead(async (tx) => {
+        const found = await tx.run(`
+          MATCH (n:GiaiNamespace {key: $namespaceKey}) WHERE ${visibleNamespace}
+          OPTIONAL MATCH (:GiaiAllocation)-[issued:ALLOCATED_FROM]->(n)
+          RETURN ${namespaceProjection} AS namespace, count(issued) AS matching`,
+        { namespaceKey, ...parameters });
+        if (!found.records.length) throw new ReferenceError('Allocation namespace not found');
+        const page = await tx.run(`
+          MATCH (issuance:GiaiAllocation)-[:ALLOCATED_FROM]->(:GiaiNamespace {key: $namespaceKey})
+          WHERE $after IS NULL OR issuance.sequence > $after
+          WITH issuance ORDER BY issuance.sequence ASC LIMIT $fetchSize
+          OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})
+          WITH issuance, allocator ORDER BY issuance.sequence ASC
+          RETURN collect(${allocationProjection}) AS rows`,
+        { namespaceKey, after: after === null ? null : int(after), fetchSize: int(limit + 1) });
+        const rows = page.records[0].get('rows') as GiaiAllocation[];
+        const allocations = rows.slice(0, limit);
+        const readable = await tx.run(`
+          MATCH (a:Asset) WHERE a.id IN $ids AND ${readableAsset}
+          ${assetRowsProjection('ORDER BY a.name ASC, a.id ASC')}`,
+        { ids: allocations.map((allocation) => allocation.allocatedForAssetId), ...parameters });
+        const assets = new Map((readable.records[0].get('rows') as StoredAsset[])
+          .map((stored) => [stored.id, assetFrom(stored)]));
+        return Object.freeze({
+          namespace: namespaceFrom(found.records[0].get('namespace')),
+          matching: found.records[0].get('matching').toNumber(),
+          issuances: allocations.map((allocation) => Object.freeze({
+            allocation, asset: assets.get(allocation.allocatedForAssetId) ?? null })),
+          nextCursor: rows.length > limit
+            ? giaiLedgerCursor(namespaceKey, allocations.at(-1)!.sequence) : null,
+        });
+      });
     } finally { await session.close(); }
   }
 

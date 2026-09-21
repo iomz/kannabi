@@ -42,3 +42,9 @@ export function cursorText(payload: Record<string, unknown>, field: string): str
   if (typeof value !== 'string' || !value) throw new ValidationError('Invalid cursor');
   return value;
 }
+
+export function cursorInteger(payload: Record<string, unknown>, field: string): number {
+  const value = payload[field];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new ValidationError('Invalid cursor');
+  return value;
+}

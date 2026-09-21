@@ -238,6 +238,30 @@ The API obtains the actor from the authenticated session; store reads and mutati
 Store actor arguments are trusted internal inputs, never accepted from request bodies.
 Direct database access is trusted; application validation and Neo4j uniqueness constraints jointly enforce integrity.
 
+## Agent access over MCP
+
+Kannabi exposes a domain-oriented [Model Context Protocol](https://modelcontextprotocol.io/) server over stdio, so an external agent can discover and inspect Assets without the browser UI.
+
+```sh
+pnpm build
+pnpm mcp
+```
+
+`pnpm dev:mcp` runs the same server from source. A host launches it as a child process and speaks MCP on its stdin/stdout; it reads `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` from the environment or `.env`, serves no network listener, and never calls Kannabi's HTTP API. Its stdout carries the protocol; diagnostics go to stderr.
+
+Six tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete GS1 identity, `get_asset` for inspection by native Asset ID, `list_groups` and `list_giai_namespaces` for the vocabulary those take, and `list_giai_issuances` for Kannabi's GIAI issuance ledger.
+Every result carries the native Asset ID, so a candidate from any tool can be inspected unambiguously, and each identifier is returned with the components that resolve it again.
+Class-level identifiers may resolve to several Assets; individual-level identifiers resolve to at most one.
+Allocation provenance is read from the ledger alone: an Asset whose stored GIAI merely begins with a managed company prefix is not reported as Kannabi-issued.
+
+The server also states, at connection time, which facts Kannabi owns and which it does not — location, events, observations and condition belong to other systems.
+That boundary is what lets a client report that Kannabi does not hold something instead of inferring it from an empty result.
+
+The server is read-only. It attaches to a database Kannabi has already opened, verifying the uniqueness constraints instead of installing them, and exposes no write, Cypher, or graph-traversal tool.
+Generic graph access, EPCIS, and observation stores stay independent MCP servers rather than being proxied here; [Neo4j's own MCP server](https://github.com/neo4j/mcp) already provides schema inspection and read-only Cypher for the underlying graph.
+
+**Security, current limitation.** The MCP process reads the entire Kannabi graph, including Assets private to a Group and the Group structure itself. It does not apply Kannabi's per-User readability, because a locally launched stdio process carries no Kannabi principal. Treat it as trusted local system-wide read access, run it only where that is acceptable, and never expose it over a network. Asset reads take an explicit audience, so a future principal or policy layer can narrow what the server sees without changing the tool surface.
+
 ## Authentication and Group access
 
 [Better Auth](https://better-auth.com/docs/integrations/hono) handles passwords, sessions, cookies, and local authentication.
