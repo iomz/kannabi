@@ -28,6 +28,7 @@ export const publicAudience: AssetAudience = Object.freeze({ kind: 'public' as c
 /** System-wide read access. See the module note before using it. */
 export const systemAudience: AssetAudience = Object.freeze({ kind: 'system' as const });
 
+/** Construct the ordinary authenticated audience for one User. */
 export function userAudience(actorKey: string): AssetAudience {
   return Object.freeze({ kind: 'user' as const, actorKey });
 }
@@ -45,6 +46,7 @@ export type NamedAudienceInput = AssetAudience | string;
  * that meaning accept it. */
 export type AudienceInput = NamedAudienceInput | null;
 
+/** Normalize a User key, explicit audience, or anonymous read into an audience. */
 export function assetAudience(value: AudienceInput): AssetAudience {
   if (value === null) return publicAudience;
   return typeof value === 'string' ? userAudience(value) : value;

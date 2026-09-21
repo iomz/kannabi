@@ -19,6 +19,7 @@ const studio = { key: 'group-studio', name: 'Shared Studio' };
 const reporter = { key: 'user-1', name: 'Alex Demo', status: 'active' as const };
 const gcp = '0614141';
 
+/** Build an immutable Asset fixture with sensible contract-test defaults. */
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
     id, name, identifiers: [], allocation: null, reportedBy: reporter,
@@ -56,13 +57,16 @@ const namespace = Object.freeze({
 
 type Call = { method: string; audience: AudienceInput; request?: unknown };
 
+/** Build a deterministic store double that records every MCP domain call. */
 function recordingStore(calls: Call[]) {
   const store = {
+    /** Record an Asset search and return the fixture candidates. */
     async findAssets(audience: AudienceInput, request: unknown): Promise<AssetPage> {
       calls.push({ method: 'findAssets', audience, request });
       return { assets: [camera, microscope], total: 3, matching: 2,
         scopes: { all: 2, mine: 0, group: 0, public: 1 }, nextCursor: 'next-page' };
     },
+    /** Record an identifier lookup and return the fixture candidates. */
     async lookupAssets(audience: AudienceInput, request: unknown): Promise<AssetLookup> {
       calls.push({ method: 'lookupAssets', audience, request });
       return Object.freeze({
@@ -71,18 +75,22 @@ function recordingStore(calls: Call[]) {
         assets: [camera, microscope], matching: 2, nextCursor: null,
       });
     },
+    /** Record a native-identity lookup and return its fixture when present. */
     async getAsset(id: string, audience: AudienceInput): Promise<Asset | null> {
       calls.push({ method: 'getAsset', audience, request: id });
       return id === camera.id ? camera : null;
     },
+    /** Record a Group listing and return the fixture vocabulary. */
     async listGroups(audience: AudienceInput) {
       calls.push({ method: 'listGroups', audience });
       return [workshop, studio];
     },
+    /** Record a namespace listing and return the configured fixture. */
     async listGiaiNamespaces(audience: AudienceInput) {
       calls.push({ method: 'listGiaiNamespaces', audience });
       return [namespace];
     },
+    /** Record a ledger read and return attached and detached fixture rows. */
     async giaiIssuances(audience: AudienceInput, request: unknown): Promise<GiaiIssuancePage> {
       calls.push({ method: 'giaiIssuances', audience, request });
       return Object.freeze({
@@ -103,6 +111,7 @@ function recordingStore(calls: Call[]) {
   return store as unknown as IdentityStore;
 }
 
+/** Connect an in-memory MCP client to a server backed by the supplied store. */
 async function connect(store: IdentityStore) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
@@ -113,6 +122,7 @@ async function connect(store: IdentityStore) {
   return client;
 }
 
+/** Assert a successful tool response and return its structured payload. */
 function structured(result: unknown): Record<string, unknown> {
   const payload = result as { structuredContent?: Record<string, unknown>; isError?: boolean };
   assert.equal(payload.isError, undefined, 'tool reported an error');
@@ -149,6 +159,7 @@ test('the MCP tool surface is discoverable and read-only', async (t) => {
   });
 
   await t.test('resolution and discovery are distinguishable from their descriptions', () => {
+    /** Return the published description for one discovered tool. */
     const description = (name: string) => tools.find((tool) => tool.name === name)!.description!;
     assert.match(description('search_assets'), /substring/i);
     assert.match(description('resolve_external_identifier'), /never matched by substring|Nothing is matched by substring/i);
@@ -370,6 +381,7 @@ test('the interface stays composable and self-describing', async (t) => {
   const client = await connect(recordingStore([]));
   t.after(() => client.close());
   const { tools } = await client.listTools();
+  /** Return one discovered tool by its protocol name. */
   const tool = (name: string) => tools.find((entry) => entry.name === name)!;
 
   await t.test('every returned handle is accepted by the tool that consumes it', () => {

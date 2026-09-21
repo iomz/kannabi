@@ -16,6 +16,7 @@ export type GiaiLedgerRequest = {
   namespaceKey: string; limit: number; after: number | null;
 };
 
+/** Validate and normalize a request to page through one namespace's ledger. */
 export function giaiLedgerQuery(query: Record<string, unknown>): GiaiLedgerRequest {
   const { namespaceKey, limit: rawLimit, cursor } = record(query, giaiLedgerFields);
   const key = requiredText(namespaceKey, 'namespace key');
@@ -34,6 +35,7 @@ export function giaiLedgerQuery(query: Record<string, unknown>): GiaiLedgerReque
   return { namespaceKey: key, limit, after };
 }
 
+/** Encode the namespace and last sequence that bind an issuance-page cursor. */
 export function giaiLedgerCursor(namespaceKey: string, sequence: number): string {
   return encodeCursor({ namespaceKey, sequence });
 }

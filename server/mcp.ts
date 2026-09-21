@@ -35,6 +35,7 @@ const connection = await serveStdio(() => createMcpServer(store), {
 });
 console.error('Kannabi MCP server ready on stdio (read-only, system-wide access)');
 
+let closing = false;
 /** Release the connection and the Neo4j pool exactly once, however the session
  * ended, then leave.
  *
@@ -42,7 +43,6 @@ console.error('Kannabi MCP server ready on stdio (read-only, system-wide access)
  * its own: without it this process outlives the host session that launched it
  * and holds Neo4j connections open for as long as the machine is up.
  */
-let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
