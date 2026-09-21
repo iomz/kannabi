@@ -11,6 +11,7 @@ import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
+import { externalIdentityKey } from './external-principal.js';
 import {
   allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
   storedIdentifier, type ExternalIdentifier, type IdentifierLevel, type IdentifierScheme,
@@ -26,6 +27,10 @@ export class DuplicateIdentityError extends Error {}
 export class ReferenceError extends Error {}
 export class AdministrationError extends Error {}
 export class LastAdministratorError extends Error {}
+/** A User an external principal resolved to. Deliberately thin: resolution
+ * answers who is acting, and every later authorization decision is made from
+ * the Group model as usual rather than from anything carried here. */
+export type ResolvedUser = Readonly<{ key: string; name: string }>;
 export type Member = { key: string; name: string; email: string; isAdmin: boolean;
   credentialState: 'pending' | 'established'; createdAt: string | null };
 export type MemberAccount = Member & { id: string };
@@ -161,6 +166,10 @@ const constraints = [
   'CREATE CONSTRAINT group_key IF NOT EXISTS FOR (n:Group) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT owner_key IF NOT EXISTS FOR (n:Owner) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT migration_key IF NOT EXISTS FOR (n:Migration) REQUIRE n.key IS UNIQUE',
+  // One external identity belongs to at most one User. The canonical form
+  // carries both the issuer and the subject, because the same subject string
+  // from two issuers is two different people.
+  'CREATE CONSTRAINT external_identity IF NOT EXISTS FOR (n:ExternalIdentity) REQUIRE n.canonical IS UNIQUE',
   // :IndividualIdentifier and :ClassIdentifier are persistence vocabulary, not
   // domain concepts. They exist only because Neo4j Community cannot express a
   // conditional uniqueness constraint, so the derived GS1 level is carried by
@@ -444,7 +453,7 @@ export class IdentityStore {
     const result = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
     for (const [label, properties] of [
       ['Settings', ['key']], ['MailConfiguration', ['key']], ['Media', ['key']], ['User', ['key']], ['Group', ['key']], ['Owner', ['key']],
-      ['Migration', ['key']], ['Asset', ['id']],
+      ['Migration', ['key']], ['Asset', ['id']], ['ExternalIdentity', ['canonical']],
       ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
       ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
       ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
@@ -794,6 +803,57 @@ export class IdentityStore {
       return { assets, total: row.get('total').toNumber(), scopes, matching: scopes[scope],
         nextCursor: rows.length > limit ? assetCursor(request, assets.at(-1)!) : null };
     } finally { await session.close(); }
+  }
+
+  /** The User an external identity names, or null when it names none.
+   *
+   * Matched on the issuer and subject pair alone. Email is never consulted:
+   * two issuers may assert the same address for different people, an address
+   * can be reassigned, and Kannabi would otherwise hand an account to whoever
+   * an unrelated authority says owns a mailbox.
+   *
+   * A tombstone or a banned account resolves to nothing. Both are states in
+   * which the web application refuses to act for this person, and an interface
+   * without a session must not become the way around that.
+   */
+  async userForExternalIdentity(issuer: string, subject: string): Promise<ResolvedUser | null> {
+    const canonical = externalIdentityKey(requiredText(issuer, 'issuer'), requiredText(subject, 'subject'));
+    const session = this.driver.session();
+    try {
+      const result = await session.executeRead((tx) => tx.run(`
+        MATCH (:ExternalIdentity {canonical: $canonical})<-[:HAS_EXTERNAL_IDENTITY]-(u:User)
+        WHERE u.accountDeletedAt IS NULL AND coalesce(u.banned, false) = false
+        RETURN u { .key, .name } AS user`, { canonical }));
+      return result.records.length ? Object.freeze(result.records[0].get('user') as ResolvedUser) : null;
+    } finally { await session.close(); }
+  }
+
+  /** Bind an external identity to an existing User.
+   *
+   * Administrative provisioning, deliberately outside every request path: an
+   * assertion from a gateway can never create or claim an account, so a new
+   * issuer subject reaches nothing until someone with database access says
+   * whose it is.
+   */
+  async linkExternalIdentity(userKey: string, issuer: string, subject: string): Promise<ResolvedUser> {
+    const key = requiredText(userKey, 'user key');
+    const canonical = externalIdentityKey(requiredText(issuer, 'issuer'), requiredText(subject, 'subject'));
+    return this.write(async (tx) => {
+      const existing = await tx.run(`
+        MATCH (:ExternalIdentity {canonical: $canonical})<-[:HAS_EXTERNAL_IDENTITY]-(u:User)
+        RETURN u.key AS key`, { canonical });
+      if (existing.records.length && existing.records[0].get('key') !== key) {
+        throw new DuplicateIdentityError('That external identity is already linked to another User');
+      }
+      const result = await tx.run(`
+        MATCH (u:User {key: $key}) WHERE u.accountDeletedAt IS NULL
+        MERGE (e:ExternalIdentity {canonical: $canonical})
+          ON CREATE SET e.issuer = $issuer, e.subject = $subject, e.linkedAt = datetime()
+        MERGE (u)-[:HAS_EXTERNAL_IDENTITY]->(e)
+        RETURN u { .key, .name } AS user`, { key, canonical, issuer, subject });
+      if (!result.records.length) throw new ReferenceError('User not found');
+      return Object.freeze(result.records[0].get('user') as ResolvedUser);
+    });
   }
 
   async members(actorKey: string): Promise<Member[]> {

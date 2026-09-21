@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createMcpServer, serverInfo } from './mcp-tools.js';
+import { systemAudienceResolver } from './mcp-principal.js';
 import { canonicalIdentifier } from './gs1.js';
 import { ValidationError } from './identity.js';
 import type {
@@ -107,7 +108,7 @@ async function connect(store: IdentityStore) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
   await Promise.all([
-    createMcpServer(store).connect(serverTransport),
+    createMcpServer(store, systemAudienceResolver()).connect(serverTransport),
     client.connect(clientTransport),
   ]);
   return client;

@@ -44,6 +44,8 @@ Preserve the README naming story at the bottom of README.
 - Deleting a Group's final member does not delete the Group; empty Groups are valid.
 - Every Asset read takes an explicit audience. A `system` audience reads system-wide and is never a claim that User/Group authorization was applied. Whatever can reach a `system`-audience process can read the entire instance, so putting an authenticated gateway in front of one changes nothing: the gateway authenticates a person while Kannabi still answers with everything. Its reach must stay limited to readers already entitled to every Asset it returns.
 - MCP tools reuse the same domain operations the HTTP API uses. MCP never calls Kannabi over HTTP and never reimplements persistence or domain semantics.
+- An external identity is keyed by its issuer and subject together; email is display context and never an identity key. Only a `user` subject type maps to a Kannabi User, and an identity nobody has linked resolves to nobody.
+- An asserted principal never creates or claims a Kannabi account, and a gateway's scopes never substitute for Kannabi's own authorization decision.
 - Kannabi's MCP exposes only Kannabi-owned semantics. Generic graph access, EPCIS, and observation sources remain independent MCP servers; Kannabi never proxies them and exposes no Cypher or graph traversal.
 - The MCP server states Kannabi's knowledge boundary in its connection instructions, naming the facts other systems own. An empty result must never be presentable as evidence about a fact Kannabi does not hold.
 - Every handle an MCP tool returns must be accepted unchanged by the tool that consumes it, and every field an agent must interpret carries its own description.

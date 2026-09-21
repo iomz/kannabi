@@ -6,7 +6,7 @@ import { giaiLedgerQuery } from './giai-ledger.js';
 import { isAssetId } from './asset-id.js';
 import { identifierSchemes } from './gs1.js';
 import { ValidationError } from './identity.js';
-import { systemAudience } from './asset-audience.js';
+import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
 import {
   ReferenceError as DomainReferenceError, type Asset, type GiaiIssuance, type GiaiNamespace,
   type IdentityStore,
@@ -184,7 +184,8 @@ function result<T>(value: T) {
 }
 
 function failed(error: unknown) {
-  if (error instanceof ValidationError || error instanceof DomainReferenceError) {
+  if (error instanceof PrincipalError || error instanceof ValidationError
+    || error instanceof DomainReferenceError) {
     return { content: [{ type: 'text' as const, text: error.message }], isError: true };
   }
   throw error;
@@ -251,7 +252,11 @@ Two distinctions matter here and must not be collapsed:
 
 Every tool here is read-only. This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
 
-export function createMcpServer(store: IdentityStore): McpServer {
+/** Build the server around a store and a rule for whose view each request runs
+ * under. The rule is a parameter rather than a mode flag read here, so the
+ * tools are identical whether this process reads the whole instance or acts as
+ * one User: only the audience they are handed differs. */
+export function createMcpServer(store: IdentityStore, resolveAudience: AudienceResolver): McpServer {
   const server = new McpServer(serverInfo, { capabilities: { tools: {} }, instructions });
   const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
 
@@ -297,14 +302,15 @@ export function createMcpServer(store: IdentityStore): McpServer {
         .describe('Pass back as cursor for the next page, or null when this page is the last. Opaque: never parse or construct one.'),
     }),
     annotations: readOnly,
-  }, async (input) => {
+  }, async (input, ctx) => {
     try {
+      const audience = await resolveAudience(ctx.mcpReq._meta);
       const request = assetPageRequest(queryRecord({
         q: input.query, group: input.groupKeys, scheme: input.schemes, identified: input.identified,
         reportedFrom: input.reportedFrom, reportedTo: input.reportedTo,
         sort: input.sort, dir: input.direction, limit: input.limit, cursor: input.cursor,
       }));
-      const page = await store.findAssets(systemAudience, request);
+      const page = await store.findAssets(audience, request);
       return result({
         assets: page.assets.map(summarise), matching: page.matching,
         total: page.total, nextCursor: page.nextCursor,
@@ -353,15 +359,16 @@ export function createMcpServer(store: IdentityStore): McpServer {
         .describe('Pass back as cursor for the next page of a class identity, or null when this page is the last.'),
     }),
     annotations: readOnly,
-  }, async (input) => {
+  }, async (input, ctx) => {
     try {
+      const audience = await resolveAudience(ctx.mcpReq._meta);
       const { limit, cursor, ...identifier } = input;
       const request = assetLookupQuery({
         ...Object.fromEntries(Object.entries(identifier).filter(([, value]) => value !== undefined)),
         ...(limit === undefined ? {} : { limit }),
         ...(cursor === undefined ? {} : { cursor }),
       });
-      const lookup = await store.lookupAssets(systemAudience, request);
+      const lookup = await store.lookupAssets(audience, request);
       if (lookup.identity.kind !== 'identifier') throw new ValidationError('An external identifier is required');
       const { canonical, scheme, level } = lookup.identity;
       return result({
@@ -391,14 +398,15 @@ export function createMcpServer(store: IdentityStore): McpServer {
       asset: detailSchema.nullable(),
     }),
     annotations: readOnly,
-  }, async ({ assetId }) => {
+  }, async ({ assetId }, ctx) => {
     try {
+      const audience = await resolveAudience(ctx.mcpReq._meta);
       if (!isAssetId(assetId)) {
         throw new ValidationError('A native Kannabi Asset ID is required: the lowercase UUIDv7 that search_assets '
           + 'and resolve_external_identifier return as assetId. To find an Asset from a description, use search_assets; '
           + 'from a GS1 identifier, use resolve_external_identifier.');
       }
-      const asset = await store.getAsset(assetId, systemAudience);
+      const asset = await store.getAsset(assetId, audience);
       return result({ found: asset !== null, asset: asset ? detail(asset) : null });
     } catch (error) { return failed(error); }
   });
@@ -417,9 +425,11 @@ export function createMcpServer(store: IdentityStore): McpServer {
       })).describe('Every Group in this Kannabi instance, ordered by name.'),
     }),
     annotations: readOnly,
-  }, async () => {
-    const groups = await store.listGroups(systemAudience);
-    return result({ groups: groups.map((group) => ({ key: group.key, name: group.name })) });
+  }, async (ctx) => {
+    try {
+      const groups = await store.listGroups(await resolveAudience(ctx.mcpReq._meta));
+      return result({ groups: groups.map((group) => ({ key: group.key, name: group.name })) });
+    } catch (error) { return failed(error); }
   });
 
   server.registerTool('list_giai_namespaces', {
@@ -435,9 +445,11 @@ export function createMcpServer(store: IdentityStore): McpServer {
         .describe('Every managed prefix in this instance. An empty list means no Group has configured one, so Kannabi has issued nothing at all.'),
     }),
     annotations: readOnly,
-  }, async () => {
-    const namespaces = await store.listGiaiNamespaces(systemAudience);
-    return result({ namespaces: namespaces.map(describeNamespace) });
+  }, async (ctx) => {
+    try {
+      const namespaces = await store.listGiaiNamespaces(await resolveAudience(ctx.mcpReq._meta));
+      return result({ namespaces: namespaces.map(describeNamespace) });
+    } catch (error) { return failed(error); }
   });
 
   server.registerTool('list_giai_issuances', {
@@ -472,9 +484,10 @@ export function createMcpServer(store: IdentityStore): McpServer {
         .describe('Pass back as cursor for the next page, or null when this page is the last.'),
     }),
     annotations: readOnly,
-  }, async (input) => {
+  }, async (input, ctx) => {
     try {
-      const page = await store.giaiIssuances(systemAudience, giaiLedgerQuery(queryRecord({
+      const audience = await resolveAudience(ctx.mcpReq._meta);
+      const page = await store.giaiIssuances(audience, giaiLedgerQuery(queryRecord({
         namespaceKey: input.namespaceKey, limit: input.limit, cursor: input.cursor,
       })));
       return result({
