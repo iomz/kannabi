@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { DuplicateIdentityError, IdentityStore } from './identity-store.js';
+import { DuplicateIdentityError, IdentityStore, ReferenceError as DomainReferenceError } from './identity-store.js';
 import { assetPageRequest } from './asset-page.js';
 import { PrincipalError, principalAudienceResolver, principalMetaKey } from './mcp-principal.js';
 import { systemAudience } from './asset-audience.js';
@@ -95,6 +95,52 @@ test('MCP operations run under an authenticated Kannabi principal', { skip: !uri
     // Re-linking the same pair to the same User stays idempotent.
     const again = await store.linkExternalIdentity(alex.key, idp, 'subject-alex');
     assert.equal(again.key, alex.key);
+  });
+
+  await t.test('concurrent links for one identity settle on a single owner', async () => {
+    // The uniqueness constraint keeps one node per canonical form and says
+    // nothing about how many Users may point at it, so ownership has to be
+    // serialised explicitly or two racing links each add themselves.
+    const contenders = await Promise.all(Array.from({ length: 6 },
+      (_, n) => store.createUser(`Contender ${n}`)));
+    const results = await Promise.allSettled(contenders.map((user) =>
+      store.linkExternalIdentity(user.key, idp, 'subject-contested')));
+    const linked = results.filter((result) => result.status === 'fulfilled');
+    assert.equal(linked.length, 1, 'exactly one link may succeed');
+    for (const result of results.filter((entry) => entry.status === 'rejected')) {
+      assert.ok((result as PromiseRejectedResult).reason instanceof DuplicateIdentityError);
+    }
+    const owners = await query(`
+      MATCH (:ExternalIdentity {canonical: $canonical})<-[:HAS_EXTERNAL_IDENTITY]-(u:User)
+      RETURN count(DISTINCT u) AS owners`, { canonical: JSON.stringify([idp, 'subject-contested']) });
+    assert.equal(owners.records[0].get('owners').toNumber(), 1, 'one identity, one owner');
+    // And the identity still resolves, deterministically, to that one User.
+    const resolved = await store.userForExternalIdentity(idp, 'subject-contested');
+    assert.equal(resolved!.key, (linked[0] as PromiseFulfilledResult<{ key: string }>).value.key);
+  });
+
+  await t.test('an identity owned by several Users is refused, not guessed', async () => {
+    // Unreachable through the API now; reachable by editing the database, and
+    // picking one owner would hand somebody another person's access.
+    const first = await store.createUser('Shared One');
+    const second = await store.createUser('Shared Two');
+    await store.linkExternalIdentity(first.key, idp, 'subject-shared');
+    await query(`
+      MATCH (e:ExternalIdentity {canonical: $canonical}), (u:User {key: $key})
+      MERGE (u)-[:HAS_EXTERNAL_IDENTITY]->(e)`,
+    { canonical: JSON.stringify([idp, 'subject-shared']), key: second.key });
+    await assert.rejects(() => store.userForExternalIdentity(idp, 'subject-shared'),
+      DuplicateIdentityError);
+    await assert.rejects(() => resolve({ [principalMetaKey]: asserted({ subject: 'subject-shared' }) }),
+      (error: Error) => error instanceof PrincipalError && /more than one Kannabi User/.test(error.message));
+  });
+
+  await t.test('linking to an account that does not exist creates nothing', async () => {
+    const before = await query('MATCH (e:ExternalIdentity) RETURN count(e) AS n');
+    await assert.rejects(() => store.linkExternalIdentity('no-such-user', idp, 'subject-orphan'),
+      DomainReferenceError);
+    const after = await query('MATCH (e:ExternalIdentity) RETURN count(e) AS n');
+    assert.equal(after.records[0].get('n').toNumber(), before.records[0].get('n').toNumber());
   });
 
   await t.test('a tombstoned account resolves to nobody', async () => {

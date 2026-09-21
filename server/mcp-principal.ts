@@ -1,7 +1,7 @@
 import { externalPrincipal, humanSubjectType, type ExternalPrincipal } from './external-principal.js';
 import { systemAudience, userAudience, type NamedAudienceInput } from './asset-audience.js';
 import { ValidationError } from './identity.js';
-import type { IdentityStore } from './identity-store.js';
+import { DuplicateIdentityError, type IdentityStore } from './identity-store.js';
 
 /** Refusal to act for a caller, as distinct from refusing what they asked.
  *
@@ -75,7 +75,16 @@ export function principalAudienceResolver(store: IdentityStore): AudienceResolve
     // Issuer and subject only. The scopes a gateway granted describe what it
     // allowed through, never what Kannabi permits, and the resolved User's
     // Groups remain the whole of the authorization decision.
-    const user = await store.userForExternalIdentity(principal.issuer, principal.subject);
+    let user;
+    try {
+      user = await store.userForExternalIdentity(principal.issuer, principal.subject);
+    } catch (error) {
+      // An identity owned by several Users cannot be acted for at all, and the
+      // caller must see a refusal rather than a transport-level failure.
+      if (!(error instanceof DuplicateIdentityError)) throw error;
+      throw new PrincipalError('That authenticated identity is linked to more than one Kannabi User, '
+        + 'so this server will not act for it. An administrator must repair the link.');
+    }
     if (!user) {
       throw new PrincipalError('That authenticated identity is not linked to a Kannabi User. '
         + 'An administrator links one with `pnpm identity:link`.');

@@ -823,8 +823,16 @@ export class IdentityStore {
       const result = await session.executeRead((tx) => tx.run(`
         MATCH (:ExternalIdentity {canonical: $canonical})<-[:HAS_EXTERNAL_IDENTITY]-(u:User)
         WHERE u.accountDeletedAt IS NULL AND coalesce(u.banned, false) = false
-        RETURN u { .key, .name } AS user`, { canonical }));
-      return result.records.length ? Object.freeze(result.records[0].get('user') as ResolvedUser) : null;
+        RETURN collect(DISTINCT u { .key, .name }) AS users`, { canonical }));
+      const users = result.records[0].get('users') as ResolvedUser[];
+      // Linking serialises ownership, so this cannot arise through the API.
+      // If it arises anyway, whoever is asserting this identity is one of
+      // several people and Kannabi does not know which: refuse rather than
+      // pick, because picking would hand one person another's access.
+      if (users.length > 1) {
+        throw new DuplicateIdentityError('That external identity is linked to more than one User');
+      }
+      return users.length ? Object.freeze(users[0]) : null;
     } finally { await session.close(); }
   }
 
@@ -839,20 +847,34 @@ export class IdentityStore {
     const key = requiredText(userKey, 'user key');
     const canonical = externalIdentityKey(requiredText(issuer, 'issuer'), requiredText(subject, 'subject'));
     return this.write(async (tx) => {
-      const existing = await tx.run(`
-        MATCH (:ExternalIdentity {canonical: $canonical})<-[:HAS_EXTERNAL_IDENTITY]-(u:User)
-        RETURN u.key AS key`, { canonical });
-      if (existing.records.length && existing.records[0].get('key') !== key) {
-        throw new DuplicateIdentityError('That external identity is already linked to another User');
-      }
-      const result = await tx.run(`
+      // 1. Take the identity's write lock before reading who owns it, so a
+      //    concurrent link blocks here rather than reading the same empty
+      //    answer and adding a second owner. The uniqueness constraint keeps
+      //    one node per canonical form; it says nothing about how many Users
+      //    may point at that node.
+      //
+      //    The User is matched first and in the same statement, so a link to
+      //    an account that does not exist still creates nothing at all.
+      const locked = await tx.run(`
         MATCH (u:User {key: $key}) WHERE u.accountDeletedAt IS NULL
         MERGE (e:ExternalIdentity {canonical: $canonical})
           ON CREATE SET e.issuer = $issuer, e.subject = $subject, e.linkedAt = datetime()
-        MERGE (u)-[:HAS_EXTERNAL_IDENTITY]->(e)
-        RETURN u { .key, .name } AS user`, { key, canonical, issuer, subject });
-      if (!result.records.length) throw new ReferenceError('User not found');
-      return Object.freeze(result.records[0].get('user') as ResolvedUser);
+        SET e.lock = true
+        WITH u, e
+        OPTIONAL MATCH (owner:User)-[:HAS_EXTERNAL_IDENTITY]->(e)
+        RETURN u { .key, .name } AS user, collect(DISTINCT owner.key) AS owners`,
+      { key, canonical, issuer, subject });
+      if (!locked.records.length) throw new ReferenceError('User not found');
+      // 2. Decided under the lock, so the answer cannot go stale before the
+      //    relationship is written.
+      const owners = locked.records[0].get('owners') as string[];
+      if (owners.some((owner) => owner !== key)) {
+        throw new DuplicateIdentityError('That external identity is already linked to another User');
+      }
+      await tx.run(`
+        MATCH (u:User {key: $key}), (e:ExternalIdentity {canonical: $canonical})
+        MERGE (u)-[:HAS_EXTERNAL_IDENTITY]->(e)`, { key, canonical });
+      return Object.freeze(locked.records[0].get('user') as ResolvedUser);
     });
   }
 
