@@ -7,44 +7,48 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { AppSidebar } from '../web/app-sidebar.js';
 import { WorkspaceHeader } from '../web/workspace-header.js';
 import { SidebarInset, SidebarProvider } from '../web/components/ui/sidebar.js';
-import { Toaster } from '../web/components/ui/toast.js';
-import { mount } from './dom-render.js';
+import { Toaster } from '../web/components/ui/sonner.js';
+import { mount, withTheme } from './dom-render.js';
 
 const user = { key: 'u-1', name: 'Hanako', email: 'hanako@example.test' };
 
 /** The whole shell, assembled the way the root route assembles it. */
 function shell(at: string, { search = true, isAdmin = false } = {}) {
-  const element = createElement(Toaster, { timeout: 5000 },
-    createElement(SidebarProvider, null,
-      createElement(AppSidebar, { user, isAdmin, avatarHash: null, busy: false }),
-      createElement(SidebarInset, null,
-        createElement(WorkspaceHeader, { enabled: true, search }))));
-  return mount(createElement(RouterProvider, {
+  const element = createElement(SidebarProvider, null,
+    createElement(AppSidebar, { user, isAdmin, avatarHash: null, busy: false }),
+    createElement(SidebarInset, null,
+      createElement(WorkspaceHeader, { enabled: true, search })),
+    createElement(Toaster, { seconds: 5 }));
+  return mount(withTheme(createElement(RouterProvider, {
     router: createMemoryRouter([{ path: '*', element }], { initialEntries: [at] }),
-  }));
+  })));
 }
 
 test('the shell mounts as one piece, with navigation and workspace beside each other', () => {
   const view = shell('/');
   assert.ok(document.querySelector('[data-slot="sidebar"]'), 'the navigation is present');
   assert.ok(document.querySelector('[data-slot="sidebar-inset"]'), 'the workspace is present');
-  assert.ok(document.querySelector('[data-slot="toast-viewport"]'), 'and one place for messages');
+  // Sonner's region is present from the start and holds nothing until there is
+  // something to say, which is why it is the region and not a toast.
+  assert.ok(document.querySelector('section[aria-live="polite"]'), 'and one place for messages');
   view.stop();
 });
 
-test('the navigation is narrowed by its own rail, not by a control in the workspace', () => {
+test('the navigation carries the control that narrows it', () => {
   const view = shell('/');
+  const trigger = document.querySelector<HTMLButtonElement>('[data-slot="sidebar-trigger"]');
+  assert.ok(trigger, 'there is a visible control');
+  // It belongs to the navigation by construction: it is inside it, in its own
+  // header, and nothing of it sits in the workspace beside the search field.
+  assert.ok(trigger.closest('[data-slot="sidebar-header"]'), 'the control is in the navigation');
+  assert.equal(trigger.closest('header'), null, 'and not in the workspace');
+  assert.match(trigger.textContent ?? '', /Toggle Sidebar/, 'named for anybody who cannot see it');
+
+  // The rail stays as the wide pointer target along the boundary, deliberately
+  // out of the tab order so one action does not take two tab stops.
   const rail = document.querySelector<HTMLButtonElement>('[data-slot="sidebar-rail"]');
-  assert.ok(rail, 'the rail is present');
-  // It belongs to the navigation by construction: it is inside it.
-  assert.ok(rail.closest('[data-slot="sidebar"]'), 'the rail is part of the navigation');
-  assert.equal(rail.closest('header'), null, 'and nothing of it is in the workspace');
-  // Named and reachable: a pointer finds it on the boundary, a keyboard finds
-  // it in the tab order, and either way it says what it does.
-  assert.equal(rail.getAttribute('aria-label'), 'Toggle Sidebar');
-  assert.equal(rail.tabIndex, 0);
-  // On a wide screen the workspace header carries no sidebar control at all.
-  assert.equal(document.querySelector('header [data-slot="sidebar-trigger"]'), null);
+  assert.ok(rail?.closest('[data-slot="sidebar"]'), 'the rail is part of the navigation too');
+  assert.equal(rail?.tabIndex, -1);
   view.stop();
 });
 
@@ -52,13 +56,19 @@ test('narrowing the navigation is a state the whole shell can see', () => {
   const view = shell('/');
   const sidebar = () => document.querySelector('[data-slot="sidebar"]');
   assert.equal(sidebar()?.getAttribute('data-state'), 'expanded');
-  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
+  view.click(document.querySelector('[data-slot="sidebar-trigger"]'));
   assert.equal(sidebar()?.getAttribute('data-state'), 'collapsed');
   // Collapsed to icons rather than away: every destination stays reachable.
   assert.equal(sidebar()?.getAttribute('data-collapsible'), 'icon');
-  // And the same control puts it back, so nothing has to be found elsewhere.
-  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
+  // The same control puts it back, and it is still there to be clicked —
+  // narrowing the navigation must not take away the way to widen it.
+  const trigger = document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]');
+  assert.ok(trigger?.closest('[data-slot="sidebar-header"]'), 'still in the navigation');
+  view.click(trigger);
   assert.equal(sidebar()?.getAttribute('data-state'), 'expanded');
+  // Either control does it: the rail is the same action with a wider target.
+  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
+  assert.equal(sidebar()?.getAttribute('data-state'), 'collapsed');
   view.stop();
 });
 

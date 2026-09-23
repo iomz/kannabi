@@ -12,13 +12,13 @@ import { AnonymousShell, isPublicShellHandle, usesAnonymousShell, usesWorkspaceH
 import { AppSidebar } from './app-sidebar';
 import { WorkspaceHeader } from './workspace-header';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { Toaster } from '@/components/ui/toast';
+import { Toaster } from '@/components/ui/sonner';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
     unwrap(await api.me.$get()), unwrap(await api.settings.$get()),
   ]);
-  return { ...account, themeId: settings.themeId };
+  return { ...account, themeId: settings.themeId, toastSeconds: settings.toastSeconds };
 }
 export async function clientAction() {
   const result = await authClient.signOut();
@@ -61,11 +61,22 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const colorScheme = colorSchemePreview ?? resolvedAppearance;
   useLayoutEffect(() => applyDocumentTheme(theme.id, colorScheme), [theme.id, colorScheme]);
   useEffect(() => cacheInstanceTheme(theme.id), [theme.id]);
+  // Sonner stops its timer while the tab is hidden. Nothing in its markup says
+  // so, so the fact is mirrored onto the document for the remaining-time bar
+  // to read; without it the bar would run on while the toast did not.
+  useEffect(() => {
+    const mirror = () => {
+      document.documentElement.dataset.kannabiDocumentHidden = String(document.hidden);
+    };
+    mirror();
+    document.addEventListener('visibilitychange', mirror);
+    return () => document.removeEventListener('visibilitychange', mirror);
+  }, []);
   // One viewport for the whole application, outside the shell branch, so a
   // message is not lost when the shell it was raised in is swapped out.
   return <ThemeRuntimeContext.Provider value={{ themeId, setThemeId, appearance, setAppearance,
     colorScheme, setColorSchemePreview }}>
-    <Toaster timeout={5000}>
+    <Toaster seconds={loaderData.toastSeconds} />
     {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
       error={actionData?.error} publicContent={publicContent} />
       : <SidebarProvider open={!collapsed}
@@ -81,6 +92,5 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
           </main>
         </SidebarInset>
     </SidebarProvider>}
-    </Toaster>
   </ThemeRuntimeContext.Provider>;
 }

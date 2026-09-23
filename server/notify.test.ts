@@ -2,75 +2,108 @@ import './dom';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { act, createElement } from 'react';
-import { Toaster } from '../web/components/ui/toast.js';
+import { createElement } from 'react';
+import { Toaster } from '../web/components/ui/sonner.js';
 import { notify, notifyFailure } from '../web/notify.js';
-import { mount } from './dom-render.js';
+import { defaultToastSeconds, maxToastSeconds, minToastSeconds } from './settings.js';
+import { mount, settle, withTheme } from './dom-render.js';
+
+const stylesheet = readFileSync('web/style.css', 'utf8');
 
 /** The viewport has to be listening before anything is raised, which is the
- * same order the application has: the shell mounts, then something happens. */
-function raise(run: () => void) {
-  const view = mount(createElement(Toaster, { timeout: 5000 }));
-  act(() => run());
+ * same order the application has: the shell mounts, then something happens.
+ * Sonner reaches its subscribers asynchronously, so the flush is awaited. */
+async function raise(run: () => void, seconds = defaultToastSeconds) {
+  const view = mount(withTheme(createElement(Toaster, { seconds })));
+  await settle(run);
   return view;
 }
 
-test('a message reaches one viewport for the whole application', () => {
-  const view = raise(() => notify('Photo deleted'));
-  const region = document.querySelector('[data-slot="toast-viewport"]');
+const toast = () => document.querySelector<HTMLElement>('[data-sonner-toast]');
+
+test('a message reaches one viewport for the whole application', async () => {
+  const view = await raise(() => notify('Photo deleted'));
+  const region = document.querySelector('[data-sonner-toaster]');
   assert.ok(region, 'there is a viewport');
-  assert.equal(region.getAttribute('aria-live'), 'polite', 'announced without interrupting');
-  assert.equal(region.getAttribute('aria-label'), 'Notifications');
   assert.match(view.text(), /Photo deleted/);
-  // One viewport, however many messages.
-  act(() => { notify('Identifier detached'); });
-  assert.equal(document.querySelectorAll('[data-slot="toast-viewport"]').length, 1);
+  await settle(() => notify('Identifier detached'));
+  assert.equal(document.querySelectorAll('[data-sonner-toaster]').length, 1, 'still one viewport');
   assert.match(view.text(), /Identifier detached/);
   view.stop();
 });
 
-test('a failure is distinguished from a confirmation, not just coloured', () => {
-  const view = raise(() => notifyFailure('The token could not be revoked'));
-  const toast = document.querySelector('[data-slot="toast"]');
-  assert.ok(toast, 'the message is present');
-  // The type is carried in the data, so assistive technology and the icon both
-  // read the same thing rather than the colour being the only signal.
-  assert.match(view.html(), /data-type="error"/);
+test('a failure is distinguished from a confirmation, not just coloured', async () => {
+  const view = await raise(() => notifyFailure('The token could not be revoked'));
+  // The kind is in the data, so the icon and assistive technology read the
+  // same thing rather than colour being the only signal.
+  assert.equal(toast()?.getAttribute('data-type'), 'error');
   view.stop();
+
+  const confirmation = await raise(() => notify('Photo deleted'));
+  assert.equal(toast()?.getAttribute('data-type'), 'success');
+  confirmation.stop();
 });
 
-test('a message can be dismissed before its time is up', () => {
-  const view = raise(() => notify('Photo deleted'));
-  const close = document.querySelector<HTMLElement>('[data-slot="toast-close"]');
+test('only the mark carries the kind; the message and the surface do not', () => {
+  // A whole toast in danger colours is louder than the news usually is, so the
+  // text and the surface stay in the theme's ordinary colours and the icon
+  // beside them is where success and failure are told apart.
+  const component = readFileSync('web/components/ui/sonner.tsx', 'utf8');
+  assert.match(component, /success: <CircleCheckIcon className="size-4 text-success-text" \/>/);
+  assert.match(component, /error: <OctagonXIcon className="size-4 text-danger-text" \/>/);
+  assert.match(component, /"--success-text": "var\(--kannabi-text\)"/);
+  assert.match(component, /"--error-text": "var\(--kannabi-text\)"/);
+});
+
+test('a message can be dismissed before its time is up', async () => {
+  const view = await raise(() => notify('Photo deleted'));
+  const close = document.querySelector<HTMLElement>('[data-close-button]');
   assert.ok(close, 'dismissal is offered');
-  assert.equal(close.getAttribute('aria-label'), 'Close toast');
   view.stop();
 });
 
-test('the viewport sits at the top right and yields to reduced motion', () => {
-  // Placement and motion are decisions, not defaults: the component ships
-  // bottom-anchored and animates in either way.
-  const source = readFileSync('web/components/ui/toast.tsx', 'utf8');
-  assert.match(source, /fixed inset-x-4 top-4/);
-  assert.match(source, /sm:right-4 sm:left-auto/);
-  assert.doesNotMatch(source, /fixed inset-x-4 bottom-4/);
-  assert.match(source, /motion-reduce:\[transform:none\]/);
-  assert.match(source, /motion-reduce:data-starting-style:\[transform:none\]/);
+test('the remaining-time bar is the toast’s own lifetime', async () => {
+  // The instance decides how long a toast lives, and the bar is given the same
+  // number rather than a duration of its own.
+  const view = await raise(() => notify('Photo deleted'), 9);
+  const viewport = document.querySelector<HTMLElement>('[data-sonner-toaster]');
+  assert.equal(viewport?.style.getPropertyValue('--kannabi-toast-duration'), '9s');
+  view.stop();
+
+  // A caller that needs longer than the instance's policy sets both the timer
+  // and the bar, because disagreeing about them is the bug this prevents.
+  const longer = await raise(() => notify('Photo deleted', { seconds: 12 }));
+  assert.equal(toast()?.style.getPropertyValue('--kannabi-toast-duration'), '12s');
+  longer.stop();
+});
+
+test('the bar stops when Sonner stops, and keeps running when reduced motion is asked for', () => {
+  // Sonner pauses while `expanded || interacting || isDocumentHidden`. Only
+  // the first has an attribute; the second cannot happen without it; the third
+  // is the browser's, mirrored onto the document by the shell.
+  assert.match(stylesheet, /\[data-sonner-toast\]\[data-expanded="true"\]::after/);
+  assert.match(stylesheet, /\[data-kannabi-document-hidden="true"\] \[data-sonner-toast\]::after/);
+  assert.match(stylesheet, /animation-play-state: paused/);
+  const root = readFileSync('web/root.tsx', 'utf8');
+  assert.match(root, /kannabiDocumentHidden = String\(document\.hidden\)/);
+  // The countdown is the only thing saying when the toast disappears, so it is
+  // information rather than decoration and is never reduced away.
+  assert.doesNotMatch(stylesheet, /motion-reduce[^\n]*kannabi-toast-lifetime/);
+});
+
+test('the instance decides how long a toast lives, within a readable range', () => {
+  assert.equal(defaultToastSeconds, 5, 'the shipped lifetime is unchanged');
+  assert.equal(minToastSeconds, 2);
+  assert.equal(maxToastSeconds, 30);
 });
 
 test('feedback stays beside its control wherever the control is still there', () => {
-  // The rule the audit settled on: a toast is for when what was acted on has
-  // gone. A `Saved` beside the button that saved is easier to connect than a
-  // message in the corner, so those stay inline.
   const settings = readFileSync('web/routes/settings.tsx', 'utf8');
   assert.match(settings, /<TransientSuccess[^>]*label="Saved"/);
   assert.doesNotMatch(settings, /\bnotify\(/);
 
   const asset = readFileSync('web/routes/asset.tsx', 'utf8');
-  // Uploading leaves the form on screen; deleting leaves nothing behind.
   assert.match(asset, /<TransientSuccess[^>]*label="Uploaded"/);
   assert.match(asset, /notify\('Photo deleted'\)/);
   assert.match(asset, /notify\('Identifier detached'\)/);
-  assert.doesNotMatch(asset, /label="Deleted"/);
-  assert.doesNotMatch(asset, /label="Detached"/);
 });

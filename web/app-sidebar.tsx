@@ -5,10 +5,11 @@ import { displayVersion, kannabiVersion } from './version';
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton,
-  SidebarMenuSubItem, SidebarRail, useSidebar,
+  SidebarMenuSubItem, SidebarRail, SidebarTrigger, useSidebar,
 } from '@/components/ui/sidebar';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
 export type ShellUser = { key: string; name: string; email: string };
@@ -169,13 +170,21 @@ function Account({ user, avatarHash, busy }: {
         <span className="truncate">{user.name}</span>
         <span aria-hidden="true" className="ml-auto text-sidebar-foreground/60">⌄</span>
       </SidebarMenuButton>} />
-    <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-52">
-      {/* Straight into what can be done. The row that opened this menu is the
-          account, still visible underneath it, so repeating the name, the
-          address and the role here would say nothing the person did not just
-          click on. */}
-      <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>
-      <DropdownMenuItem render={<Link to="/settings" onClick={close} />}>Settings</DropdownMenuItem>
+    <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-56">
+      {/* Which account these actions belong to, and nothing else. The row that
+          opened the menu is still visible underneath it with the avatar and
+          the name on it, so repeating those would say nothing new; the address
+          is the one thing it does not already show, and it is quiet because it
+          is context rather than a thing to do.
+          Only this account ever sees it: nowhere else in Kannabi's workspace
+          surfaces publish an address. */}
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
+          {user.email}
+        </DropdownMenuLabel>
+        <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>
+        <DropdownMenuItem render={<Link to="/settings" onClick={close} />}>Settings</DropdownMenuItem>
+      </DropdownMenuGroup>
       <DropdownMenuSeparator />
       {/* Sign-out is answered by the root route, which is where the session
           is held, rather than by whatever page happens to be open. */}
@@ -193,7 +202,16 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
   const location = useLocation();
   const active = activeDestination(location.pathname);
   return <Sidebar collapsible="icon">
-    <SidebarHeader><Brand /></SidebarHeader>
+    <SidebarHeader>
+      {/* The control sits in the navigation it narrows, which is what makes it
+          the navigation's rather than the workspace's. Nothing else shares its
+          row once the navigation is narrow: the brand steps aside so the way
+          back is always the visible thing. */}
+      <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
+        <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden"><Brand /></div>
+        <SidebarTrigger size="icon" className="shrink-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground" />
+      </div>
+    </SidebarHeader>
     <SidebarContent>
       <Workspace active={active} />
       {isAdmin && <Administration active={active} />}

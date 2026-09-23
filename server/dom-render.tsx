@@ -1,5 +1,6 @@
 import { act, createElement, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ThemeRuntimeContext } from '../web/theme-runtime.js';
 
 /** Put a component into a real document and read it back the way a person
  * would: by role, by accessible name, by what is actually on screen.
@@ -40,3 +41,31 @@ export function mount(element: ReactElement) {
 
 export const show = (component: Parameters<typeof createElement>[0], props: object) =>
   mount(createElement(component, props));
+
+/** The theme runtime a component needs when it reads the colour scheme.
+ *
+ * Kannabi resolves the scheme from an account preference before the first
+ * paint, so anything that follows it — the toaster, a preview — needs the
+ * runtime in scope rather than a media query.
+ */
+export function withTheme(children: ReactElement): ReactElement {
+  return createElement(ThemeRuntimeContext.Provider, {
+    value: {
+      appearance: 'system', setAppearance: () => {},
+      colorScheme: 'light', setColorSchemePreview: () => {},
+      themeId: 'default', setThemeId: () => {},
+    },
+  }, children);
+}
+
+/** Let effects, subscriptions and microtasks settle.
+ *
+ * Sonner reaches its subscribers asynchronously, so a toast raised in a test
+ * is not on screen until the loop has turned once.
+ */
+export async function settle(run?: () => void): Promise<void> {
+  await act(async () => {
+    run?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}

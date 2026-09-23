@@ -23,10 +23,15 @@ test('the brand block holds the brand and nothing that competes with it', () => 
   // row. The control moved to the boundary, so the whole phrase is present.
   assert.match(markup, />Identity &amp; inventory</);
   assert.match(markup, />v[\w.]+</, 'the instance says which Kannabi it is');
+  // The tagline was squeezed into an ellipsis by a control sharing the brand's
+  // own row. The collapse control is back in the header, but beside the brand
+  // rather than inside it: the brand owns the rest of the row and truncates on
+  // its own terms.
   const header = /data-slot="sidebar-header"[\s\S]*?data-slot="sidebar-content"/.exec(markup);
   assert.ok(header, 'the header is rendered');
-  assert.doesNotMatch(header[0], /Collapse|Expand|Toggle Sidebar/,
-    'nothing in the brand block narrows the navigation');
+  assert.match(header[0], /min-w-0 flex-1[^>]*>(?=<ul data-slot="sidebar-menu")/,
+    'the brand has the row to itself');
+  assert.match(header[0], /data-slot="sidebar-trigger"/, 'and the control sits beside it');
 });
 
 test('Inventory is a category that opens its default surface', () => {
@@ -109,17 +114,18 @@ function open(props: Parameters<typeof AppSidebar>[0], at = '/') {
   };
 }
 
-test('the account menu is actions, not a second copy of the account', () => {
+test('the account menu is actions, under the address they belong to', () => {
   const view = open({ user, isAdmin: true, avatarHash: null, busy: false });
   assert.deepEqual(view.items(), ['View profile', 'Settings', 'Sign out']);
-  // The row that opened the menu is the account and is still on screen, so
-  // nothing in the menu repeats who it belongs to.
-  const menu = document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent ?? '';
-  assert.doesNotMatch(menu, /hanako@example\.test/, 'no address');
-  assert.doesNotMatch(menu, /System administrator/, 'no role');
-  assert.doesNotMatch(menu, /Hanako/, 'no name');
-  // Subtracted from the menu, not from the account: the address is still the
-  // account's own to see in Settings.
+  const menu = document.querySelector('[data-slot="dropdown-menu-content"]');
+  const text = menu?.textContent ?? '';
+  // The address says which account these actions are for. It is the one thing
+  // the row underneath does not already show.
+  assert.match(text, /hanako@example\.test/, 'the address gives the context');
+  // Everything the row already shows stays there rather than being repeated.
+  assert.doesNotMatch(text, /System administrator/, 'no role');
+  assert.doesNotMatch(text, /Hanako(?!@)/, 'no name');
+  assert.equal(menu?.querySelector('img, [class*="rounded-full"]'), null, 'no second avatar');
   assert.match(view.text(), /Hanako/, 'the anchor still names the account');
   view.stop();
 });

@@ -134,6 +134,54 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/** A toast that goes away on its own says so by shortening a rule along its
+ * own bottom edge.
+ *
+ * Sonner has no progress API and exposes neither the remaining time nor the
+ * paused state, so the bar cannot ask it anything. What it can do is obey the
+ * same rules Sonner's own timer obeys — it pauses while
+ * `expanded || interacting || isDocumentHidden` — and those are reachable from
+ * outside:
+ *
+ *  - `expanded` is written onto every toast as `data-expanded`, which hover
+ *    and focus set, so the bar pauses with the timer through CSS alone. That
+ *    attribute is part of Sonner's rendered markup rather than its documented
+ *    API, and is the one thing here that could move under a Sonner upgrade.
+ *  - `interacting` is pointer-down on the toaster and has no attribute, but it
+ *    cannot happen without the pointer being over the toaster, which has
+ *    already set `expanded`.
+ *  - `isDocumentHidden` is the browser's own `document.hidden`, mirrored onto
+ *    the document by the shell.
+ *
+ * The bar therefore tracks the toast's real lifetime rather than running an
+ * animation that happens to take the same time. The duration is inherited from
+ * the toaster, or overridden per toast by a caller that asked for its own.
+ */
+@layer components {
+  @keyframes kannabi-toast-lifetime { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+  [data-sonner-toast] { position: relative; overflow: hidden; }
+  [data-sonner-toast]::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    background: currentColor;
+    opacity: .35;
+    transform-origin: left center;
+    animation: kannabi-toast-lifetime var(--kannabi-toast-duration, 5s) linear forwards;
+  }
+  /* Hovering or focusing expands the stack, which is exactly when Sonner stops
+     its timer, so the bar stops with it. */
+  [data-sonner-toast][data-expanded="true"]::after,
+  [data-kannabi-document-hidden="true"] [data-sonner-toast]::after {
+    animation-play-state: paused;
+  }
+  /* The countdown is the only thing saying when this disappears, so it is
+     information rather than decoration and reduced motion does not remove it. */
+}
+
 @layer base {
   /* Preflight leaves every border at zero width with no colour of its own, so
      a component that asks for a border gets Kannabi's rather than the

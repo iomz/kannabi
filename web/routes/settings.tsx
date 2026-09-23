@@ -5,7 +5,7 @@ import { ThemeSelector } from '../theme-selector';
 import { TimezonePicker } from '../timezone-picker';
 import type { ThemeId } from '../../shared/theme';
 import type { MailConfiguration, MailSecurity, PasswordAction } from '../../server/mail';
-import type { Settings } from '../../server/settings';
+import { maxToastSeconds, minToastSeconds, type Settings } from '../../server/settings';
 import { mailPasswordAction } from '../mail-form';
 import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
@@ -277,7 +277,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     setCurrent(next);
     if (change.themeId) setThemeId(next.themeId);
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
-      themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays) },
+      themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
+      toastSeconds: String(next.toastSeconds) },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -323,6 +324,16 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         </Field>
         <p className={settingHelp}>Leave empty to allow tokens that never expire. A token's expiry is
           absolute and is fixed when it is created.</p>
+        <Field label="How long a message stays on screen (seconds)">
+          <Input name="toastSeconds" type="number" min={minToastSeconds} max={maxToastSeconds} step={1}
+            inputMode="numeric" defaultValue={current.toastSeconds} disabled={busy}
+            onBlur={(event) => {
+              const next = Number(event.currentTarget.value.trim());
+              if (Number.isSafeInteger(next) && next !== current.toastSeconds) update({ toastSeconds: next });
+            }} />
+        </Field>
+        <p className={settingHelp}>Between {minToastSeconds} and {maxToastSeconds}. Resting the pointer
+          on a message holds it, however short this is.</p>
       </fieldset></fetcher.Form>
     </Panel>
     <MailSettings mail={mail} />

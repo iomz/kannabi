@@ -9,7 +9,8 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator';
  * this is for: the test opens the thing and looks for it by role and name.
  *
  * It is registered per test file rather than globally, so a file that does not
- * need a document does not pay for one.
+ * need a document does not pay for one, and it is kept out of the server build
+ * along with `dom-render.tsx`: neither belongs in what ships.
  */
 GlobalRegistrator.register({ url: 'https://kannabi.test/' });
 // React 19 checks this before using `act`.

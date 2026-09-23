@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { validateSettings, type Settings } from './settings.js';
+import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
 import neo4j, { int } from 'neo4j-driver';
 import {
@@ -1141,7 +1141,9 @@ export class IdentityStore {
   async settings(): Promise<Settings> {
     const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'})
       RETURN s { .requirePhoto, .displayTimezone, .themeId,
-        apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays) } AS settings`));
+        apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays),
+        toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)) } AS settings`,
+    { defaultToastSeconds }));
     return result.records[0].get('settings');
   }
 
@@ -1151,7 +1153,8 @@ export class IdentityStore {
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
         SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
           s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
-          s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays
+          s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
+          s.toastSeconds = $settings.toastSeconds
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;

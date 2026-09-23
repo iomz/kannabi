@@ -285,19 +285,14 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
       data-sidebar="rail"
       data-slot="sidebar-rail"
       aria-label="Toggle Sidebar"
-      // Upstream keeps the rail out of the tab order because it assumes a
-      // second trigger elsewhere on the page. Kannabi's rail is the only
-      // control on a wide screen, so it has to be reachable by keyboard as
-      // well as by pointer.
-      tabIndex={0}
+      // Out of the tab order on purpose: the sidebar's own header carries the
+      // control a keyboard reaches, and two tab stops for one action is noise.
+      // The rail stays as the wide, forgiving pointer target on the boundary.
+      tabIndex={-1}
       onClick={toggleSidebar}
       title="Toggle Sidebar"
       className={cn(
         "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
-        // A control nobody can see is not an affordance. The rail keeps a
-        // resting line on the boundary and brightens under the pointer, and
-        // shows a focus ring when it is reached by keyboard.
-        "after:bg-sidebar-border/50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
         "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
         "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full hover:group-data-[collapsible=offcanvas]:bg-sidebar",
