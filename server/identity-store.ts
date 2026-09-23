@@ -11,6 +11,7 @@ import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
+import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change-provenance.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
   allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
@@ -46,48 +47,6 @@ export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'delete
 /** An external identifier as carried by an Asset. `key` addresses this
  * attachment for detachment; everything else is derived by the GS1 boundary. */
 export type AttachedIdentifier = ExternalIdentifier & Readonly<{ key: string }>;
-
-/** Who made an Asset's current record true, and under whose authority.
- *
- * Kannabi already records who first reported an Asset. This records the most
- * recent canonical change to it, which is a different question: `reportedBy`
- * never moves, and a change made years later has its own actor.
- *
- * `assertedBy` and `acceptedBy` are deliberately separate. A change may be
- * produced by something that is not a person — an importer, an agent acting
- * for someone, a rule — while the authority that admitted it is always a
- * Kannabi User. Collapsing the two would make it impossible to tell a
- * machine's interpretation from a person's decision after the fact, so the
- * distinction is recorded even when they coincide: `assertedBy` is null
- * exactly when the accepting User asserted the change directly.
- *
- * This is bounded, current-state provenance. It answers who made the record
- * true, never what it used to be; prior values and the sequence of changes are
- * a separate capability.
- *
- * Provenance is evidence, never authority. Nothing here participates in any
- * readability or editability decision, and appearing in it grants nothing.
- */
-export type ChangeProvenance = Readonly<{
-  /** The agent that produced the change, or null when the accepting User
-   * asserted it directly. Opaque to Kannabi: it is never parsed or matched. */
-  assertedBy: string | null;
-  /** The User whose authority admitted the change, rendered like any other
-   * attribution so a deleted account stays unidentifiable. */
-  acceptedBy: ReporterAttribution;
-  acceptedAt: string;
-  /** What the change was based on, if the caller stated it. Opaque, and never
-   * a reference Kannabi resolves or validates. */
-  basis: string | null;
-}>;
-
-/** What a caller may say about where a change came from.
- *
- * Both fields are claims about the caller itself, so nothing here can widen
- * what the caller may do: the accepting authority is always taken from the
- * authenticated actor, never from this.
- */
-export type ChangeOrigin = Readonly<{ assertedBy?: string | null; basis?: string | null }>;
 
 export type Asset = Readonly<{
   id: string;
@@ -351,7 +310,8 @@ const changeMatch = 'OPTIONAL MATCH (acceptor:User {key: a.changeAcceptedBy})';
  * `acceptor` in scope. The whole record is absent together: an Asset written
  * before Kannabi recorded this has no half-filled provenance. */
 const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
-      assertedBy: a.changeAssertedBy,
+      assertedBy: CASE WHEN a.changeAssertedById IS NULL THEN null
+        ELSE { id: a.changeAssertedById, label: a.changeAssertedByLabel } END,
       acceptedBy: ${attribution('acceptor', 'a.changeAcceptedBy')},
       acceptedAt: toString(a.changeAcceptedAt), basis: a.changeBasis } END`;
 
@@ -363,28 +323,8 @@ const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
  * happened, or present for one that did not.
  */
 const recordChange = `SET a.changeAcceptedBy = $actorKey, a.changeAcceptedAt = datetime(),
-    a.changeAssertedBy = $assertedBy, a.changeBasis = $basis`;
-
-/** The most a caller may say about itself, bounded so provenance stays a fixed
- * cost per Asset rather than a place to accumulate documents. Absent, blank
- * and whitespace-only all mean the accepting User asserted the change
- * directly; there is no third state to interpret. */
-const changeTextLimit = 200;
-function originText(value: unknown, field: string): string | null {
-  if (value === undefined || value === null) return null;
-  const text = requiredText(value, field);
-  if (text.length > changeTextLimit) {
-    throw new ValidationError(`${field} must be at most ${changeTextLimit} characters`);
-  }
-  return text;
-}
-function changeParams(origin: ChangeOrigin = {}): { assertedBy: string | null; basis: string | null } {
-  const input = record(origin, ['assertedBy', 'basis']);
-  return {
-    assertedBy: originText(input.assertedBy, 'assertedBy'),
-    basis: originText(input.basis, 'basis'),
-  };
-}
+    a.changeAssertedById = $assertedById, a.changeAssertedByLabel = $assertedByLabel,
+    a.changeBasis = $basis`;
 
 /** How each sortable field is ordered and compared in Cypher.
  *
@@ -1092,8 +1032,33 @@ export class IdentityStore {
     });
   }
 
+  /** The Better Auth user id behind a domain actor key, or null when the
+   * account is not active. Credential machinery keys on the auth id; the rest
+   * of the domain never does. */
+  async authUserId(actorKey: string): Promise<string | null> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
+      WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL RETURN u.id AS id`,
+    { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length ? String(result.records[0].get('id')) : null;
+  }
+
+  /** Whether this actor is an administrator right now.
+   *
+   * Read at the moment it matters rather than captured anywhere, so
+   * administrative authority ends when the role does. It says nothing about
+   * Asset access, which stays Group-derived.
+   */
+  async isAdministrator(actorKey: string): Promise<boolean> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey, role: 'admin'})
+      WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL RETURN u.key`,
+    { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length > 0;
+  }
+
   async settings(): Promise<Settings> {
-    const result = await this.write((tx) => tx.run("MATCH (s:Settings {key: 'instance'}) RETURN s { .requirePhoto, .displayTimezone, .themeId } AS settings"));
+    const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'})
+      RETURN s { .requirePhoto, .displayTimezone, .themeId,
+        apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays) } AS settings`));
     return result.records[0].get('settings');
   }
 
@@ -1102,7 +1067,8 @@ export class IdentityStore {
     return this.write(async (tx) => {
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
         SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
-          s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId
+          s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
+          s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;
@@ -1208,7 +1174,7 @@ export class IdentityStore {
    * inside its own transaction rather than duplicating any of it. */
   private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
     actorKey: string, identifier: ExternalIdentifier,
-    change: { assertedBy: string | null; basis: string | null }): Promise<void> {
+    change: ReturnType<typeof changeParams>): Promise<void> {
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
       RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
         + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,

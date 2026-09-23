@@ -10,6 +10,11 @@ Preserve the README naming story at the bottom of README.
 - `reportedBy` is immutable provenance, never an authorization grant.
 - Every canonical Asset change records, in the same statement as the change, who asserted it and whose authority accepted it. The asserter stays distinguishable from the acceptor even when they are the same person, the accepting authority comes from the authenticated actor and never from caller input, and appearing in provenance grants nothing.
 - Change provenance is bounded current-state provenance describing the latest change only. It never becomes a history log, and it never replaces `reportedBy`.
+- The asserting credential is recorded as a stable server-generated identity plus the label it carried at the time of the write. The identity is identity; the label is a historical snapshot and is never matched on, keyed by, or looked up. Renaming or revoking a credential never alters or hides existing provenance.
+- `basis` identifies the basis; it is not the basis itself. It is an opaque bounded ASCII reference the asserting client owns, and Kannabi never generates, parses, dereferences, or registers namespace meaning for one. It is the only Tier 1 provenance value a caller supplies, and a public Asset may expose it.
+- An API token is a delegated credential issued under one User's authority, never an independent principal. It authenticates as that User and passes through the same Group-derived authorization, evaluated live. A User issues tokens only for themself; an administrator may revoke another User's token but never create one, because minting one would grant that User's Asset access.
+- An admin-enabled token is a ceiling on the credential, never a grant. Administrator authority is re-read from the owning User on every request, and no token ever reaches an Asset outside its owner's Groups.
+- The browser Origin requirement guards cookie-authenticated writes, which a browser sends automatically. A bearer credential is authenticated on its own and never falls back to a cookie, so presenting one can never opt a cookie-authenticated request out of that check.
 - Do not introduce direct User-to-Asset ACLs.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
@@ -62,7 +67,7 @@ Settings persistence: Simple discrete preferences persist on selection/change. C
 Use Hono for server behavior, React Router v7 Framework Mode for UI, and Neo4j for master data.
 Keep one package and ordinary files until a concrete need requires more structure.
 Keep object bytes behind the small S3 storage interface and photo metadata in Neo4j.
-Keep administrative settings limited to photo-on-report policy, display timezone, and built-in instance theme; store timestamps as absolute instants.
+Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, and the API token lifetime ceiling; store timestamps as absolute instants.
 System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.

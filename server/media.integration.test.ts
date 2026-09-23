@@ -21,7 +21,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   await legacy.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0 REMOVE s.themeId, s.accentColor");
   await legacy.close();
   const store = await IdentityStore.open(driver);
-  assert.deepEqual(await store.settings(), { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
+  assert.deepEqual(await store.settings(),
+    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null });
   const storage = storageFromEnv();
   await storage.check();
   const media = new MediaService(store, storage);
@@ -56,7 +57,17 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request('/settings', 'PATCH', change, false)).status, 401);
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: user.key });
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
-    assert.deepEqual(await store.settings(), { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue' });
+    assert.deepEqual(await store.settings(),
+      { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: null });
+    // The API token lifetime ceiling is instance policy and travels with the
+    // rest of the settings object, including back to the unconfigured state.
+    assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
+      displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: 30 }))).status, 200);
+    assert.equal((await store.settings()).apiTokenMaxLifetimeDays, 30);
+    assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
+      displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: 0 }))).status, 400);
+    assert.equal((await request('/settings', 'PATCH', change)).status, 200);
+    assert.equal((await store.settings()).apiTokenMaxLifetimeDays, null);
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'unknown', themeId: 'default' }))).status, 400);
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }))).status, 400);
   });

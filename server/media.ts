@@ -1,4 +1,5 @@
 import { IdentityStore, type Asset, type ReportAsset, type ReportingContext } from './identity-store.js';
+import type { ChangeOrigin } from './change-provenance.js';
 import { ValidationError } from './identity.js';
 import type { ObjectStorage } from './storage.js';
 
@@ -28,23 +29,23 @@ export class MediaService {
       throw error;
     }
   }
-  async report(input: ReportAsset, context: ReportingContext, file?: File) {
-    if (!file) return this.store.reportAsset(input, context);
+  async report(input: ReportAsset, context: ReportingContext, file?: File, origin: ChangeOrigin = {}) {
+    if (!file) return this.store.reportAsset(input, context, null, origin);
     if (!(await this.store.listGroups(context.actorKey)).some((g) => g.key === context.groupKey)) {
       throw new ValidationError('Reporting Group access required');
     }
-    return this.upload(file, (key) => this.store.reportAsset(input, context, key));
+    return this.upload(file, (key) => this.store.reportAsset(input, context, key, origin));
   }
-  async add(assetId: string, actorKey: string, file: File) {
+  async add(assetId: string, actorKey: string, file: File, origin: ChangeOrigin = {}) {
     await this.store.assertCanEdit(assetId, actorKey);
-    return this.upload(file, (key) => this.store.attachPhoto(assetId, actorKey, key));
+    return this.upload(file, (key) => this.store.attachPhoto(assetId, actorKey, key, origin));
   }
   async read(assetId: string, key: string, actorKey: string | null) {
     const photo = await this.store.getPhoto(assetId, key, actorKey);
     return { photo, bytes: await this.storage.get(key) };
   }
-  async remove(assetId: string, actorKey: string, key: string) {
-    await this.store.beginPhotoDeletion(assetId, actorKey, key);
+  async remove(assetId: string, actorKey: string, key: string, origin: ChangeOrigin = {}) {
+    await this.store.beginPhotoDeletion(assetId, actorKey, key, origin);
     try { await this.cleanup(key); }
     catch (error) { console.error('Photo cleanup pending', error); }
   }

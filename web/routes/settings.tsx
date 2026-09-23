@@ -45,9 +45,13 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   const intent = String(data.get('intent') ?? '');
   try {
     if (intent === 'settings') {
+      const ceiling = String(data.get('apiTokenMaxLifetimeDays') ?? '').trim();
       const { settings } = await unwrap(await api.settings.$patch({ json: {
         requirePhoto: data.get('requirePhoto') === 'on', displayTimezone: String(data.get('displayTimezone') ?? ''),
         themeId: String(data.get('themeId') ?? '') as ThemeId,
+        // Blank is the unconfigured state: no ceiling, so a token may be
+        // created with no expiry. It is not a number Kannabi chose.
+        apiTokenMaxLifetimeDays: ceiling === '' ? null : Number(ceiling),
       } }));
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
@@ -242,7 +246,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     setCurrent(next);
     if (change.themeId) setThemeId(next.themeId);
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
-      themeId: next.themeId }, { method: 'post', action: '/admin/settings' });
+      themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays) },
+    { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
     setPreviewMode(mode);
@@ -273,6 +278,17 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         <p className="setting-help">Timestamps remain stored as absolute instants.</p>
         <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
           onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
+        <label>Longest API token lifetime (days)
+          <input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
+            defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
+            onBlur={(event) => {
+              const raw = event.currentTarget.value.trim();
+              const next = raw === '' ? null : Number(raw);
+              if (next !== current.apiTokenMaxLifetimeDays) update({ apiTokenMaxLifetimeDays: next });
+            }} />
+        </label>
+        <p className="setting-help">Leave empty to allow tokens that never expire. A token's expiry is
+          absolute and is fixed when it is created.</p>
       </fieldset></fetcher.Form>
     </section>
     <MailSettings mail={mail} />

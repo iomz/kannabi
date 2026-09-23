@@ -54,6 +54,14 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     try {
       const public_ = await session.run("MATCH (a:Asset) WHERE a.name STARTS WITH 'Legacy' RETURN DISTINCT a.isPublic AS p");
       assert.deepEqual(public_.records.map((r) => r.get('p')), [false]);
+      // A schema backfill has no actor and asserts nothing. Stamping one would
+      // manufacture provenance for a change nobody made, so every migrated
+      // Asset keeps an absent record rather than a plausible-looking one.
+      const stamped = await session.run(`MATCH (a:Asset) WHERE a.name STARTS WITH 'Legacy'
+        AND (a.changeAcceptedAt IS NOT NULL OR a.changeAcceptedBy IS NOT NULL
+          OR a.changeAssertedById IS NOT NULL OR a.changeBasis IS NOT NULL)
+        RETURN count(a) AS n`);
+      assert.equal(stamped.records[0].get('n').toNumber(), 0);
       const constraints = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
       for (const label of ['Asset', 'Migration']) {
         assert.ok(constraints.records.some((row) => row.get('type') === 'UNIQUENESS'
@@ -369,8 +377,10 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
 
   await t.test('every canonical change records who accepted it and who asserted it', async () => {
     const stored = async (id: string) => (await query(`MATCH (a:Asset {id: $id})
-      RETURN a.changeAcceptedBy AS acceptedBy, a.changeAssertedBy AS assertedBy,
-        a.changeBasis AS basis, a.changeAcceptedAt IS NOT NULL AS stamped`, { id })).records[0].toObject();
+      RETURN a.changeAcceptedBy AS acceptedBy, a.changeAssertedById AS assertedById,
+        a.changeAssertedByLabel AS assertedByLabel, a.changeBasis AS basis,
+        a.changeAcceptedAt IS NOT NULL AS stamped`, { id })).records[0].toObject();
+    const credential = (n: number) => ({ id: `token-${n}`, label: `Importer ${n}` });
 
     // Reporting is itself the first canonical change, so provenance is present
     // from the start rather than appearing only once something is edited.
@@ -386,34 +396,38 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     // Each write path moves the record forward, in the same statement as the change.
     const paths: [string, () => Promise<unknown>][] = [
       ['update', () => store.updateAsset(asset.id, { name: 'Provenance bench 2' }, user.key,
-        { assertedBy: 'importer/1', basis: 'row 42' })],
-      ['attach', () => store.attachIdentifier(asset.id, user.key, gtin, { assertedBy: 'importer/2' })],
+        { assertedBy: credential(1), basis: 'depot:assets:42' })],
+      ['attach', () => store.attachIdentifier(asset.id, user.key, gtin, { assertedBy: credential(2) })],
       ['detach', async () => {
         const current = (await store.getAsset(asset.id, user.key))!;
         const attached = current.identifiers.find((i) => i.canonical === '(01)00614141123452')!;
-        return store.detachIdentifier(asset.id, user.key, attached.key, { assertedBy: 'importer/3' });
+        return store.detachIdentifier(asset.id, user.key, attached.key, { assertedBy: credential(3) });
       }],
       ['photo attach', async () => {
         const photoKey = await store.reservePhoto('image/png', 12);
-        return store.attachPhoto(asset.id, user.key, photoKey, { assertedBy: 'importer/4' });
+        return store.attachPhoto(asset.id, user.key, photoKey, { assertedBy: credential(4) });
       }],
       ['photo delete', async () => {
         const current = (await store.getAsset(asset.id, user.key))!;
-        return store.beginPhotoDeletion(asset.id, user.key, current.photos[0].key, { assertedBy: 'importer/5' });
+        return store.beginPhotoDeletion(asset.id, user.key, current.photos[0].key, { assertedBy: credential(5) });
       }],
     ];
     let previous = asset.provenance!.acceptedAt;
     for (const [index, [label, run]] of paths.entries()) {
       await run();
       const now = (await store.getAsset(asset.id, user.key))!.provenance!;
-      assert.equal(now.assertedBy, `importer/${index + 1}`, label);
+      assert.deepEqual(now.assertedBy, credential(index + 1), label);
       assert.deepEqual(now.acceptedBy, { ...user, status: 'active' }, label);
       assert.ok(Date.parse(now.acceptedAt) >= Date.parse(previous), label);
       // Only the update stated a basis, and it is carried verbatim rather than
       // parsed; every later change replaces the whole record instead of
       // inheriting it.
-      assert.equal(now.basis, index === 0 ? 'row 42' : null, label);
-      assert.equal((await stored(asset.id)).assertedBy, now.assertedBy, label);
+      assert.equal(now.basis, index === 0 ? 'depot:assets:42' : null, label);
+      // The credential is flattened onto the Asset, so a revoked or renamed
+      // token can never make historical provenance unreadable.
+      const row = await stored(asset.id);
+      assert.equal(row.assertedById, credential(index + 1).id, label);
+      assert.equal(row.assertedByLabel, credential(index + 1).label, label);
       previous = now.acceptedAt;
     }
 
@@ -423,24 +437,37 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     const namespace = await store.configureGiaiNamespace(user.key, allocGroup.key, { gcp: '0778899' });
     const allocatable = await store.reportAsset({ name: 'Allocated under provenance' },
       { actorKey: user.key, groupKey: allocGroup.key });
-    const allocated = await store.allocateGiai(allocatable.id, user.key, namespace.key, { assertedBy: 'importer/6' });
-    assert.equal(allocated.provenance!.assertedBy, 'importer/6');
+    const allocated = await store.allocateGiai(allocatable.id, user.key, namespace.key, { assertedBy: credential(6) });
+    assert.deepEqual(allocated.provenance!.assertedBy, credential(6));
     assert.deepEqual(allocated.allocation!.allocatedBy, { ...user, status: 'active' });
 
-    // The caller describes itself; it never nominates the accepting authority.
-    // `assertedBy` is a claim, so it may not silently become one.
+    // The asserting credential never nominates the accepting authority.
     const claimed = await store.updateAsset(asset.id, { name: 'Provenance bench 3' }, user.key,
-      { assertedBy: outsider.key, basis: outsider.key });
+      { assertedBy: { id: outsider.key, label: 'Impostor' } });
     assert.equal(claimed.provenance!.acceptedBy.key, user.key);
     assert.equal((await stored(asset.id)).acceptedBy, user.key);
 
     // Origin is validated like any other input and cannot carry structure.
     for (const origin of [
-      { assertedBy: '' }, { assertedBy: '   ' }, { assertedBy: 'x\u0000y' }, { assertedBy: 7 },
-      { basis: 'b'.repeat(201) }, { assertedBy: 'a'.repeat(201) }, { unsupported: 'x' },
+      { assertedBy: { id: '', label: 'x' } }, { assertedBy: { id: 'x', label: '   ' } },
+      { assertedBy: { id: 'x\u0000y', label: 'x' } }, { assertedBy: { id: 'x', label: 'a'.repeat(81) } },
+      { assertedBy: 'importer' }, { assertedBy: { id: 'x' } }, { assertedBy: { id: 'x', label: 'y', extra: 1 } },
+      { unsupported: 'x' },
     ]) {
       await assert.rejects(store.updateAsset(asset.id, { name: 'Rejected' }, user.key, origin as never),
         ValidationError, JSON.stringify(origin));
+    }
+
+    // `basis` is a bounded ASCII reference: it identifies the basis and is
+    // never the basis itself, which is what keeps it safe to publish.
+    for (const basis of ['depot:assets:123', 'erp:equipment:4567', 'a', 'A1/b_c.d-e', 'x'.repeat(128)]) {
+      const ok = await store.updateAsset(asset.id, { name: 'Provenance bench 3' }, user.key, { basis });
+      assert.equal(ok.provenance!.basis, basis, basis);
+    }
+    for (const basis of ['has space', 'ends\tcontrol', '日本語', '_leading', '-leading', '.leading',
+      'x'.repeat(129), 'semi;colon', 'query?x', 'at@sign', 7, {}]) {
+      await assert.rejects(store.updateAsset(asset.id, { name: 'Rejected' }, user.key, { basis } as never),
+        ValidationError, JSON.stringify(basis));
     }
     assert.equal((await store.getAsset(asset.id, user.key))!.name, 'Provenance bench 3');
   });

@@ -11,7 +11,16 @@ test('display timezone changes presentation without changing the absolute instan
   assert.match(displayInstant('2026-07-01T12:00:00Z', 'America/New_York'), /08:00/);
   assert.equal(instant, '2026-01-01T23:30:00.000Z');
   assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast' }),
-    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast' });
+    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast', apiTokenMaxLifetimeDays: null });
+  // The token-lifetime ceiling is optional policy: absent and null both mean
+  // no ceiling, and a ceiling must be a whole number of days.
+  assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+    apiTokenMaxLifetimeDays: 30 }),
+  { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: 30 });
+  for (const apiTokenMaxLifetimeDays of [0, -1, 1.5, '30', 36501]) {
+    assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', apiTokenMaxLifetimeDays }), String(apiTokenMaxLifetimeDays));
+  }
   assert.throws(() => validateSettings({ requirePhoto: true, displayTimezone: 'not-a-zone', themeId: 'default' }));
   assert.throws(() => validateSettings({ requirePhoto: 'true', displayTimezone: 'UTC', themeId: 'default' }));
   assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }));
