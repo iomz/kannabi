@@ -12,6 +12,7 @@ import { AnonymousShell, isPublicShellHandle, usesAnonymousShell, usesWorkspaceH
 import { AppSidebar } from './app-sidebar';
 import { WorkspaceHeader } from './workspace-header';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { Toaster } from '@/components/ui/toast';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -58,8 +59,11 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const colorScheme = colorSchemePreview ?? resolvedAppearance;
   useLayoutEffect(() => applyDocumentTheme(theme.id, colorScheme), [theme.id, colorScheme]);
   useEffect(() => cacheInstanceTheme(theme.id), [theme.id]);
+  // One viewport for the whole application, outside the shell branch, so a
+  // message is not lost when the shell it was raised in is swapped out.
   return <ThemeRuntimeContext.Provider value={{ themeId, setThemeId, appearance, setAppearance,
     colorScheme, setColorSchemePreview }}>
+    <Toaster timeout={5000}>
     {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
       error={actionData?.error} publicContent={publicContent} />
       : <SidebarProvider open={!collapsed}
@@ -75,5 +79,6 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
           </main>
         </SidebarInset>
     </SidebarProvider>}
+    </Toaster>
   </ThemeRuntimeContext.Provider>;
 }

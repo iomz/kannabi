@@ -3,6 +3,7 @@ import { api, unwrap } from './api';
 import { apiTokenCreateInput } from './api-token-form';
 import { CopyField } from './copy-field';
 import { Icon } from './icon';
+import { notify } from './notify';
 import { Switch } from './switch';
 import { displayDate } from '../server/settings.js';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -205,6 +206,9 @@ export function ApiTokens({ tokens: initial, maxLifetimeDays, isAdmin }: {
       await unwrap(await api['api-tokens'][':id'].$delete({ param: { id: target.id } }));
       setTokens((current) => current.filter((token) => token.id !== target.id));
       setRevoking(null);
+      // The row is gone and the dialog with it, so the confirmation has no
+      // control left to sit beside.
+      notify(`“${target.label}” revoked`);
     } catch (failure) {
       setRevokeError(failure instanceof Error ? failure.message : 'The token could not be revoked');
     } finally {

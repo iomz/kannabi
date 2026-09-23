@@ -10,6 +10,7 @@ import { Switch } from '../switch';
 import { Icon } from '../icon';
 import { PhotoDeleteConfirmation } from '../photo-delete-confirmation';
 import { TransientSuccess } from '../transient-success';
+import { notify } from '../notify';
 import { AllocateGiai, IdentifierForm, IdentifierList } from '../asset-identifiers';
 import type { Route } from './+types/asset';
 
@@ -117,8 +118,14 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
     if (uploadResult?.saved) uploadForm.current?.reset();
   }, [uploadResult]);
   useEffect(() => {
-    if (deleteResult?.saved) setPhotoToDelete(null);
+    // The photo has left the grid and the dialog that asked has closed, so
+    // there is nothing left on screen to put the confirmation beside.
+    if (deleteResult?.saved) { setPhotoToDelete(null); notify('Photo deleted'); }
   }, [deleteResult]);
+  useEffect(() => {
+    // Likewise a detached identifier: the row it named is no longer there.
+    if (identifiers.data?.kind === 'detach-identifier' && identifiers.data.saved) notify('Identifier detached');
+  }, [identifiers.data]);
   return <>
     {authenticated && <Link to={back} className="back-link">{back.startsWith('/lookup') ? '← Lookup' : '← Assets'}</Link>}<div className="page-heading"><div><p className="eyebrow">Asset</p><h1>{asset.name}</h1></div>
       {authenticated ? <span className={'badge ' + (asset.isPublic ? 'public' : '')}>{asset.isPublic ? 'Public' : 'Group access'}</span>
@@ -134,9 +141,6 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
     <section className="panel"><h2>External identifiers</h2>
       <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
-      <div className="asset-photo-status" role="status" aria-live="polite" aria-atomic="true">
-        <TransientSuccess trigger={identifierResult?.kind === 'detach-identifier' && identifierResult.saved ? 'detached' : null} label="Detached" />
-      </div>
       {canEdit && <allocate.Form method="post" className="giai-allocation">
         <AllocateGiai namespaces={namespaces} allocation={asset.allocation} busy={allocateBusy}
           error={allocateResult?.error ?? null}
@@ -161,9 +165,6 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
         </button>}
       </div>)}</div>
       {canEdit && <>
-        <div className="asset-photo-status" role="status" aria-live="polite" aria-atomic="true">
-          <TransientSuccess trigger={deleteResult?.saved ? deleteResult.photoKey : null} label="Deleted" />
-        </div>
         <upload.Form ref={uploadForm} method="post" encType="multipart/form-data">
         <fieldset disabled={uploadBusy} aria-busy={uploadBusy}>
           <input type="hidden" name="intent" value="photo" />
