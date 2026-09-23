@@ -5,14 +5,17 @@ import { api, unwrap } from './api';
 import { DestructiveConfirmation } from './destructive-confirmation';
 import { PasswordField } from './password-field';
 import { TransientSuccess } from './transient-success';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ActionRow, ActionStatus, Field, Hint, StatusPill } from './ui';
 
 type FormFeedback = { saved: boolean; error: string | null } | undefined;
 
 function FormStatus({ feedback, savedLabel }: { feedback: FormFeedback; savedLabel: string }) {
-  return <div className="profile-action-status" role="status" aria-live="polite" aria-atomic="true">
+  return <ActionStatus className="max-[420px]:w-full">
     {feedback?.saved ? <TransientSuccess trigger={feedback} label={savedLabel} />
-      : feedback?.error ? <span className="settings-status-pill error" role="alert">{feedback.error}</span> : null}
-  </div>;
+      : feedback?.error ? <StatusPill tone="error" role="alert">{feedback.error}</StatusPill> : null}
+  </ActionStatus>;
 }
 
 export async function saveProfile(request: Request) {
@@ -27,8 +30,8 @@ export async function saveProfile(request: Request) {
 export function ProfileEditor({ member, feedback }: { member: Member; feedback?: FormFeedback }) {
   const busy = useNavigation().state !== 'idle';
   return <Form method="post"><fieldset disabled={busy}>
-    <label>Name<input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" /></label>
-    <div className="profile-action-row"><button>Save profile</button><FormStatus feedback={feedback} savedLabel="Saved" /></div>
+    <Field label="Name"><Input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" /></Field>
+    <ActionRow><Button>Save profile</Button><FormStatus feedback={feedback} savedLabel="Saved" /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -37,11 +40,11 @@ export function EmailAddressEditor({ email, feedback }: { email: string; feedbac
   return <Form method="post"><fieldset disabled={busy}>
     <input type="hidden" name="intent" value="email" />
     <h2>Email address</h2>
-    <p className="hint">Changing email immediately updates your sign-in address and password-recovery destination.</p>
-    <label>Email<input name="newEmail" defaultValue={email} required maxLength={254} type="email" autoComplete="email" /></label>
+    <Hint className="mb-4">Changing email immediately updates your sign-in address and password-recovery destination.</Hint>
+    <Field label="Email"><Input name="newEmail" defaultValue={email} required maxLength={254} type="email" autoComplete="email" /></Field>
     <PasswordField label="Current password" name="currentPassword" required autoComplete="current-password" />
-    <div className="profile-action-row"><button>Change email</button>
-      <FormStatus feedback={feedback} savedLabel="Changed" /></div>
+    <ActionRow><Button>Change email</Button>
+      <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -59,7 +62,7 @@ export function PasswordEditor({ feedback }: { feedback?: FormFeedback }) {
   return <Form method="post"><fieldset disabled={busy}>
     <input type="hidden" name="intent" value="password" />
     <h2>Password</h2>
-    <p className="hint">Changing your password signs out your other sessions.</p>
+    <Hint className="mb-4">Changing your password signs out your other sessions.</Hint>
     <PasswordField label="Current password" name="currentPassword" required autoComplete="current-password"
       value={currentPassword} onChange={(event) => setCurrentPassword(event.currentTarget.value)} />
     <PasswordField label="New password" name="newPassword" required minLength={12} maxLength={128}
@@ -68,9 +71,9 @@ export function PasswordEditor({ feedback }: { feedback?: FormFeedback }) {
     <PasswordField label="Confirm new password" name="confirmation" required minLength={12} maxLength={128}
       autoComplete="new-password" value={confirmation}
       onChange={(event) => setConfirmation(event.currentTarget.value)} />
-    <p className="hint">Use at least 12 characters.</p>
-    <div className="profile-action-row"><button>Change password</button>
-      <FormStatus feedback={feedback} savedLabel="Changed" /></div>
+    <Hint className="mb-4">Use at least 12 characters.</Hint>
+    <ActionRow><Button>Change password</Button>
+      <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -81,9 +84,9 @@ export function DeleteAccount({ member, deletionBlocked, feedback }: {
   const [confirming, setConfirming] = useState(false);
   return <>
     <h2>Delete account</h2>
-    <p className="hint">Disables sign-in, removes personal account data and Group memberships, and preserves Asset provenance.</p>
-    {member.isAdmin && <p className="hint">A final system administrator must promote another member before deleting their account.</p>}
-    <button type="button" className="danger" onClick={() => setConfirming(true)}>Delete account</button>
+    <Hint className="mb-3">Disables sign-in, removes personal account data and Group memberships, and preserves Asset provenance.</Hint>
+    {member.isAdmin && <Hint className="mb-3">A final system administrator must promote another member before deleting their account.</Hint>}
+    <Button type="button" variant="destructive" onClick={() => setConfirming(true)}>Delete account</Button>
     <DestructiveConfirmation open={confirming} onClose={() => setConfirming(false)} displayName={member.name}
       email={member.email} mode="account" confirmLabel="Delete account" fields={{ intent: 'delete' }} busy={busy}
       error={feedback?.error} blocked={deletionBlocked} />

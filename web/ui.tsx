@@ -94,6 +94,27 @@ export function Field({ label, hint, className, children }: {
   </label>;
 }
 
+/** A short, settled piece of feedback beside the control that produced it.
+ *
+ * Shared with the message that dismisses itself, so a result that stays and a
+ * result that fades are the same object in two states rather than two designs.
+ */
+export const statusPillClass = 'relative inline-flex max-w-full items-center gap-[.35rem]'
+  + ' overflow-hidden text-ellipsis rounded-full px-[.6rem] py-[.3rem] text-[.72rem]'
+  + ' font-semibold leading-none';
+
+export const statusPillTone = {
+  success: 'bg-success-surface text-success-text',
+  error: 'bg-danger-surface text-danger-text',
+  info: 'bg-muted text-muted-foreground',
+} as const;
+
+export function StatusPill({ tone = 'info', className, ...props }: ComponentProps<'span'> & {
+  tone?: keyof typeof statusPillTone;
+}) {
+  return <span {...props} className={cn(statusPillClass, statusPillTone[tone], className)} />;
+}
+
 /** The browser's own select, styled to match the shared input.
  *
  * Kannabi's choice lists are short and static, inside forms that are read and

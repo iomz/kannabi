@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { statusPillClass, statusPillTone } from './ui';
 
 export const transientSuccessDuration = 3000;
 /** Long enough to read as leaving, short enough that nothing waits for it. */
@@ -6,15 +7,9 @@ export const transientExitDuration = 180;
 
 export type TransientTone = 'success' | 'error' | 'info';
 
-const pill = 'relative inline-flex max-w-full items-center gap-[.35rem] overflow-hidden'
-  + ' text-ellipsis whitespace-nowrap rounded-full px-[.6rem] pt-[.3rem] pb-[.38rem]'
-  + ' text-[.72rem] font-semibold leading-none';
-
-const toneClass: Record<TransientTone, string> = {
-  success: 'bg-success-surface text-success-text',
-  error: 'bg-danger-surface text-danger-text',
-  info: 'bg-muted text-muted-foreground',
-};
+// The extra bottom padding is the lifetime bar's own room, so the text does
+// not sit on top of the countdown.
+const pill = statusPillClass + ' whitespace-nowrap pb-[.38rem]';
 
 /** A message that goes away on its own.
  *
@@ -92,7 +87,7 @@ export function TransientSuccess({ trigger, label, tone = 'success' }: {
   }, [generation, leaving, paused, dismiss, clear]);
 
   if (generation === null) return null;
-  const classes = [pill, toneClass[tone], 'motion-reduce:animate-none',
+  const classes = [pill, statusPillTone[tone], 'motion-reduce:animate-none',
     leaving ? 'animate-transient-exit' : 'animate-transient-enter'].join(' ');
   return <span key={generation} className={classes} data-tone={tone} role="status" aria-live="polite"
     onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
