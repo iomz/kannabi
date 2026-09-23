@@ -29,10 +29,17 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .auth-brand svg { flex-shrink: 0; color: var(--color-accent); }
 .auth-brand small { display: block; margin-top: .2rem; color: var(--color-text-muted); font-size: .67rem; font-weight: 400; letter-spacing: .035em; }
 .sidebar { position: sticky; top: 0; height: 100dvh; background: var(--color-chrome); color: var(--color-chrome-text); display: flex; flex-direction: column; padding: 2rem 1.1rem 1.5rem; }
-.brand { display: flex; gap: .75rem; align-items: center; color: var(--color-chrome-text); text-decoration: none; font-size: 1.3rem; font-weight: 650; letter-spacing: -.03em; padding: 0 .45rem; }
+.brand { display: flex; gap: .75rem; align-items: flex-start; min-width: 0; color: var(--color-chrome-text); text-decoration: none; font-size: 1.3rem; font-weight: 650; letter-spacing: -.03em; padding: 0 .45rem; }
 .brand:hover { color: var(--color-chrome-text); }
 .brand svg { color: var(--color-brand-mark); flex-shrink: 0; }
-.brand small { display: block; margin-top: .2rem; color: var(--color-chrome-muted); font-size: .67rem; font-weight: 400; letter-spacing: .035em; }
+.brand small { display: block; color: var(--color-chrome-muted); font-size: .67rem; font-weight: 400; letter-spacing: .035em; }
+/* One descending emphasis: wordmark, then what Kannabi is, then which Kannabi
+   this is. The tagline stays on one line so it reads as a phrase rather than
+   as a second heading. */
+.brand-text { display: block; min-width: 0; }
+.brand-name { display: block; line-height: 1.1; }
+.brand-tagline { margin-top: .2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-version { margin-top: .1rem; opacity: .72; font-variant-numeric: tabular-nums; }
 .sidebar nav { margin-top: 2.7rem; }
 .nav-label { font-size: .65rem; text-transform: uppercase; letter-spacing: .16em; color: var(--color-chrome-muted); padding: 0 .8rem; margin: 0 0 .7rem; }
 .sidebar nav a { display: flex; align-items: center; gap: .7rem; padding: .8rem 1rem; margin: .25rem 0; border-radius: .4rem; color: var(--color-chrome-text); text-decoration: none; font-size: .92rem; }
@@ -73,7 +80,7 @@ kbd { font: inherit; }
 .settings-status-pill.error { padding: .3rem .6rem; border-radius: 999px; color: var(--color-danger-text); background: var(--color-danger-surface); }
 .transient-success { animation: transient-success 3s ease forwards; }
 @keyframes transient-success { 0%, 82% { opacity: 1; } 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .transient-success { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .transient-success { animation: none; } .sidebar-collapse { transition: none; } }
 .eyebrow { text-transform: uppercase; font-size: .65rem; letter-spacing: .15em; font-weight: 650; color: var(--color-text-muted); margin: 0 0 .5rem; }
 .panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .7rem; padding: 1.6rem; margin: 1.5rem 0; }
 .form-panel { max-width: 48rem; }
@@ -468,11 +475,15 @@ button.danger:hover { color: var(--color-danger-surface); background: var(--colo
 /* Navigation shell. The sidebar carries the account entry point at its foot and
    can narrow to icons; the collapsed width is applied by the boot script so the
    first paint is already the right one. */
-.sidebar-head { display: flex; align-items: center; gap: .5rem; }
+.sidebar-head { display: flex; align-items: flex-start; gap: .5rem; }
+/* The collapse control sits on the sidebar's edge rather than beside the
+   wordmark, so it reads as a boundary affordance instead of a fourth brand
+   element competing with the mark. */
+.sidebar-head .sidebar-collapse { margin-left: auto; margin-right: -.55rem; }
 .sidebar-head .brand { flex: 1 1 auto; min-width: 0; }
-.sidebar-collapse { display: grid; place-items: center; flex-shrink: 0; width: 2.5rem; height: 2.5rem; padding: 0; border: 0; border-radius: .45rem; color: var(--color-chrome-muted); background: transparent; }
-.sidebar-collapse:hover { color: var(--color-chrome-text); background: var(--color-chrome-hover); }
-.sidebar-collapse .icon { width: 1.35rem; height: 1.35rem; }
+.sidebar-collapse { display: grid; place-items: center; flex-shrink: 0; width: 2.5rem; height: 2.5rem; padding: 0; border: 0; border-radius: .45rem; color: var(--color-chrome-muted); background: transparent; opacity: .6; transition: opacity .15s ease, background-color .15s ease; }
+.sidebar-collapse:hover, .sidebar-collapse:focus-visible { opacity: 1; color: var(--color-chrome-text); background: var(--color-chrome-hover); }
+.sidebar-collapse .icon { width: 1.25rem; height: 1.25rem; stroke-width: 1.5; }
 .sidebar-account { margin: .9rem -.35rem 0; padding-top: .9rem; border-top: 1px solid var(--color-chrome-hover); }
 .sidebar-account summary { padding: .5rem .45rem; border-radius: .4rem; color: var(--color-chrome-text); }
 .sidebar-account summary:hover { background: var(--color-chrome-hover); }
@@ -486,7 +497,9 @@ a.sidebar-account { display: flex; align-items: center; padding: .9rem .45rem 0;
    accessible names stay on the controls themselves. */
 .app-shell.collapsed { grid-template-columns: 4.5rem minmax(0, 1fr); }
 .app-shell.collapsed .sidebar { padding-left: .6rem; padding-right: .6rem; align-items: stretch; }
-.app-shell.collapsed .sidebar-head { flex-direction: column; gap: .35rem; }
+.app-shell.collapsed .sidebar-head { flex-direction: column; align-items: center; gap: .35rem; }
+.app-shell.collapsed .sidebar-head .sidebar-collapse { margin: 0; }
+.app-shell.collapsed .brand { padding: 0; justify-content: center; }
 .app-shell.collapsed .brand span, .app-shell.collapsed .nav-label,
 .app-shell.collapsed .sidebar-note, .app-shell.collapsed .account-name,
 .app-shell.collapsed .account-caret, .app-shell.collapsed .nav-group span,

@@ -11,6 +11,7 @@ import { applyDocumentTheme, cacheInstanceTheme, cacheSidebarCollapsed, readSide
 import { ThemeRuntimeContext } from './theme-runtime';
 import { AnonymousShell, isPublicShellHandle, usesAnonymousShell, usesWorkspaceHeader } from './anonymous-shell';
 import { isApplePlatform, platformHint, searchKeyShortcuts, searchShortcutHint } from './platform';
+import { displayVersion, kannabiVersion } from './version';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -88,9 +89,16 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
     <a className="skip-link" href="#workspace">Skip to content</a>
     <aside className="sidebar">
       <div className="sidebar-head">
+        {/* Mark, wordmark, what Kannabi is, and which Kannabi this is: one
+            block with a single descending emphasis, rather than four objects
+            of similar weight. */}
         <Link to="/" className="brand" onClick={() => setMenuOpen(false)} aria-label="Kannabi home">
           <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true"><path d="M5 27V9h6v18M21 27V9h6v18M11 5h10v6H11z" fill="currentColor" /></svg>
-          <span>Kannabi<small>Identity & inventory</small></span>
+          <span className="brand-text">
+            <span className="brand-name">Kannabi</span>
+            <small className="brand-tagline">Identity &amp; inventory</small>
+            <small className="brand-version">{displayVersion(kannabiVersion)}</small>
+          </span>
         </Link>
         {/* Width is a viewing preference, so the control sits with the thing it
             resizes rather than in the workspace header. */}
