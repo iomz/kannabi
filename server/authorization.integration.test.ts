@@ -174,11 +174,15 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.asset, expected);
-      // The native Asset id and issuance provenance both belong to the
-      // legitimate public representation; provenance is ledger-derived, so no
-      // identifier carries an origin flag of its own.
+      // The native Asset id, issuance provenance and change provenance all
+      // belong to the legitimate public representation: allocation provenance
+      // is ledger-derived, so no identifier carries an origin flag of its own,
+      // and change provenance is attribution of the same kind as reportedBy.
+      // Publication is a whole-Asset decision, so none of it is filtered here.
       assert.deepEqual(Object.keys(result.asset).sort(),
-        ['allocation', 'groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos', 'reportedAt', 'reportedBy']);
+        ['allocation', 'groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos',
+          'provenance', 'reportedAt', 'reportedBy']);
+      assert.equal('email' in result.asset.provenance.acceptedBy, false);
       assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);
       assert.equal('role' in result.asset.reportedBy, false);

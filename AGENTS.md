@@ -8,6 +8,8 @@ Preserve the README naming story at the bottom of README.
 - Reporting requires an explicit Group context; that Group receives collaboration access.
 - A sole Group may be selected automatically in the UI, but remains explicit in the API/domain.
 - `reportedBy` is immutable provenance, never an authorization grant.
+- Every canonical Asset change records, in the same statement as the change, who asserted it and whose authority accepted it. The asserter stays distinguishable from the acceptor even when they are the same person, the accepting authority comes from the authenticated actor and never from caller input, and appearing in provenance grants nothing.
+- Change provenance is bounded current-state provenance describing the latest change only. It never becomes a history log, and it never replaces `reportedBy`.
 - Do not introduce direct User-to-Asset ACLs.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.

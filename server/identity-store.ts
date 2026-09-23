@@ -46,6 +46,49 @@ export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'delete
 /** An external identifier as carried by an Asset. `key` addresses this
  * attachment for detachment; everything else is derived by the GS1 boundary. */
 export type AttachedIdentifier = ExternalIdentifier & Readonly<{ key: string }>;
+
+/** Who made an Asset's current record true, and under whose authority.
+ *
+ * Kannabi already records who first reported an Asset. This records the most
+ * recent canonical change to it, which is a different question: `reportedBy`
+ * never moves, and a change made years later has its own actor.
+ *
+ * `assertedBy` and `acceptedBy` are deliberately separate. A change may be
+ * produced by something that is not a person — an importer, an agent acting
+ * for someone, a rule — while the authority that admitted it is always a
+ * Kannabi User. Collapsing the two would make it impossible to tell a
+ * machine's interpretation from a person's decision after the fact, so the
+ * distinction is recorded even when they coincide: `assertedBy` is null
+ * exactly when the accepting User asserted the change directly.
+ *
+ * This is bounded, current-state provenance. It answers who made the record
+ * true, never what it used to be; prior values and the sequence of changes are
+ * a separate capability.
+ *
+ * Provenance is evidence, never authority. Nothing here participates in any
+ * readability or editability decision, and appearing in it grants nothing.
+ */
+export type ChangeProvenance = Readonly<{
+  /** The agent that produced the change, or null when the accepting User
+   * asserted it directly. Opaque to Kannabi: it is never parsed or matched. */
+  assertedBy: string | null;
+  /** The User whose authority admitted the change, rendered like any other
+   * attribution so a deleted account stays unidentifiable. */
+  acceptedBy: ReporterAttribution;
+  acceptedAt: string;
+  /** What the change was based on, if the caller stated it. Opaque, and never
+   * a reference Kannabi resolves or validates. */
+  basis: string | null;
+}>;
+
+/** What a caller may say about where a change came from.
+ *
+ * Both fields are claims about the caller itself, so nothing here can widen
+ * what the caller may do: the accepting authority is always taken from the
+ * authenticated actor, never from this.
+ */
+export type ChangeOrigin = Readonly<{ assertedBy?: string | null; basis?: string | null }>;
+
 export type Asset = Readonly<{
   id: string;
   name: string;
@@ -54,6 +97,9 @@ export type Asset = Readonly<{
   allocation: GiaiAllocation | null;
   reportedBy: ReporterAttribution;
   reportedAt: string;
+  /** Null only for an Asset last written before Kannabi recorded this; it
+   * never means the Asset has not changed. */
+  provenance: ChangeProvenance | null;
   owner: Entity | null;
   groups: readonly Entity[];
   isPublic: boolean;
@@ -258,18 +304,28 @@ const attachIdentifiers = `
       ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
     MERGE (a)-[:CLASSIFIED_AS]->(n))`;
 
+/** Public attribution for a stored actor key.
+ *
+ * The key is projected from the stored value rather than from the node,
+ * because an actor key outlives the account it names: a provenance record must
+ * still render after the account is gone, and it must render a tombstone
+ * rather than the person. `node` is therefore allowed to be null even where a
+ * particular caller knows it cannot be.
+ */
+const attribution = (node: string, key: string) => `{ key: ${key},
+        name: CASE WHEN ${node} IS NULL THEN 'Deleted member'
+          WHEN ${node}.accountDeletedAt IS NULL THEN ${node}.name
+          ELSE coalesce(${node}.provenanceName, ${node}.name, 'Deleted member') END,
+        status: CASE WHEN ${node} IS NOT NULL AND ${node}.accountDeletedAt IS NULL
+          THEN 'active' ELSE 'deleted' END }`;
+
 /** One issuance as the domain sees it. Requires `issuance` and `allocator` in
  * scope. Shared by the Asset projection and by the ledger read, so an Asset's
  * allocation and a namespace's issuance can never describe the same record
  * differently. */
 const allocationProjection = `issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
       allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
-      allocatedBy: { key: issuance.allocatedBy,
-        name: CASE WHEN allocator IS NULL THEN 'Deleted member'
-          WHEN allocator.accountDeletedAt IS NULL THEN allocator.name
-          ELSE coalesce(allocator.provenanceName, allocator.name, 'Deleted member') END,
-        status: CASE WHEN allocator IS NOT NULL AND allocator.accountDeletedAt IS NULL
-          THEN 'active' ELSE 'deleted' END } }`;
+      allocatedBy: ${attribution('allocator', 'issuance.allocatedBy')} }`;
 
 const identifierProjection = `
     identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
@@ -284,6 +340,51 @@ const identifierProjection = `
 // representation carries attribution rather than that internal key alone.
 const allocationMatch = `OPTIONAL MATCH (issuance:GiaiAllocation {allocatedForAssetId: a.id})
   OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})`;
+
+/** Resolves the accepting User of the Asset's most recent canonical change.
+ * Optional in both directions: an Asset may predate this record, and the
+ * account may since have been deleted. Requires `a` in scope, yields
+ * `acceptor`, and cannot multiply rows because the User key is unique. */
+const changeMatch = 'OPTIONAL MATCH (acceptor:User {key: a.changeAcceptedBy})';
+
+/** Bounded change provenance as the domain sees it. Requires `a` and
+ * `acceptor` in scope. The whole record is absent together: an Asset written
+ * before Kannabi recorded this has no half-filled provenance. */
+const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
+      assertedBy: a.changeAssertedBy,
+      acceptedBy: ${attribution('acceptor', 'a.changeAcceptedBy')},
+      acceptedAt: toString(a.changeAcceptedAt), basis: a.changeBasis } END`;
+
+/** Stamps the Asset with who made this change true. Requires `a` in scope plus
+ * `$actorKey` and the parameters `changeParams` produces.
+ *
+ * It is a clause in the same statement as the change it describes, so the two
+ * commit or fail together: provenance can never be missing for a change that
+ * happened, or present for one that did not.
+ */
+const recordChange = `SET a.changeAcceptedBy = $actorKey, a.changeAcceptedAt = datetime(),
+    a.changeAssertedBy = $assertedBy, a.changeBasis = $basis`;
+
+/** The most a caller may say about itself, bounded so provenance stays a fixed
+ * cost per Asset rather than a place to accumulate documents. Absent, blank
+ * and whitespace-only all mean the accepting User asserted the change
+ * directly; there is no third state to interpret. */
+const changeTextLimit = 200;
+function originText(value: unknown, field: string): string | null {
+  if (value === undefined || value === null) return null;
+  const text = requiredText(value, field);
+  if (text.length > changeTextLimit) {
+    throw new ValidationError(`${field} must be at most ${changeTextLimit} characters`);
+  }
+  return text;
+}
+function changeParams(origin: ChangeOrigin = {}): { assertedBy: string | null; basis: string | null } {
+  const input = record(origin, ['assertedBy', 'basis']);
+  return {
+    assertedBy: originText(input.assertedBy, 'assertedBy'),
+    basis: originText(input.basis, 'basis'),
+  };
+}
 
 /** How each sortable field is ordered and compared in Cypher.
  *
@@ -350,12 +451,11 @@ const assetRowsProjection = (order: string) => `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${allocationMatch}
-  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
+  ${changeMatch}
+  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
-    reportedBy: { key: u.key,
-      name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
-      status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
+    reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
@@ -382,11 +482,11 @@ const assetProjection = `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${allocationMatch}
-  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
+  ${changeMatch}
+  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
-    reportedBy: { key: u.key,
-      name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
-      status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END }, owner: o { .key, .name },
+    reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
+    owner: o { .key, .name },
     groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] } AS asset`;
 
@@ -649,7 +749,8 @@ export class IdentityStore {
     });
   }
 
-  async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null): Promise<Asset> {
+  async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const input = record(value, ['name', 'identifiers', 'ownerKey']);
     const actor = record(context, ['actorKey', 'groupKey']);
     const identifiers = canonicalIdentifiers(input.identifiers);
@@ -660,6 +761,7 @@ export class IdentityStore {
       groupKey: requiredText(actor.groupKey, 'groupKey'),
       ownerKey: input.ownerKey === undefined ? null : requiredText(input.ownerKey, 'ownerKey'),
       ...identifierParams(identifiers),
+      ...changeParams(origin),
       photoKey,
     };
     try {
@@ -672,6 +774,8 @@ export class IdentityStore {
           OPTIONAL MATCH (o:Owner {key: $ownerKey})
           WITH u, g, o WHERE $ownerKey IS NULL OR o IS NOT NULL
           CREATE (a:Asset {id: $assetId, name: $name, reportedAt: datetime(), isPublic: false})
+          ${recordChange}
+          WITH a, u, g, o
           CREATE (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
           FOREACH (owner IN CASE WHEN o IS NULL THEN [] ELSE [o] END |
             CREATE (a)-[:OWNED_BY]->(owner))
@@ -1079,12 +1183,14 @@ export class IdentityStore {
   /** Attach an external identifier to an existing Asset. Group authorization is
    * unchanged and identifier knowledge grants nothing: the caller must already
    * be able to edit the Asset. Phase 3 allocation will attach through here. */
-  async attachIdentifier(id: string, actorKey: string, value: unknown): Promise<Asset> {
+  async attachIdentifier(id: string, actorKey: string, value: unknown,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const identifier = canonicalIdentifier(value);
     const assetKey = assetId(id);
+    const change = changeParams(origin);
     try {
       return await this.write(async (tx) => {
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
         const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
           { assetId: assetKey, actorKey });
         return assetFrom(result.records[0].get('asset'));
@@ -1101,7 +1207,8 @@ export class IdentityStore {
    * compatibility, the issuance guard, and persistence. Allocation runs this
    * inside its own transaction rather than duplicating any of it. */
   private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
-    actorKey: string, identifier: ExternalIdentifier): Promise<void> {
+    actorKey: string, identifier: ExternalIdentifier,
+    change: { assertedBy: string | null; basis: string | null }): Promise<void> {
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
       RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
         + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
@@ -1121,8 +1228,10 @@ export class IdentityStore {
         throw new ValidationError('Kannabi issued that GIAI for another Asset');
       }
     }
-    await tx.run(`${assetMatch} WHERE ${collaboration} ${attachIdentifiers}`,
-      { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
+    await tx.run(`${assetMatch} WHERE ${collaboration}
+      ${recordChange}
+      ${attachIdentifiers}`,
+    { assetId: assetKey, actorKey, ...change, ...identifierParams([identifier]) });
   }
 
   /** GIAI namespaces the audience can reach, ordered by prefix. */
@@ -1255,9 +1364,11 @@ export class IdentityStore {
    * instead: the loser's whole transaction, counter included, rolls back and it
    * returns the winner's allocation.
    */
-  async allocateGiai(id: string, actorKey: string, namespaceKey: string): Promise<Asset> {
+  async allocateGiai(id: string, actorKey: string, namespaceKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const assetKey = assetId(id);
     const key = requiredText(namespaceKey, 'namespace key');
+    const change = changeParams(origin);
     const project = async (tx: ManagedTransaction) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
@@ -1302,7 +1413,7 @@ export class IdentityStore {
         { key, value: identifier.components.assetReference, gcp: row.get('gcp'),
           sequence: int(sequence), assetId: assetKey, actorKey });
         // 9. Phase 2 attachment semantics, unchanged and not duplicated.
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
         return project(tx);
       });
     } catch (error) {
@@ -1320,7 +1431,8 @@ export class IdentityStore {
   /** Detach an identifier by its attachment key. An individual identifier is
    * exclusive, so its node goes with the link; a class identifier node stays
    * while any other Asset still refers to it. */
-  async detachIdentifier(id: string, actorKey: string, key: string): Promise<Asset> {
+  async detachIdentifier(id: string, actorKey: string, key: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const assetKey = assetId(id);
     const identifierKey = requiredText(key, 'identifier key');
     return this.write(async (tx) => {
@@ -1332,7 +1444,9 @@ export class IdentityStore {
         DELETE individualLink, classLink
         WITH a, individual
         FOREACH (node IN CASE WHEN individual IS NULL THEN [] ELSE [individual] END | DELETE node)
-        RETURN a.id AS id`, { assetId: assetKey, actorKey, key: identifierKey });
+        WITH a
+        ${recordChange}
+        RETURN a.id AS id`, { assetId: assetKey, actorKey, key: identifierKey, ...changeParams(origin) });
       if (!detached.records.length) throw new ReferenceError('Asset access or identifier not found');
       await tx.run(`MATCH (c:ClassIdentifier {key: $key})
         WHERE NOT EXISTS { ()-[:CLASSIFIED_AS]->(c) } DELETE c`, { key: identifierKey });
@@ -1362,25 +1476,31 @@ export class IdentityStore {
     if (!result.records.length) throw new ValidationError('Photo upload expired or unavailable');
   }
 
-  async attachPhoto(id: string, actorKey: string, photoKey: string): Promise<Asset> {
+  async attachPhoto(id: string, actorKey: string, photoKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     return this.write(async (tx) => {
       await this.consumePhoto(tx, photoKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
         MATCH (m:Media {key: $photoKey}) CREATE (a)-[:HAS_PHOTO]->(m)
-        WITH a ${assetProjection}`, { assetId: assetId(id), actorKey, photoKey });
+        ${recordChange}
+        WITH a ${assetProjection}`,
+      { assetId: assetId(id), actorKey, photoKey, ...changeParams(origin) });
       if (!result.records.length) throw new ReferenceError('Asset access not found');
       return assetFrom(result.records[0].get('asset'));
     });
   }
 
-  async beginPhotoDeletion(id: string, actorKey: string, photoKey: string): Promise<void> {
+  async beginPhotoDeletion(id: string, actorKey: string, photoKey: string,
+    origin: ChangeOrigin = {}): Promise<void> {
     const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration}
       MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
       SET m.state = 'deleting', m.expiresAt = datetime()
+      ${recordChange}
       DELETE relationship
       RETURN m.key`, {
       assetId: assetId(id), actorKey,
       photoKey: requiredText(photoKey, 'photoKey'),
+      ...changeParams(origin),
     }));
     if (!result.records.length) throw new ReferenceError('Asset access or photo not found');
   }
@@ -1405,7 +1525,8 @@ export class IdentityStore {
     await this.write((tx) => tx.run("MATCH (m:Media {key: $key, state: 'deleting'}) WHERE m.expiresAt <= datetime() DELETE m", { key }));
   }
 
-  async updateAsset(id: string, changes: AssetChanges, actorKey: string): Promise<Asset> {
+  async updateAsset(id: string, changes: AssetChanges, actorKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const input = record(changes, ['name', 'ownerKey', 'isPublic']);
     if (Object.hasOwn(input, 'isPublic') && typeof input.isPublic !== 'boolean') {
       throw new ValidationError('isPublic must be a boolean');
@@ -1419,6 +1540,7 @@ export class IdentityStore {
       changeOwner: Object.hasOwn(input, 'ownerKey'),
       ownerKey: input.ownerKey === null || !Object.hasOwn(input, 'ownerKey')
         ? null : requiredText(input.ownerKey, 'ownerKey'),
+      ...changeParams(origin),
     };
     return this.write(async (tx) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
@@ -1426,6 +1548,7 @@ export class IdentityStore {
         WITH a, owner WHERE $ownerKey IS NULL OR owner IS NOT NULL
         // Lock the Asset before changing its single Owner relationship.
         SET a.name = coalesce($name, a.name), a.isPublic = coalesce($isPublic, a.isPublic)
+        ${recordChange}
         WITH a, owner
         OPTIONAL MATCH (a)-[old:OWNED_BY]->(:Owner)
         FOREACH (r IN CASE WHEN $changeOwner THEN [old] ELSE [] END | DELETE r)
