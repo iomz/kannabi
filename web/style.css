@@ -1,3 +1,11 @@
+/* Layer order is declared before anything else so it is a decision rather
+   than an accident of import order. `legacy` holds the hand-written stylesheet
+   that predates this migration: it must still beat Preflight, and must lose to
+   a Tailwind utility, so that a migrated component is not overruled by a rule
+   written for the element it used to be. The layer empties out as screens move
+   across, and goes with the last of them. */
+@layer theme, base, legacy, components, utilities;
+
 @import "tailwindcss";
 /* Enter/exit animation utilities, and the custom variants and utilities the
    shadcn components are written against. Both are the library's own support
@@ -111,21 +119,22 @@
      a component that asks for a border gets Kannabi's rather than the
      browser's black. */
   * { @apply border-border outline-ring/50; }
+
+  /* Corner radius is one decision with four steps, not a value repeated. */
+  :root { --radius: .5rem; }
+
+  /* Document defaults Kannabi owns.
+     Preflight removes the browser's own element margins and typography, which is
+     the point: what the UI looks like should be stated, not inherited from
+     whatever a given browser happens to do. The rules below are the defaults
+     Kannabi actually wants, written down. */
+  p { margin: 1em 0; }
+  h3 { margin: 1em 0; }
+  dl { margin: 1em 0; }
+  code { font-family: var(--font-mono); font-size: .92em; }
 }
 
-/* Corner radius is one decision with four steps, not a value repeated. */
-:root { --radius: .5rem; }
-
-/* Document defaults Kannabi owns.
-   Preflight removes the browser's own element margins and typography, which is
-   the point: what the UI looks like should be stated, not inherited from
-   whatever a given browser happens to do. The rules below are the defaults
-   Kannabi actually wants, written down. */
-p { margin: 1em 0; }
-h3 { margin: 1em 0; }
-dl { margin: 1em 0; }
-code { font-family: var(--font-mono); font-size: .92em; }
-
+@layer legacy {
 :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: var(--kannabi-text, #243833); background: var(--kannabi-canvas, #f5f6f2); font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; color: inherit; background: inherit; }
@@ -710,3 +719,4 @@ img.avatar { object-fit: cover; background: var(--kannabi-brand-soft); }
 .user-heading { display: flex; align-items: center; gap: .9rem; }
 .user-heading h1 { margin: 0; }
 .user-avatar { width: 3.5rem; height: 3.5rem; font-size: 1.3rem; flex-shrink: 0; }
+}

@@ -46,13 +46,14 @@ export function paletteVariables(palette: ThemePalette): CSSProperties {
  *
  * The whole set ships in one stylesheet so switching theme or colour scheme is
  * a change of attribute rather than a fetch, and so the choice survives the
- * first paint. `.app-shell` carries the attributes during server rendering,
- * before the boot script has set them on the document.
+ * first paint. The boot script sets both attributes on the document; the
+ * anonymous shell also carries them itself, because it renders before that
+ * script has run on a cold load.
  */
 export function themeStylesheet(themes: readonly ThemeDefinition[]): string {
   return themes.flatMap((theme) => (['light', 'dark'] as const).map((mode) => {
     const declarations = paletteVariableEntries(theme[mode]).map(([name, value]) => `${name}:${value}`).join(';');
     const selector = `[data-theme="${theme.id}"][data-color-scheme="${mode}"]`;
-    return `:root${selector},.app-shell${selector},.auth-shell${selector}{color-scheme:${mode};${declarations}}`;
+    return `:root${selector},.auth-shell${selector}{color-scheme:${mode};${declarations}}`;
   })).join('');
 }

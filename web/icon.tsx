@@ -16,6 +16,8 @@ const paths = {
   sidebar: 'M4 5h16v14H4z M10 5v14',
   info: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18 M12 11v6 M12 8h.01',
 };
-export function Icon({ name }: { name: keyof typeof paths }) {
+export type IconName = keyof typeof paths;
+
+export function Icon({ name }: { name: IconName }) {
   return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
