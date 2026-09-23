@@ -11,6 +11,10 @@ import { gravatarUrl } from '../shared/avatar.js';
  * When a hash is present Gravatar answers 404 for anybody who has no picture
  * there, so the same initial is used rather than a generated stand-in for
  * somebody who never chose one.
+ *
+ * This is deliberately not the shadcn Avatar: that one treats its fallback as
+ * what to show while an image is on its way, which is the opposite of what is
+ * true here.
  */
 export function Avatar({ name, hash, size = 32, className }: {
   name: string;
@@ -22,9 +26,15 @@ export function Avatar({ name, hash, size = 32, className }: {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [hash]);
   const initial = (name.trim().slice(0, 1) || '?').toUpperCase();
-  const classes = className ? `avatar ${className}` : 'avatar';
-  if (!hash || failed) return <span className={classes} aria-hidden="true">{initial}</span>;
-  return <img className={classes} alt="" aria-hidden="true" width={size} height={size}
+  const classes = ['shrink-0 rounded-full bg-brand-soft text-brand-text', className]
+    .filter(Boolean).join(' ');
+  const box = { width: size, height: size, fontSize: Math.round(size * 0.45) };
+  if (!hash || failed) {
+    return <span className={`${classes} grid place-items-center font-[650] leading-none`}
+      style={box} aria-hidden="true">{initial}</span>;
+  }
+  return <img className={`${classes} object-cover`} style={box} alt="" aria-hidden="true"
+    width={size} height={size}
     src={gravatarUrl(hash, size * 2)} referrerPolicy="no-referrer" loading="lazy"
     onError={() => setFailed(true)} />;
 }

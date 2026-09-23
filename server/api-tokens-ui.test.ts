@@ -1,8 +1,10 @@
+import './dom';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ApiTokens, IssuedSecretDialog, type ApiTokenView } from '../web/api-tokens.js';
+import { mount } from './dom-render.js';
 import { apiTokenCreateInput } from '../web/api-token-form.js';
 
 const ordinary: ApiTokenView = {
@@ -15,6 +17,14 @@ const permanent: ApiTokenView = {
 };
 const render = (props: Parameters<typeof ApiTokens>[0]) =>
   renderToStaticMarkup(createElement(ApiTokens, props));
+
+/** The dialogs are anchored in portals, so they are opened and read in a real
+ * document rather than matched against a markup string. */
+const open = (props: Parameters<typeof ApiTokens>[0], action: string | RegExp) => {
+  const view = mount(createElement(ApiTokens, props));
+  view.click(view.button(action));
+  return view;
+};
 
 test('API token management is a credential surface, not a session list', () => {
   const empty = render({ tokens: [], maxLifetimeDays: null, isAdmin: false });
@@ -36,48 +46,64 @@ test('API token management is a credential surface, not a session list', () => {
   for (const leak of [/session/i, /bearer/i, /Better Auth/i, /lastUsed/i, /last used/i]) {
     assert.doesNotMatch(listed, leak, String(leak));
   }
-  // Revocation is per token, named for assistive technology, and confirmed.
-  assert.match(listed, /aria-label="Revoke Stocktake importer"/);
-  assert.match(listed, /aria-label="Revoke Bench agent"/);
-  assert.match(listed, /Anything still using/);
-  assert.match(listed, /aria-label="Close revocation dialog"/);
   assert.doesNotMatch(listed, /secret/i);
+
+  // Revocation is per token, named for assistive technology, and confirmed
+  // before it happens rather than on the click that asked for it.
+  const view = open({ tokens: [ordinary, permanent], maxLifetimeDays: null, isAdmin: false },
+    'Revoke Stocktake importer');
+  assert.equal(view.dialogName(), 'Revoke this token?');
+  assert.match(view.text(), /Anything still using “Stocktake importer”/);
+  assert.ok(view.button('Cancel'), 'the safe answer is offered');
+  assert.ok(view.button('Revoke token'), 'and so is the destructive one');
+  view.stop();
 });
 
 test('the administrator choice appears only for an administrator, in plain words', () => {
-  const admin = render({ tokens: [permanent, ordinary], maxLifetimeDays: null, isAdmin: true });
+  const view = open({ tokens: [permanent, ordinary], maxLifetimeDays: null, isAdmin: true }, 'Create token');
+  const admin = view.html();
   // Not a naked domain noun, and not IAM vocabulary.
   assert.match(admin, /Let this token use your administrator access/);
   assert.doesNotMatch(admin, /Can administer this instance/);
   assert.doesNotMatch(admin, /\bscopes?\b/i);
   assert.doesNotMatch(admin, /permission/i);
   // Explanation is available rather than compulsory reading.
-  assert.match(admin, /<summary>What this allows<\/summary>/);
+  assert.match(admin, />What this allows</);
   assert.match(admin, /stops being\s+able to the moment you are no longer an administrator/);
   // It must never read as widening Asset access.
   assert.match(admin, /does not reach any Asset[\s\S]*Groups you already belong to/);
   assert.doesNotMatch(admin, /all Assets/i);
   // The list distinguishes the two kinds only where the distinction is offered.
-  assert.match(admin, />Administrator</);
-  assert.match(admin, />Standard</);
-  const plain = render({ tokens: [permanent], maxLifetimeDays: null, isAdmin: false });
-  assert.doesNotMatch(plain, /administrator access/i);
-  assert.doesNotMatch(plain, />Standard</);
+  const listed = render({ tokens: [permanent, ordinary], maxLifetimeDays: null, isAdmin: true });
+  assert.match(listed, />Administrator</);
+  assert.match(listed, />Standard</);
+  view.stop();
+
+  const plain = open({ tokens: [permanent], maxLifetimeDays: null, isAdmin: false }, 'Create token');
+  assert.doesNotMatch(plain.text(), /administrator access/i);
+  assert.doesNotMatch(plain.text(), /Standard/);
+  plain.stop();
 });
 
 test('lifetime choices come from instance policy rather than the browser', () => {
-  const open = render({ tokens: [], maxLifetimeDays: null, isAdmin: false });
-  assert.match(open, /Never expires/);
-  assert.match(open, /Expiry is fixed when the token is created and does not extend with use\./);
-  assert.doesNotMatch(open, /<input type="radio" disabled="" name="lifetime" value="never"/);
+  const never = (view: ReturnType<typeof mount>) =>
+    view.field('input[name="lifetime"][value="never"]');
 
-  const bounded = render({ tokens: [], maxLifetimeDays: 30, isAdmin: false });
-  assert.match(bounded, /This instance allows at most 30 days, so a token must expire\./);
-  assert.match(bounded, /max="30"/);
-  assert.match(bounded, /value="30"/);
+  const unbounded = open({ tokens: [], maxLifetimeDays: null, isAdmin: false }, 'Create token');
+  assert.match(unbounded.text(), /Never expires/);
+  assert.match(unbounded.text(), /Expiry is fixed when the token is created and does not extend with use\./);
+  assert.equal(never(unbounded)?.disabled, false);
+  unbounded.stop();
+
+  const bounded = open({ tokens: [], maxLifetimeDays: 30, isAdmin: false }, 'Create token');
+  assert.match(bounded.text(), /This instance allows at most 30 days, so a token must expire\./);
+  const days = bounded.field('input[type="number"]');
+  assert.equal(days?.max, '30');
+  assert.equal(days?.value, '30', 'the ceiling is the starting point when there is one');
   // The forbidden choice is visible but unavailable, so the policy is legible
   // rather than mysterious.
-  assert.match(bounded, /<input type="radio" disabled="" name="lifetime" value="never"/);
+  assert.equal(never(bounded)?.disabled, true);
+  bounded.stop();
 });
 
 test('token creation input is validated against instance policy before it is sent', () => {
@@ -100,26 +126,23 @@ test('token creation input is validated against instance policy before it is sen
 });
 
 test('the one-time secret is a calm focused dialog with an in-field copy', () => {
-  const markup = renderToStaticMarkup(createElement(IssuedSecretDialog, {
+  const view = mount(createElement(IssuedSecretDialog, {
     issued: { label: 'Stocktake importer', secret: 'kannabi-test-secret-value' }, onDismiss() {},
   }));
-  assert.match(markup, /<dialog[^>]+aria-labelledby=/);
-  assert.match(markup, /Copy “Stocktake importer”/);
-  assert.match(markup, /This token is shown once\. Store it now/);
-  assert.match(markup, /revoke it and create another/);
-  // Informative, not destructive: no danger styling and no alarm role.
-  assert.match(markup, /class="notice"/);
-  assert.doesNotMatch(markup, /class="[^"]*danger/);
-  assert.doesNotMatch(markup, /role="alert"/);
-  // The copy affordance is the shared in-field icon control, not a separate button.
-  assert.match(markup, /class="copy-field"/);
-  assert.match(markup, /class="asset-uri-control"/);
-  assert.match(markup, /aria-label="Copy API token"/);
-  assert.match(markup, /readOnly=""|readonly=""/);
-  assert.match(markup, /kannabi-test-secret-value/);
-  assert.match(markup, />I have stored it</);
+  assert.equal(view.dialogName(), 'Copy “Stocktake importer”');
+  assert.match(view.text(), /This token is shown once\. Store it now/);
+  assert.match(view.text(), /revoke it and create another/);
+  // Informative, not destructive: nothing has gone wrong, so nothing alarms.
+  assert.equal(document.querySelector('[role="alert"]'), null);
+  assert.equal(view.dialog()?.getAttribute('role'), 'dialog', 'not an alert dialog');
+  // The value is in a field that can be selected and copied, not loose text.
+  const secret = view.field('input[readonly]');
+  assert.equal(secret?.value, 'kannabi-test-secret-value');
+  assert.ok(view.button('Copy API token'), 'copying is an in-field affordance');
+  assert.ok(view.button('I have stored it'));
   // Nothing durable holds the value.
   for (const leak of [/localStorage/, /sessionStorage/, /href=/, /console\./]) {
-    assert.doesNotMatch(markup, leak, String(leak));
+    assert.doesNotMatch(view.html(), leak, String(leak));
   }
+  view.stop();
 });

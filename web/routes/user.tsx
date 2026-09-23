@@ -22,7 +22,7 @@ export default function UserPage({ loaderData: { profile } }: Route.ComponentPro
   return <>
     <div className="page-heading"><div><p className="eyebrow">{profile.self ? 'Your account' : 'Member'}</p>
       <div className="user-heading">
-        <Avatar name={profile.name} hash={profile.avatarHash} size={56} className="user-avatar" />
+        <Avatar name={profile.name} hash={profile.avatarHash} size={56} />
         <h1>{profile.name}</h1>
       </div>
     </div>

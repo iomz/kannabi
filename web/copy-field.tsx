@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './icon';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 /** A read-only value with the copy affordance inside the field.
  *
@@ -34,13 +36,15 @@ export function CopyField({ id, value, label, copyLabel, copiedLabel, className 
     }
   }
 
-  return <div className={className ? 'copy-field ' + className : 'copy-field'}>
-    {label ? <label htmlFor={id}>{label}</label> : null}
-    <div className="asset-uri-control">
-      <input id={id} value={value} readOnly title={value} spellCheck={false} autoComplete="off"
+  return <div className={['grid gap-2', className].filter(Boolean).join(' ')}>
+    {label ? <Label htmlFor={id}>{label}</Label> : null}
+    <div className="relative flex items-center">
+      <Input id={id} value={value} readOnly title={value} spellCheck={false} autoComplete="off"
+        className="pe-11 font-mono text-[.85rem]"
         onFocus={(event) => event.currentTarget.select()} />
       <button type="button" onClick={() => void copy()}
-        aria-label={copied ? copiedLabel : copyLabel} title={copied ? 'Copied' : copyLabel}>
+        aria-label={copied ? copiedLabel : copyLabel} title={copied ? 'Copied' : copyLabel}
+        className="absolute end-1 grid size-8 place-items-center rounded-sm text-muted-foreground hover:bg-accent">
         <Icon name={copied ? 'check' : 'copy'} />
       </button>
     </div>

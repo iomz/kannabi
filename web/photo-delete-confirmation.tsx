@@ -1,5 +1,22 @@
-import { useEffect, useId, useRef } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
+/** What the dialog says, kept where it can be read without opening it. */
+export const photoDeletionCopy = {
+  title: 'Delete photo?',
+  description: 'This photo will be permanently removed from this Asset.',
+  cancel: 'Cancel',
+  confirm: 'Delete photo',
+  confirming: 'Deleting…',
+} as const;
+
+/** One step, because there is one thing to decide.
+ *
+ * Deleting a photo is destructive but narrow, so it asks once and names what
+ * goes. Cancel takes the resting focus: the safe answer should be the one a
+ * stray keypress gives.
+ */
 export function PhotoDeleteConfirmation({ open, busy, error, onClose, onConfirm }: {
   open: boolean;
   busy: boolean;
@@ -7,37 +24,20 @@ export function PhotoDeleteConfirmation({ open, busy, error, onClose, onConfirm 
   onClose(): void;
   onConfirm(): void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const cancel = useRef<HTMLButtonElement>(null);
-  const titleId = useId();
-  const descriptionId = useId();
-
-  useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    if (open && !node.open) {
-      node.showModal();
-      queueMicrotask(() => cancel.current?.focus());
-    } else if (!open && node.open) node.close();
-  }, [open]);
-
-  return <dialog ref={dialog} className="confirmation-dialog" aria-labelledby={titleId}
-    aria-describedby={descriptionId} onClose={onClose}>
-    <div className="confirmation-dialog-card">
-      <div className="confirmation-header"><h2 id={titleId}>Delete photo?</h2>
-        <button type="button" className="dialog-close" aria-label="Close photo deletion dialog"
-          onClick={() => dialog.current?.close()}>×</button></div>
-      <div className="confirmation-stage photo-confirmation-stage">
-        <p id={descriptionId}>This photo will be permanently removed from this Asset.</p>
-        <div className="photo-confirmation-actions">
-          <button ref={cancel} type="button" className="photo-confirmation-cancel"
-            onClick={() => dialog.current?.close()}>Cancel</button>
-          <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
-            {busy ? 'Deleting…' : 'Delete photo'}
-          </button>
-        </div>
-        {error && <p className="confirmation-error" role="alert">{error.endsWith('.') ? error : error + '.'}</p>}
-      </div>
-    </div>
-  </dialog>;
+  return <AlertDialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{photoDeletionCopy.title}</AlertDialogTitle>
+        <AlertDialogDescription>{photoDeletionCopy.description}</AlertDialogDescription>
+      </AlertDialogHeader>
+      {error && <p role="alert" className="text-sm text-destructive">
+        {error.endsWith('.') ? error : error + '.'}</p>}
+      <AlertDialogFooter>
+        <AlertDialogCancel>{photoDeletionCopy.cancel}</AlertDialogCancel>
+        <AlertDialogAction variant="destructive" disabled={busy} onClick={onConfirm}>
+          {busy ? photoDeletionCopy.confirming : photoDeletionCopy.confirm}
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>;
 }

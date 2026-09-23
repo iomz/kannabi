@@ -1,14 +1,26 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { api, unwrap } from './api';
 import { apiTokenCreateInput } from './api-token-form';
 import { CopyField } from './copy-field';
 import { Icon } from './icon';
 import { Switch } from './switch';
 import { displayDate } from '../server/settings.js';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader,
+  DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export type ApiTokenView = {
   id: string; label: string; admin: boolean; createdAt: string; expiresAt: string | null;
 };
+
+const hint = 'text-sm text-muted-foreground';
 
 /** Deliberate without ceremony: one step, cancel focused, and the destructive
  * action named. Revoking a token is recoverable by issuing another one, so it
@@ -20,38 +32,22 @@ function RevokeDialog({ token, busy, error, onClose, onConfirm }: {
   onClose(): void;
   onConfirm(): void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const cancel = useRef<HTMLButtonElement>(null);
-  const titleId = useId();
-  const descriptionId = useId();
-  useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    if (token && !node.open) {
-      node.showModal();
-      queueMicrotask(() => cancel.current?.focus());
-    } else if (!token && node.open) node.close();
-  }, [token]);
-  return <dialog ref={dialog} className="confirmation-dialog" aria-labelledby={titleId}
-    aria-describedby={descriptionId} onClose={onClose}>
-    <div className="confirmation-dialog-card">
-      <div className="confirmation-header"><h2 id={titleId}>Revoke this token?</h2>
-        <button type="button" className="dialog-close" aria-label="Close revocation dialog"
-          onClick={() => dialog.current?.close()}>×</button></div>
-      <div className="confirmation-stage photo-confirmation-stage">
-        <p id={descriptionId}>Anything still using “{token?.label}” stops working immediately.
-          Changes it already made keep their recorded history.</p>
-        <div className="photo-confirmation-actions">
-          <button ref={cancel} type="button" className="photo-confirmation-cancel"
-            onClick={() => dialog.current?.close()}>Cancel</button>
-          <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
-            {busy ? 'Revoking…' : 'Revoke token'}
-          </button>
-        </div>
-        {error && <p className="confirmation-error" role="alert">{error.endsWith('.') ? error : error + '.'}</p>}
-      </div>
-    </div>
-  </dialog>;
+  return <AlertDialog open={token !== null} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Revoke this token?</AlertDialogTitle>
+        <AlertDialogDescription>Anything still using “{token?.label}” stops working
+          immediately. Changes it already made keep their recorded history.</AlertDialogDescription>
+      </AlertDialogHeader>
+      {error && <p role="alert" className="text-sm text-destructive">
+        {error.endsWith('.') ? error : error + '.'}</p>}
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogAction variant="destructive" disabled={busy} onClick={onConfirm}>
+          {busy ? 'Revoking…' : 'Revoke token'}</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>;
 }
 
 /** The secret, the one time it exists.
@@ -65,33 +61,21 @@ export function IssuedSecretDialog({ issued, onDismiss }: {
   issued: { label: string; secret: string } | null;
   onDismiss(): void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const done = useRef<HTMLButtonElement>(null);
-  const titleId = useId();
   const secretId = useId();
-  useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    if (issued && !node.open) {
-      node.showModal();
-      queueMicrotask(() => done.current?.focus());
-    } else if (!issued && node.open) node.close();
-  }, [issued]);
-  return <dialog ref={dialog} className="member-dialog" aria-labelledby={titleId} onClose={onDismiss}>
-    <div className="member-dialog-card">
-      <div className="member-dialog-heading">
-        <div><p className="eyebrow">API token</p><h2 id={titleId}>Copy “{issued?.label}”</h2></div>
-        <button type="button" className="dialog-close" aria-label="Close" onClick={() => dialog.current?.close()}>×</button>
-      </div>
-      <p className="notice"><Icon name="info" /><span>This token is shown once. Store it now — if it is
-        lost, revoke it and create another.</span></p>
+  return <Dialog open={issued !== null} onOpenChange={(next) => { if (!next) onDismiss(); }}>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Copy “{issued?.label}”</DialogTitle>
+        <DialogDescription>This token is shown once. Store it now — if it is lost, revoke it
+          and create another.</DialogDescription>
+      </DialogHeader>
       <CopyField id={secretId} value={issued?.secret ?? ''} label="Token"
         copyLabel="Copy API token" copiedLabel="API token copied" />
-      <div className="profile-action-row">
-        <button ref={done} type="button" onClick={() => dialog.current?.close()}>I have stored it</button>
-      </div>
-    </div>
-  </dialog>;
+      <DialogFooter>
+        <DialogClose render={<Button />}>I have stored it</DialogClose>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }
 
 function CreateDialog({ open, isAdmin, maxLifetimeDays, busy, error, onClose, onCreate }: {
@@ -103,9 +87,6 @@ function CreateDialog({ open, isAdmin, maxLifetimeDays, busy, error, onClose, on
   onClose(): void;
   onCreate(input: { label: string; expires: boolean; days: string; admin: boolean }): void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const first = useRef<HTMLInputElement>(null);
-  const titleId = useId();
   const labelId = useId();
   const daysId = useId();
   const [label, setLabel] = useState('');
@@ -116,69 +97,67 @@ function CreateDialog({ open, isAdmin, maxLifetimeDays, busy, error, onClose, on
   const [days, setDays] = useState(maxLifetimeDays === null ? '' : String(maxLifetimeDays));
   const [admin, setAdmin] = useState(false);
   useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    if (open && !node.open) {
-      setLabel(''); setAdmin(false);
-      setExpires(true); setDays(maxLifetimeDays === null ? '' : String(maxLifetimeDays));
-      node.showModal();
-      queueMicrotask(() => first.current?.focus());
-    } else if (!open && node.open) node.close();
+    if (!open) return;
+    setLabel(''); setAdmin(false);
+    setExpires(true); setDays(maxLifetimeDays === null ? '' : String(maxLifetimeDays));
   }, [open, maxLifetimeDays]);
-  return <dialog ref={dialog} className="member-dialog" aria-labelledby={titleId} onClose={onClose}>
-    <div className="member-dialog-card">
-      <div className="member-dialog-heading">
-        <div><p className="eyebrow">API token</p><h2 id={titleId}>Create token</h2></div>
-        <button type="button" className="dialog-close" aria-label="Close" onClick={() => dialog.current?.close()}>×</button>
-      </div>
+
+  return <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <DialogContent className="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>Create token</DialogTitle>
+        <DialogDescription>Only you see the name. It is how you recognise the token later.</DialogDescription>
+      </DialogHeader>
       <form onSubmit={(event) => { event.preventDefault(); onCreate({ label, expires, days, admin }); }}>
-        <fieldset disabled={busy} aria-busy={busy}>
-          <label htmlFor={labelId}>Token name
-            <input ref={first} id={labelId} type="text" value={label} maxLength={80} required
+        <fieldset disabled={busy} aria-busy={busy} className="grid gap-5">
+          <div className="grid gap-2">
+            <Label htmlFor={labelId}>Token name</Label>
+            <Input id={labelId} type="text" value={label} maxLength={80} required autoFocus
               autoComplete="off" placeholder="Stocktake importer"
               onChange={(event) => setLabel(event.currentTarget.value)} />
-          </label>
-          <p className="hint">Only you see this. It is how you recognise the token later.</p>
+          </div>
 
-          <fieldset className="api-token-lifetime">
-            <legend>Expiry</legend>
-            <div className="api-token-lifetime-option">
-              <label className="checkbox"><input type="radio" name="lifetime" value="expires"
-                checked={expires} onChange={() => setExpires(true)} />Expires after</label>
-              <label htmlFor={daysId} className="sr-only">Days until this token expires</label>
-              <input id={daysId} type="number" inputMode="numeric" min={1}
+          <fieldset className="grid gap-2">
+            <legend className="mb-2 text-sm font-medium">Expiry</legend>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="font-normal"><input type="radio" name="lifetime" value="expires"
+                checked={expires} onChange={() => setExpires(true)} />Expires after</Label>
+              <Label htmlFor={daysId} className="sr-only">Days until this token expires</Label>
+              <Input id={daysId} type="number" inputMode="numeric" min={1} className="w-24"
                 max={maxLifetimeDays ?? undefined} step={1} value={days} disabled={!expires}
                 onChange={(event) => setDays(event.currentTarget.value)} />
-              <span className="api-token-lifetime-unit">days</span>
+              <span className="text-sm">days</span>
             </div>
-            <label className="checkbox"><input type="radio" name="lifetime" value="never"
+            <Label className="font-normal"><input type="radio" name="lifetime" value="never"
               checked={!expires} disabled={maxLifetimeDays !== null}
-              onChange={() => setExpires(false)} />Never expires</label>
-            <p className="hint">{maxLifetimeDays === null
+              onChange={() => setExpires(false)} />Never expires</Label>
+            <p className={hint}>{maxLifetimeDays === null
               ? 'Expiry is fixed when the token is created and does not extend with use.'
               : `This instance allows at most ${maxLifetimeDays} days, so a token must expire.`}</p>
           </fieldset>
 
           {/* Shown only to an administrator. For everybody else the capability
               does not exist, so neither does the question. */}
-          {isAdmin && <div className="api-token-admin">
-            <Switch checked={admin} onChange={(event) => setAdmin(event.currentTarget.checked)}
+          {isAdmin && <div className="grid gap-1">
+            <Switch checked={admin} onCheckedChange={setAdmin} className="mb-0"
               label="Let this token use your administrator access" />
-            <details><summary>What this allows</summary>
-              <p className="hint">The token can do the administrator things you can do, and stops being
-                able to the moment you are no longer an administrator. It does not reach any Asset
-                beyond the Groups you already belong to.</p>
+            <details><summary className="cursor-pointer text-sm">What this allows</summary>
+              <p className={`${hint} mt-1`}>The token can do the administrator things you can do, and
+                stops being able to the moment you are no longer an administrator. It does not reach
+                any Asset beyond the Groups you already belong to.</p>
             </details>
           </div>}
 
-          <div className="profile-action-row">
-            <button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create token'}</button>
-          </div>
-          {error && <p className="confirmation-error" role="alert">{error.endsWith('.') ? error : error + '.'}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">
+            {error.endsWith('.') ? error : error + '.'}</p>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
+            <Button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create token'}</Button>
+          </DialogFooter>
         </fieldset>
       </form>
-    </div>
-  </dialog>;
+    </DialogContent>
+  </Dialog>;
 }
 
 /** API tokens a person manages for themself.
@@ -234,31 +213,41 @@ export function ApiTokens({ tokens: initial, maxLifetimeDays, isAdmin }: {
   }
 
   return <>
-    <div className="api-token-heading">
-      <div><h2>API tokens</h2>
-        <p className="hint">Let a program act with the access you already have — an integration, an
-          automation, or an agent. A token never reaches anything you cannot reach yourself.</p></div>
-      <button type="button" onClick={() => { setError(null); setCreating(true); }}>
-        <Icon name="plus" />Create token</button>
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <div className="min-w-0">
+        <h2>API tokens</h2>
+        <p className={`${hint} max-w-[46rem]`}>Let a program act with the access you already have — an
+          integration, an automation, or an agent. A token never reaches anything you cannot reach
+          yourself.</p></div>
+      <Button type="button" onClick={() => { setError(null); setCreating(true); }}>
+        <Icon name="plus" />Create token</Button>
     </div>
 
-    {tokens.length ? <div className="member-table-frame"><table className="member-table">
-      <thead><tr><th>Token</th>{isAdmin && <th>Access</th>}<th>Expires</th><th><span className="sr-only">Actions</span></th></tr></thead>
-      <tbody>{tokens.map((token) => <tr key={token.id}>
-        <td data-label="Token">{token.label}</td>
-        {isAdmin && <td data-label="Access"><span className={'badge' + (token.admin ? ' administrator' : '')}>
-          {token.admin ? 'Administrator' : 'Standard'}</span></td>}
-        <td data-label="Expires">{token.expiresAt
-          ? <time dateTime={token.expiresAt}>{displayDate(token.expiresAt)}</time>
-          : <span className="api-token-never">Never</span>}</td>
-        <td data-label="Actions"><button type="button" className="api-token-revoke"
-          aria-label={`Revoke ${token.label}`}
-          onClick={() => { setRevokeError(null); setRevoking(token); }}>Revoke</button></td>
-      </tr>)}</tbody></table></div>
-      : <div className="empty-state api-token-empty">
-        <p aria-hidden="true"><Icon name="key" /></p>
+    {tokens.length ? <div className="overflow-x-auto rounded-lg border bg-card">
+      <Table>
+        <TableHeader><TableRow>
+          <TableHead>Token</TableHead>
+          {isAdmin && <TableHead>Access</TableHead>}
+          <TableHead>Expires</TableHead>
+          <TableHead><span className="sr-only">Actions</span></TableHead>
+        </TableRow></TableHeader>
+        <TableBody>{tokens.map((token) => <TableRow key={token.id}>
+          <TableCell className="font-medium">{token.label}</TableCell>
+          {isAdmin && <TableCell><Badge variant={token.admin ? 'default' : 'secondary'}>
+            {token.admin ? 'Administrator' : 'Standard'}</Badge></TableCell>}
+          <TableCell>{token.expiresAt
+            ? <time dateTime={token.expiresAt}>{displayDate(token.expiresAt)}</time>
+            : <span className="text-muted-foreground">Never</span>}</TableCell>
+          <TableCell className="text-right"><Button type="button" variant="ghost" size="sm"
+            aria-label={`Revoke ${token.label}`}
+            onClick={() => { setRevokeError(null); setRevoking(token); }}>Revoke</Button></TableCell>
+        </TableRow>)}</TableBody>
+      </Table>
+    </div>
+      : <div className="grid justify-items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
+        <p aria-hidden="true" className="text-muted-foreground"><Icon name="key" /></p>
         <p>No API tokens yet.</p>
-        <p className="hint">Create one when a program needs to act for you.</p>
+        <p className={hint}>Create one when a program needs to act for you.</p>
       </div>}
 
     <CreateDialog open={creating} isAdmin={isAdmin} maxLifetimeDays={maxLifetimeDays} busy={busy}

@@ -33,7 +33,8 @@ test('a requested avatar asks for nothing generated and nothing above G', () => 
 
 test('an avatar makes no remote request for somebody who did not ask', () => {
   const off = renderToStaticMarkup(createElement(Avatar, { name: 'Hanako Bango', hash: null }));
-  assert.equal(off, '<span class="avatar" aria-hidden="true">H</span>');
+  // The initial is the avatar, not a placeholder waiting for a picture.
+  assert.match(off, />H</);
   assert.doesNotMatch(off, /gravatar/i);
   assert.doesNotMatch(off, /<img/);
   // Absent and null are the same absence of consent.

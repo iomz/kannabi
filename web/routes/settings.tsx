@@ -270,7 +270,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       <fetcher.Form method="post"><fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="settings" />
         <Switch name="requirePhoto" checked={current.requirePhoto}
-          onChange={(event) => update({ requirePhoto: event.currentTarget.checked })}
+          onCheckedChange={(requirePhoto) => update({ requirePhoto })}
           label="Require photo when reporting an Asset" />
         <p className="setting-help">Applies to new Asset reports.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}

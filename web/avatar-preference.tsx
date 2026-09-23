@@ -44,11 +44,11 @@ export function AvatarPreference({ name, gravatar, avatarHash }: {
 
   return <>
     <h2>Avatar</h2>
-    <div className="avatar-preference">
-      <Avatar name={name} hash={hash} size={56} className="avatar-preview" />
+    <div className="flex items-start gap-4">
+      <Avatar name={name} hash={hash} size={56} />
       <div>
         <Switch checked={enabled} disabled={busy}
-          onChange={(event) => void change(event.currentTarget.checked)}
+          onCheckedChange={(checked) => void change(checked)}
           label="Use my Gravatar" />
         <p className="hint">Kannabi asks Gravatar for a picture using a one-way hash of your email
           address. Nothing is sent until you turn this on, and turning it off stops it at once.
