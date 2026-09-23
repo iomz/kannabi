@@ -12,6 +12,7 @@ import { ThemeRuntimeContext } from './theme-runtime';
 import { AnonymousShell, isPublicShellHandle, usesAnonymousShell, usesWorkspaceHeader } from './anonymous-shell';
 import { isApplePlatform, platformHint, searchKeyShortcuts, searchShortcutHint } from './platform';
 import { displayVersion, kannabiVersion } from './version';
+import { Avatar } from './avatar';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -131,7 +132,7 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
       <p className="sidebar-note">A place for things.<br />Context that stays.</p>
       {user ? <details className="account-menu sidebar-account" key={location.pathname}>
         <summary aria-label="Account menu" title={user.name}>
-          <span className="avatar" aria-hidden="true">{user.name.slice(0, 1).toUpperCase()}</span>
+          <Avatar name={user.name} hash={loaderData.avatarHash} />
           <span className="account-name">{user.name}</span><span className="account-caret" aria-hidden="true">⌄</span>
         </summary>
         <div className="account-popover"><strong>{user.name}</strong>

@@ -12,6 +12,7 @@ import { audienceParameters, type AudienceInput, type NamedAudienceInput } from 
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change-provenance.js';
+import { gravatarIdentifier } from './avatar.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
   allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
@@ -35,7 +36,16 @@ export type ResolvedUser = Readonly<{ key: string; name: string }>;
 export type Member = { key: string; name: string; email: string; isAdmin: boolean;
   credentialState: 'pending' | 'established'; createdAt: string | null };
 export type MemberAccount = Member & { id: string };
-export type AccountState = { isAdmin: boolean; appearance: AppearancePreference };
+export type AccountState = {
+  isAdmin: boolean;
+  appearance: AppearancePreference;
+  /** Whether this User asked Kannabi to use Gravatar for their own avatar. */
+  gravatar: boolean;
+  /** The Gravatar identifier, present only while that is true. Kannabi derives
+   * one for nobody who has not asked, and the address itself never leaves the
+   * server for this purpose. */
+  avatarHash: string | null;
+};
 const memberProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
     THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
@@ -947,13 +957,35 @@ export class IdentityStore {
   }
 
   async accountState(actorKey: string | null): Promise<AccountState> {
-    if (!actorKey) return { isAdmin: false, appearance: 'system' };
+    if (!actorKey) return { isAdmin: false, appearance: 'system', gravatar: false, avatarHash: null };
     const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
-      RETURN u.role = 'admin' AS isAdmin, coalesce(u.appearance, 'system') AS appearance`, { actorKey }));
+      RETURN u.role = 'admin' AS isAdmin, coalesce(u.appearance, 'system') AS appearance,
+        coalesce(u.gravatar, false) AS gravatar, u.email AS email`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
     const appearance = result.records[0].get('appearance');
     if (!isAppearancePreference(appearance)) throw new Error('Stored User appearance is invalid');
-    return { isAdmin: result.records[0].get('isAdmin') === true, appearance };
+    // Absent unless this User turned it on, so a stored address alone never
+    // produces a third-party identifier.
+    const gravatar = result.records[0].get('gravatar') === true;
+    const email = result.records[0].get('email');
+    const avatarHash = gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null;
+    return { isAdmin: result.records[0].get('isAdmin') === true, appearance, gravatar, avatarHash };
+  }
+
+  /** Records whether this User wants Gravatar used for their own avatar.
+   *
+   * Turning it off removes the stored consent, and the identifier is derived
+   * per request rather than stored, so nothing survives to be rendered
+   * afterwards.
+   */
+  async updateGravatar(actorKey: string, value: unknown): Promise<boolean> {
+    const input = record(value, ['gravatar']);
+    if (typeof input.gravatar !== 'boolean') throw new ValidationError('Gravatar preference must be a boolean');
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL
+      SET u.gravatar = $gravatar RETURN u.gravatar AS gravatar`,
+    { actorKey, gravatar: input.gravatar }));
+    if (!result.records.length) throw new ReferenceError('User not found');
+    return result.records[0].get('gravatar') === true;
   }
 
   async updateAppearance(actorKey: string, value: unknown): Promise<AppearancePreference> {

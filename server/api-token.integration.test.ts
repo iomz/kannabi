@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
@@ -88,6 +88,34 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     foreignAsset = (await (await outsider.request('/assets', 'POST',
       { name: 'Outsider bench', groupKey: outsiderGroup })).json()).asset.id;
     assert.ok(ownedAsset && foreignAsset);
+  });
+
+  await t.test('Gravatar is off until a User asks for it, and stops at once when they stop', async () => {
+    // A stored address alone never produces a third-party identifier.
+    const before = await (await owner.request('/me')).json();
+    assert.equal(before.gravatar, false);
+    assert.equal(before.avatarHash, null);
+
+    assert.equal((await owner.request('/profile/avatar', 'PATCH', { gravatar: true })).status, 200);
+    const on = await (await owner.request('/me')).json();
+    assert.equal(on.gravatar, true);
+    // The identifier is derived per request from the address, which itself
+    // never leaves the server for this purpose.
+    assert.equal(on.avatarHash, createHash('sha256').update('token-owner@example.com').digest('hex'));
+
+    // Consent is personal: nobody else's account gains an identifier.
+    assert.equal((await (await outsider.request('/me')).json()).avatarHash, null);
+
+    assert.equal((await owner.request('/profile/avatar', 'PATCH', { gravatar: false })).status, 200);
+    const off = await (await owner.request('/me')).json();
+    assert.equal(off.gravatar, false);
+    assert.equal(off.avatarHash, null);
+
+    // The preference is a decision, not free-form input.
+    for (const body of [{ gravatar: 'yes' }, { gravatar: 1 }, {}, { unsupported: true }]) {
+      assert.equal((await owner.request('/profile/avatar', 'PATCH', body)).status, 400, JSON.stringify(body));
+    }
+    assert.equal((await client().request('/profile/avatar', 'PATCH', { gravatar: true })).status, 401);
   });
 
   await t.test('a browser write records the User as asserting the change directly', async () => {

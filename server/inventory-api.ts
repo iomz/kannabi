@@ -170,6 +170,10 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     })
     .patch('/profile/appearance', async (c) =>
       c.json({ appearance: await store.updateAppearance(actor(c.get('user')), await c.req.json()) }))
+    // Avatar consent is the User's own, for their own account only. Kannabi
+    // contacts Gravatar for nobody who has not asked it to.
+    .patch('/profile/avatar', async (c) =>
+      c.json({ gravatar: await store.updateGravatar(actor(c.get('user')), await c.req.json()) }))
     .delete('/profile', async (c) => {
       await store.deactivateOwnAccount(actor(c.get('user')));
       return c.json({ deleted: true });
