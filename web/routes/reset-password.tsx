@@ -4,6 +4,8 @@ import { authClient } from '../api';
 import { isInvalidResetError, resetTokenFromHash } from '../password-recovery';
 import { PasswordField } from '../password-field';
 import { anonymousShellHandle } from '../anonymous-shell';
+import { Button } from '@/components/ui/button';
+import { Eyebrow, Hint } from '../ui';
 
 export const handle = anonymousShellHandle;
 
@@ -46,19 +48,19 @@ export default function ResetPassword() {
     } finally { setBusy(false); }
   }
 
-  return <div className="auth-workspace">
-    <p className="eyebrow">Account access</p><h1>Choose a new password</h1>
-    <section className="panel auth">
+  return <div className="w-full [&>h1]:text-center">
+    <Eyebrow className="text-center">Account access</Eyebrow><h1>Choose a new password</h1>
+    <section className="mt-8">
       {state === 'loading' && <p>Checking reset link…</p>}
       {state === 'invalid' && <>
         <h2>Link unavailable</h2>
         <p>This password link is invalid, expired, or has already been used.</p>
-        <Link className="auth-link" to="/forgot-password">Request another password link</Link>
+        <Link className="mt-4 inline-block text-[.85rem]" to="/forgot-password">Request another password link</Link>
       </>}
       {state === 'success' && <>
         <h2>Password set</h2>
         <p>Your password has been set. Sign in with your new password.</p>
-        <Link className="button auth-link-button" to="/signin">Return to sign in</Link>
+        <Button className="mt-3" render={<Link to="/signin" />}>Return to sign in</Button>
       </>}
       {state === 'form' && <>
         {error && <p role="alert">{error}</p>}
@@ -67,10 +69,10 @@ export default function ResetPassword() {
             autoComplete="new-password" autoFocus />
           <PasswordField label="Confirm new password" name="confirmation" required minLength={12} maxLength={128}
             autoComplete="new-password" />
-          <p className="hint">Use at least 12 characters.</p>
-          <button type="submit">{busy ? 'Setting…' : 'Set password'}</button>
+          <Hint className="mb-4">Use at least 12 characters.</Hint>
+          <Button type="submit">{busy ? 'Setting…' : 'Set password'}</Button>
         </fieldset></form>
-        <Link className="auth-link" to="/signin">Return to sign in</Link>
+        <Link className="mt-4 inline-block text-[.85rem]" to="/signin">Return to sign in</Link>
       </>}
     </section>
   </div>;

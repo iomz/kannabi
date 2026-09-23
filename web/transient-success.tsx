@@ -6,8 +6,14 @@ export const transientExitDuration = 180;
 
 export type TransientTone = 'success' | 'error' | 'info';
 
+const pill = 'relative inline-flex max-w-full items-center gap-[.35rem] overflow-hidden'
+  + ' text-ellipsis whitespace-nowrap rounded-full px-[.6rem] pt-[.3rem] pb-[.38rem]'
+  + ' text-[.72rem] font-semibold leading-none';
+
 const toneClass: Record<TransientTone, string> = {
-  success: 'saved', error: 'error', info: '',
+  success: 'bg-success-surface text-success-text',
+  error: 'bg-danger-surface text-danger-text',
+  info: 'bg-muted text-muted-foreground',
 };
 
 /** A message that goes away on its own.
@@ -86,15 +92,18 @@ export function TransientSuccess({ trigger, label, tone = 'success' }: {
   }, [generation, leaving, paused, dismiss, clear]);
 
   if (generation === null) return null;
-  const classes = ['settings-status-pill', toneClass[tone], 'transient-success',
-    leaving ? 'leaving' : '', paused ? 'paused' : ''].filter(Boolean).join(' ');
-  return <span key={generation} className={classes} role="status" aria-live="polite"
+  const classes = [pill, toneClass[tone], 'motion-reduce:animate-none',
+    leaving ? 'animate-transient-exit' : 'animate-transient-enter'].join(' ');
+  return <span key={generation} className={classes} data-tone={tone} role="status" aria-live="polite"
     onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
     onFocusCapture={() => setPaused(true)} onBlurCapture={() => setPaused(false)}>
     <span aria-hidden="true">{tone === 'error' ? '!' : '✓'}</span> {label}
-    <button type="button" className="transient-dismiss" aria-label={`Dismiss: ${label}`}
-      onClick={dismiss}>×</button>
-    <span className="transient-lifetime" aria-hidden="true"
+    <button type="button" aria-label={`Dismiss: ${label}`} onClick={dismiss}
+      className="-my-[.3rem] -mr-[.35rem] ml-[.1rem] rounded-full px-[.3rem] text-[.95rem] leading-none opacity-55 hover:opacity-100 focus-visible:opacity-100">×</button>
+    <span data-slot="transient-lifetime" aria-hidden="true"
+      className={['absolute bottom-0 left-0 h-0.5 w-full origin-left bg-current opacity-35',
+        'animate-transient-lifetime', paused ? '[animation-play-state:paused]' : '',
+        leaving ? 'hidden' : ''].filter(Boolean).join(' ')}
       style={{ animationDuration: `${transientSuccessDuration}ms` }} />
   </span>;
 }

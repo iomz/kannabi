@@ -108,6 +108,27 @@
   --color-sidebar-primary: var(--kannabi-selected-surface);
   --color-sidebar-primary-foreground: var(--kannabi-selected-text);
 
+  /* A message that goes away on its own says so by shortening a rule along
+     its own bottom edge. The countdown is information rather than decoration,
+     which is why it survives a reduced-motion preference when the message's
+     own arrival and departure do not. */
+  --animate-transient-enter: transient-enter .16s ease both;
+  --animate-transient-exit: transient-exit .18s ease both;
+  --animate-transient-lifetime: transient-lifetime linear forwards;
+
+  @keyframes transient-enter {
+    from { opacity: 0; transform: translateY(.25rem); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes transient-exit {
+    from { opacity: 1; transform: none; }
+    to { opacity: 0; transform: translateY(-.15rem); }
+  }
+  @keyframes transient-lifetime {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

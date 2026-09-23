@@ -16,12 +16,11 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState, Hint, stackedTable, stackedTableFrame } from './ui';
 
 export type ApiTokenView = {
   id: string; label: string; admin: boolean; createdAt: string; expiresAt: string | null;
 };
-
-const hint = 'text-sm text-muted-foreground';
 
 /** Deliberate without ceremony: one step, cancel focused, and the destructive
  * action named. Revoking a token is recoverable by issuing another one, so it
@@ -132,9 +131,9 @@ function CreateDialog({ open, isAdmin, maxLifetimeDays, busy, error, onClose, on
             <Label className="font-normal"><input type="radio" name="lifetime" value="never"
               checked={!expires} disabled={maxLifetimeDays !== null}
               onChange={() => setExpires(false)} />Never expires</Label>
-            <p className={hint}>{maxLifetimeDays === null
+            <Hint>{maxLifetimeDays === null
               ? 'Expiry is fixed when the token is created and does not extend with use.'
-              : `This instance allows at most ${maxLifetimeDays} days, so a token must expire.`}</p>
+              : `This instance allows at most ${maxLifetimeDays} days, so a token must expire.`}</Hint>
           </fieldset>
 
           {/* Shown only to an administrator. For everybody else the capability
@@ -143,9 +142,9 @@ function CreateDialog({ open, isAdmin, maxLifetimeDays, busy, error, onClose, on
             <Switch checked={admin} onCheckedChange={setAdmin} className="mb-0"
               label="Let this token use your administrator access" />
             <details><summary className="cursor-pointer text-sm">What this allows</summary>
-              <p className={`${hint} mt-1`}>The token can do the administrator things you can do, and
+              <Hint className="mt-1">The token can do the administrator things you can do, and
                 stops being able to the moment you are no longer an administrator. It does not reach
-                any Asset beyond the Groups you already belong to.</p>
+                any Asset beyond the Groups you already belong to.</Hint>
             </details>
           </div>}
 
@@ -220,15 +219,15 @@ export function ApiTokens({ tokens: initial, maxLifetimeDays, isAdmin }: {
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
         <h2>API tokens</h2>
-        <p className={`${hint} max-w-[46rem]`}>Let a program act with the access you already have — an
+        <Hint className="max-w-[46rem]">Let a program act with the access you already have — an
           integration, an automation, or an agent. A token never reaches anything you cannot reach
-          yourself.</p></div>
+          yourself.</Hint></div>
       <Button type="button" onClick={() => { setError(null); setCreating(true); }}>
         <Icon name="plus" />Create token</Button>
     </div>
 
-    {tokens.length ? <div className="overflow-x-auto rounded-lg border bg-card">
-      <Table>
+    {tokens.length ? <div className={stackedTableFrame}>
+      <Table className={stackedTable}>
         <TableHeader><TableRow>
           <TableHead>Token</TableHead>
           {isAdmin && <TableHead>Access</TableHead>}
@@ -236,23 +235,23 @@ export function ApiTokens({ tokens: initial, maxLifetimeDays, isAdmin }: {
           <TableHead><span className="sr-only">Actions</span></TableHead>
         </TableRow></TableHeader>
         <TableBody>{tokens.map((token) => <TableRow key={token.id}>
-          <TableCell className="font-medium">{token.label}</TableCell>
-          {isAdmin && <TableCell><Badge variant={token.admin ? 'default' : 'secondary'}>
+          <TableCell data-label="Token" className="font-medium">{token.label}</TableCell>
+          {isAdmin && <TableCell data-label="Access"><Badge variant={token.admin ? 'default' : 'secondary'}>
             {token.admin ? 'Administrator' : 'Standard'}</Badge></TableCell>}
-          <TableCell>{token.expiresAt
+          <TableCell data-label="Expires">{token.expiresAt
             ? <time dateTime={token.expiresAt}>{displayDate(token.expiresAt)}</time>
             : <span className="text-muted-foreground">Never</span>}</TableCell>
-          <TableCell className="text-right"><Button type="button" variant="ghost" size="sm"
+          <TableCell data-label="" className="text-right"><Button type="button" variant="ghost" size="sm"
             aria-label={`Revoke ${token.label}`}
             onClick={() => { setRevokeError(null); setRevoking(token); }}>Revoke</Button></TableCell>
         </TableRow>)}</TableBody>
       </Table>
     </div>
-      : <div className="grid justify-items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
-        <p aria-hidden="true" className="text-muted-foreground"><Icon name="key" /></p>
+      : <EmptyState className="rounded-lg border border-dashed">
+        <p aria-hidden="true" className="grid justify-items-center"><Icon name="key" /></p>
         <p>No API tokens yet.</p>
-        <p className={hint}>Create one when a program needs to act for you.</p>
-      </div>}
+        <Hint className="mx-auto max-w-lg">Create one when a program needs to act for you.</Hint>
+      </EmptyState>}
 
     <CreateDialog open={creating} isAdmin={isAdmin} maxLifetimeDays={maxLifetimeDays} busy={busy}
       error={error} onClose={() => setCreating(false)} onCreate={create} />

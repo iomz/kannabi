@@ -36,13 +36,16 @@ export function usesAnonymousShell(handles: unknown[], authenticated: boolean): 
 export function AnonymousShell({ themeId, colorScheme, busy, error, publicContent = false }: {
   themeId: ThemeId; colorScheme: ColorScheme; busy: boolean; error?: string; publicContent?: boolean;
 }) {
-  return <div className="auth-shell" data-theme={themeId} data-color-scheme={colorScheme}>
-    <a className="skip-link" href="#workspace">Skip to content</a>
-    <main id="workspace" tabIndex={-1} className="auth-main" aria-busy={busy}>
-      <div className={'auth-composition' + (publicContent ? ' public-content' : '')}>
-        <Link to="/signin" className="auth-brand" aria-label="Kannabi sign in">
-          <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true"><path d="M5 27V9h6v18M21 27V9h6v18M11 5h10v6H11z" fill="currentColor" /></svg>
-          <span>Kannabi<small>Identity & inventory</small></span>
+  return <div className="auth-shell min-h-dvh bg-background text-foreground"
+    data-theme={themeId} data-color-scheme={colorScheme}>
+    <a href="#workspace" className="fixed left-4 top-[-5rem] z-30 rounded-md bg-card px-3 py-2 text-foreground shadow-md focus:top-4">Skip to content</a>
+    <main id="workspace" tabIndex={-1} aria-busy={busy}
+      className="grid min-h-dvh w-full place-items-center px-6 py-12 focus:outline-none max-sm:place-items-start max-sm:px-4 max-sm:pt-8 max-sm:pb-12">
+      <div className={publicContent ? 'w-[min(100%,64rem)]' : 'w-[min(100%,27rem)]'}>
+        <Link to="/signin" aria-label="Kannabi sign in"
+          className="mb-10 flex items-center justify-center gap-3 text-[1.3rem] font-[650] tracking-[-.03em] text-foreground max-sm:mb-8 max-sm:text-[1.1rem]">
+          <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" className="shrink-0 text-brand max-sm:w-7"><path d="M5 27V9h6v18M21 27V9h6v18M11 5h10v6H11z" fill="currentColor" /></svg>
+          <span>Kannabi<small className="mt-[.2rem] block text-[.67rem] font-normal tracking-[.035em] text-muted-foreground">Identity &amp; inventory</small></span>
         </Link>
         {error && <p role="alert">{error}</p>}<Outlet />
       </div>

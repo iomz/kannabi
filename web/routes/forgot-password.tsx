@@ -2,6 +2,9 @@ import { Link } from 'react-router';
 import { useState, type FormEvent } from 'react';
 import { authClient } from '../api';
 import { anonymousShellHandle } from '../anonymous-shell';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Eyebrow, Field, Hint } from '../ui';
 
 export const handle = anonymousShellHandle;
 
@@ -24,23 +27,23 @@ export default function ForgotPassword() {
     } finally { setBusy(false); }
   }
 
-  return <div className="auth-workspace">
-    <p className="eyebrow">Account recovery</p><h1>Reset your password</h1>
-    <p>Enter your account email to request a reset link.</p>
-    <section className="panel auth">
+  return <div className="w-full [&>h1]:text-center">
+    <Eyebrow className="text-center">Account recovery</Eyebrow><h1>Reset your password</h1>
+    <p className="text-center text-[.9rem] text-muted-foreground">Enter your account email to request a reset link.</p>
+    <section className="mt-8">
       {complete ? <>
         <h2>Check your email</h2>
         <p>If an eligible account exists for that email, a password-reset message has been sent.</p>
-        <p className="hint">Delivery can take a few minutes. You can request another link if this one does not arrive.</p>
+        <Hint>Delivery can take a few minutes. You can request another link if this one does not arrive.</Hint>
       </> : <>
         <h2>Request reset link</h2>
         {error && <p role="alert">{error}</p>}
         <form onSubmit={submit}><fieldset disabled={busy}>
-          <label>Email<input name="email" type="email" required autoComplete="email" autoFocus /></label>
-          <button type="submit">{busy ? 'Requesting…' : 'Send reset link'}</button>
+          <Field label="Email"><Input name="email" type="email" required autoComplete="email" autoFocus /></Field>
+          <Button type="submit">{busy ? 'Requesting…' : 'Send reset link'}</Button>
         </fieldset></form>
       </>}
-      <Link className="auth-link" to="/signin">Return to sign in</Link>
+      <Link className="mt-4 inline-block text-[.85rem]" to="/signin">Return to sign in</Link>
     </section>
   </div>;
 }
