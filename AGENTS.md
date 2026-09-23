@@ -67,6 +67,11 @@ System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.
 
+Private working context — conversations, research notes, and the examples used in them — is not automatically publishable.
+Before creating or editing a public Issue or Issue comment, remove incidental personal and private detail, and prefer fictional or anonymized examples wherever a real identity is not technically necessary.
+Keep concrete empirical evidence whose specificity the engineering or research record genuinely depends on, and minimize unrelated personal information around it rather than weakening the evidence.
+When it is unclear whether a private detail needs to be published, ask instead of publishing it.
+
 ## Browser and GUI verification
 
 Unless explicitly requested, do not launch or attach to a browser, desktop application, or other GUI for manual interaction testing.
