@@ -5,6 +5,7 @@ import { themeById } from '../themes';
 import type { AppearancePreference } from '../../shared/appearance';
 import { useThemeRuntime } from '../theme-runtime';
 import type { Route } from './+types/settings-appearance';
+import { Panel } from '../ui';
 
 export async function clientLoader() {
   const { user } = await unwrap(await api.me.$get());
@@ -26,7 +27,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
 }
 export default function SettingsAppearance() {
   const runtime = useThemeRuntime();
-  return <section className="panel form-panel">
+  return <Panel form>
     <AppearanceSelector value={runtime.appearance} theme={themeById(runtime.themeId)} />
-  </section>;
+  </Panel>;
 }

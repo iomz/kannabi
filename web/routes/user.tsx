@@ -2,6 +2,8 @@ import { Link, redirect } from 'react-router';
 import { api, unwrap } from '../api';
 import { Avatar } from '../avatar';
 import type { Route } from './+types/user';
+import { Button } from '@/components/ui/button';
+import { Eyebrow, Hint, Panel } from '../ui';
 
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   const { user } = await unwrap(await api.me.$get());
@@ -20,23 +22,25 @@ export async function clientLoader({ params }: Route.ClientLoaderArgs) {
  */
 export default function UserPage({ loaderData: { profile } }: Route.ComponentProps) {
   return <>
-    <div className="page-heading"><div><p className="eyebrow">{profile.self ? 'Your account' : 'Member'}</p>
-      <div className="user-heading">
-        <Avatar name={profile.name} hash={profile.avatarHash} size={56} />
-        <h1>{profile.name}</h1>
+    <div className="mb-8 flex items-center justify-between gap-6">
+      <div className="min-w-0">
+        <Eyebrow>{profile.self ? 'Your account' : 'Member'}</Eyebrow>
+        <div className="flex items-center gap-[.9rem]">
+          <Avatar name={profile.name} hash={profile.avatarHash} size={56} />
+          <h1>{profile.name}</h1>
+        </div>
       </div>
+      {profile.self && <Button render={<Link to="/settings" />}>Settings</Button>}
     </div>
-      {profile.self && <Link to="/settings" className="button">Settings</Link>}
-    </div>
-    <section className="panel">
-      <dl>
+    <Panel>
+      <dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dd]:m-0 [&_dt]:text-muted-foreground">
         <dt>Assets reported</dt>
         <dd>{profile.reportedAssets}</dd>
       </dl>
-      <p className="hint">{profile.self
+      <Hint className="mt-4">{profile.self
         ? 'Counted across everything you can read.'
-        : 'Counted across what you can read. Assets in Groups you do not belong to are not included.'}</p>
-    </section>
+        : 'Counted across what you can read. Assets in Groups you do not belong to are not included.'}</Hint>
+    </Panel>
   </>;
 }
 export { WorkspaceError as ErrorBoundary } from '../route-error';

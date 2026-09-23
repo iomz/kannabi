@@ -5,6 +5,9 @@ import { identifierSchemes, schemeInputs, schemeLabels, schemeDescriptions,
   type IdentifierScheme } from '../../server/gs1.js';
 import { AssetRow } from '../asset-row';
 import type { Route } from './+types/lookup';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field, Hint, NativeSelect, PageHeading, Panel } from '../ui';
 
 type LookupKind = 'id' | IdentifierScheme;
 
@@ -47,50 +50,49 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
     ? [{ name: 'id', label: 'Asset ID', hint: 'The Asset’s native Kannabi identity.' }]
     : schemeInputs[selected];
   return <>
-    <Link to="/" className="back-link">← Assets</Link>
-    <div className="page-heading"><div><p className="eyebrow">Inventory</p><h1>Find by identity</h1>
-      <p>Resolve a complete Asset ID or external identifier. This is exact resolution, not a search:
-        a partial value finds nothing.</p></div></div>
-    <section className="panel form-panel">
+    <Link to="/" className="mb-6 inline-block text-[.85rem]">← Assets</Link>
+    <PageHeading eyebrow="Inventory" title="Find by identity"
+      description="Resolve a complete Asset ID or external identifier. This is exact resolution, not a search: a partial value finds nothing." />
+    <Panel form>
       <Form method="get"><fieldset disabled={busy}>
-        <label>Identity
-          <select name="kind" value={selected} onChange={(event) => setSelected(event.target.value as LookupKind)}>
+        <Field label="Identity">
+          <NativeSelect name="kind" value={selected} onChange={(event) => setSelected(event.target.value as LookupKind)}>
             <option value="id">Asset ID — Kannabi native identity</option>
             {identifierSchemes.map((scheme) =>
               <option key={scheme} value={scheme}>{schemeLabels[scheme]} — {schemeDescriptions[scheme]}</option>)}
-          </select>
-        </label>
-        {inputs.map((input) => <label key={input.name}>{input.label}
-          <input name={input.name} required={!('required' in input) || input.required} />
-          {input.hint && <span className="hint">{input.hint}</span>}
-        </label>)}
+          </NativeSelect>
+        </Field>
+        {inputs.map((input) => <Field key={input.name} label={input.label} hint={input.hint}>
+          <Input name={input.name} required={!('required' in input) || input.required} />
+        </Field>)}
         {error && <p role="alert">{error}</p>}
-        <button>{busy ? 'Looking up…' : 'Look up'}</button>
+        <Button>{busy ? 'Looking up…' : 'Look up'}</Button>
       </fieldset></Form>
-    </section>
-    {result && <section className="panel"><h2>Result</h2>
-      <p className="hint">
+    </Panel>
+    {result && <Panel><h2>Result</h2>
+      <Hint className="mb-4">
         {result.identity.kind === 'assetId'
           ? <>Asset ID <code>{result.identity.id}</code></>
           : <>{schemeLabels[result.identity.scheme]} <code>{result.identity.canonical}</code>
             {result.identity.level === 'class'
               ? ' — a class identifier, which may describe several Assets'
               : ' — an individual identifier, which identifies at most one Asset'}</>}
-      </p>
+      </Hint>
       {!result.assets.length
         ? <p>No readable Asset carries that identity.</p>
         : <>
-          <ul className="inventory-list">{result.assets.map((asset) =>
+          <ul className="overflow-hidden rounded border bg-card">{result.assets.map((asset) =>
             <AssetRow key={asset.id} asset={asset} />)}</ul>
           {/* Each page replaces the last, so this is navigation rather than an
               append; the browser's Back button returns to the previous page. */}
-          <p className="hint">Showing {result.assets.length} of {result.matching} Assets
-            that carry this identity.</p>
-          {result.nextCursor && <Link className="button secondary" to={'/lookup?' + new URLSearchParams({
-            ...Object.fromEntries(new URLSearchParams(location.search)), cursor: result.nextCursor,
-          })}>Next page</Link>}
+          <Hint className="mt-4">Showing {result.assets.length} of {result.matching} Assets
+            that carry this identity.</Hint>
+          {result.nextCursor && <Button variant="outline" className="mt-3" render={
+            <Link to={'/lookup?' + new URLSearchParams({
+              ...Object.fromEntries(new URLSearchParams(location.search)), cursor: result.nextCursor,
+            })} />}>Next page</Button>}
         </>}
-    </section>}
+    </Panel>}
   </>;
 }
 

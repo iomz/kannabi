@@ -25,9 +25,9 @@ export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt
           : 'No external identifier'}</span>
         <span className="mt-[.4rem] flex flex-wrap items-center gap-x-2 gap-y-[.35rem] text-[.8rem] text-muted-foreground max-sm:gap-x-[.35rem] max-sm:gap-y-[.25rem] max-sm:text-[.73rem] [&_.icon]:size-4"><Icon name="groups" />
           <span>{asset.groups.map((group) => group.name).join(', ')}</span>
-          <span className="context-divider">·</span>
+          <span aria-hidden="true">·</span>
           <span>Reported by <ReporterAttribution reporter={asset.reportedBy} /></span>
-          {detail === 'reportedAt' && <><span className="context-divider">·</span>
+          {detail === 'reportedAt' && <><span aria-hidden="true">·</span>
             <time dateTime={asset.reportedAt}>{displayDate(asset.reportedAt)}</time></>}
         </span>
       </div>

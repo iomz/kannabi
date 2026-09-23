@@ -33,7 +33,9 @@ export function Layout({ children }: { children: ReactNode }) {
     <script dangerouslySetInnerHTML={{ __html: themeBootScript() }} /><Links />
   </head><body>{children}<ScrollRestoration /><Scripts /></body></html>;
 }
-export function HydrateFallback() { return <main className="loading">Loading Kannabi…</main>; }
+export function HydrateFallback() {
+  return <main className="grid min-h-dvh place-items-center text-sm text-muted-foreground">Loading Kannabi…</main>;
+}
 export { WorkspaceError as ErrorBoundary } from './route-error';
 export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const { user, isAdmin } = loaderData;

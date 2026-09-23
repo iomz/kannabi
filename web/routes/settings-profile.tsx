@@ -3,6 +3,7 @@ import { api, unwrap } from '../api';
 import { DeleteAccount, EmailAddressEditor, ProfileEditor, saveProfile } from '../profile-editor';
 import { AvatarPreference } from '../avatar-preference';
 import type { Route } from './+types/settings-profile';
+import { Panel } from '../ui';
 
 export async function clientLoader() {
   const account = await unwrap(await api.me.$get());
@@ -41,14 +42,13 @@ export default function SettingsProfile({ loaderData: { member, deletionBlocked,
   const emailFeedback = actionData?.section === 'email' ? actionData : undefined;
   const deleteFeedback = actionData?.section === 'delete' ? actionData : undefined;
   return <>
-    <section className="panel form-panel"><ProfileEditor key={member.name} member={member} feedback={profileFeedback} /></section>
-    <section className="panel form-panel"><EmailAddressEditor key={member.email} email={member.email} feedback={emailFeedback} /></section>
+    <Panel form><ProfileEditor key={member.name} member={member} feedback={profileFeedback} /></Panel>
+    <Panel form><EmailAddressEditor key={member.email} email={member.email} feedback={emailFeedback} /></Panel>
     {/* Beside the address it is derived from, so the consent is legible. */}
-    <section className="panel form-panel"><AvatarPreference name={member.name}
-      gravatar={gravatar} avatarHash={avatarHash} /></section>
+    <Panel form><AvatarPreference name={member.name} gravatar={gravatar} avatarHash={avatarHash} /></Panel>
     {/* Ending the account belongs with the identity it ends, not with the
         credentials or the colours. */}
-    <section className="panel form-panel profile-danger"><DeleteAccount member={member}
-      deletionBlocked={deletionBlocked} feedback={deleteFeedback} /></section>
+    <Panel form className="border-warning-border [&>h2]:mb-3"><DeleteAccount member={member}
+      deletionBlocked={deletionBlocked} feedback={deleteFeedback} /></Panel>
   </>;
 }

@@ -4,6 +4,7 @@ import { PasswordEditor } from '../profile-editor';
 import { passwordChangeInput } from '../password-change';
 import { ApiTokens } from '../api-tokens';
 import type { Route } from './+types/settings-security';
+import { Panel } from '../ui';
 
 export async function clientLoader() {
   const { user, isAdmin } = await unwrap(await api.me.$get());
@@ -35,8 +36,8 @@ export default function SettingsSecurity({ loaderData: { isAdmin, apiTokens, api
   actionData }: Route.ComponentProps) {
   const passwordFeedback = actionData?.section === 'password' ? actionData : undefined;
   return <>
-    <section className="panel form-panel"><PasswordEditor feedback={passwordFeedback} /></section>
-    <section className="panel form-panel"><ApiTokens tokens={apiTokens}
-      maxLifetimeDays={apiTokenMaxLifetimeDays} isAdmin={isAdmin} /></section>
+    <Panel form><PasswordEditor feedback={passwordFeedback} /></Panel>
+    <Panel form><ApiTokens tokens={apiTokens}
+      maxLifetimeDays={apiTokenMaxLifetimeDays} isAdmin={isAdmin} /></Panel>
   </>;
 }

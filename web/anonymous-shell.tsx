@@ -36,6 +36,9 @@ export function usesAnonymousShell(handles: unknown[], authenticated: boolean): 
 export function AnonymousShell({ themeId, colorScheme, busy, error, publicContent = false }: {
   themeId: ThemeId; colorScheme: ColorScheme; busy: boolean; error?: string; publicContent?: boolean;
 }) {
+  // `auth-shell` carries no styling: it is the hook the theme stylesheet uses
+  // to colour this shell before the boot script has set the document's own
+  // attributes on a cold load.
   return <div className="auth-shell min-h-dvh bg-background text-foreground"
     data-theme={themeId} data-color-scheme={colorScheme}>
     <a href="#workspace" className="fixed left-4 top-[-5rem] z-30 rounded-md bg-card px-3 py-2 text-foreground shadow-md focus:top-4">Skip to content</a>

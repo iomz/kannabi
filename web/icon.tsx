@@ -19,5 +19,6 @@ const paths = {
 export type IconName = keyof typeof paths;
 
 export function Icon({ name }: { name: IconName }) {
-  return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+  // `icon` is the hook the surrounding composition sizes and colours it by.
+  return <svg className="icon size-[1.15rem] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }

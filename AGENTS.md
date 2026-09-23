@@ -65,6 +65,12 @@ Settings persistence: Simple discrete preferences persist on selection/change. C
 # Implementation
 
 Use Hono for server behavior, React Router v7 Framework Mode for UI, and Neo4j for master data.
+Style the UI with Tailwind CSS and shadcn/ui components on Base UI; do not reintroduce a hand-written application stylesheet.
+`web/themes/` is the only place colour is decided. It publishes a palette at runtime as `--kannabi-*`, and `web/style.css` maps that palette onto Tailwind's `--color-*` namespace — including the names the shadcn components ask for — with `@theme inline`. A component never hard-codes a colour, and a new colour is a new palette token rather than a literal.
+`web/style.css` holds the theme bridge and decisions about the document as a whole. Anything narrower belongs to a component: shared compositions live in `web/ui.tsx`, and vendored primitives in `web/components/ui/`.
+A vendored primitive may be edited, and the edit is explained where it is made; it is Kannabi's file once added.
+Prefer the browser's own control where it already does the job; add a scripted one only for behaviour the native control cannot provide.
+UI tests assert roles, accessible names and behaviour rather than class names or markup shape. A surface anchored in a portal — a dialog, a menu, a toast — is opened in a real document and read back, never asserted against static markup.
 Keep one package and ordinary files until a concrete need requires more structure.
 Keep object bytes behind the small S3 storage interface and photo metadata in Neo4j.
 Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, and the API token lifetime ceiling; store timestamps as absolute instants.

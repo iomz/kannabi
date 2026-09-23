@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, unwrap } from './api';
 import { Avatar } from './avatar';
 import { Switch } from './switch';
+import { Hint } from './ui';
 
 /** Consent for a third-party lookup, stated where the address it uses is.
  *
@@ -50,11 +51,11 @@ export function AvatarPreference({ name, gravatar, avatarHash }: {
         <Switch checked={enabled} disabled={busy}
           onCheckedChange={(checked) => void change(checked)}
           label="Use my Gravatar" />
-        <p className="hint">Kannabi asks Gravatar for a picture using a one-way hash of your email
+        <Hint className="max-w-[38rem]">Kannabi asks Gravatar for a picture using a one-way hash of your email
           address. Nothing is sent until you turn this on, and turning it off stops it at once.
-          Without it, your initial is your avatar.</p>
+          Without it, your initial is your avatar.</Hint>
       </div>
     </div>
-    {error && <p className="confirmation-error" role="alert">{error.endsWith('.') ? error : error + '.'}</p>}
+    {error && <p role="alert" className="mt-3 text-sm text-destructive">{error.endsWith('.') ? error : error + '.'}</p>}
   </>;
 }

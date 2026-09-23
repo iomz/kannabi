@@ -12,6 +12,31 @@ import { PasswordField } from '../password-field';
 import { Switch } from '../switch';
 import { TransientSuccess } from '../transient-success';
 import type { Route } from './+types/settings';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ActionRow, ActionStatus, Eyebrow, Field, Hint, NativeSelect, Panel, SectionHeading,
+  StatusPill } from '../ui';
+
+/** Two fields that belong together on one line where there is room. */
+const twoUp = 'grid grid-cols-2 gap-4 max-sm:grid-cols-1';
+/** A note attached to the control above it rather than to the page. */
+const settingHelp = 'mt-[-.7rem] mb-[1.15rem] text-[.78rem] text-muted-foreground';
+const subSection = 'mt-7 border-t pt-6';
+const subHeading = 'mt-0 mb-[.35rem] text-[.95rem]';
+const credentialContext = 'mb-[.7rem] flex flex-wrap items-baseline gap-x-[.65rem] gap-y-[.35rem]';
+const credentialAction = 'h-auto shrink-0 p-0 text-[.78rem] font-medium';
+
+/** Delivery state is a fact about the instance, not a severity scale — but a
+ * state that stops mail being sent has to read differently from one that does
+ * not, without relying on the reader to know which is which. */
+function mailStateTone(state: string): string {
+  if (state === 'verified') return 'bg-success-surface text-success-text';
+  return ['credential-unavailable', 'incomplete', 'connection-failed', 'authentication-failed',
+    'delivery-failed'].includes(state) ? 'bg-danger-surface text-danger-text' : '';
+}
 
 export async function clientLoader() {
   const { user, isAdmin } = await unwrap(await api.me.$get());
@@ -116,55 +141,58 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
   const testResult = test.data?.kind === 'mail-test' ? test.data : null;
   const resetResult = reset.data?.kind === 'secret-reset' ? reset.data : null;
   const status = mailStatus(mail);
-  return <section className="panel form-panel mail-settings"><div className="section-heading">
-    <div><h2>Mail delivery</h2><p className="hint">Configure SMTP delivery for Kannabi transactional mail.</p></div>
-    <div className="mail-status"><span className={`badge mail-state ${status.value}`}>{status.label}</span>
-      {mail.verificationObservedAt && <time dateTime={mail.verificationObservedAt}
+  return <Panel form><SectionHeading className="mb-6">
+    <div><h2 className="mb-1">Mail delivery</h2><Hint>Configure SMTP delivery for Kannabi transactional mail.</Hint></div>
+    <div className="grid justify-items-end gap-[.3rem]">
+      <Badge variant="secondary" className={'capitalize ' + mailStateTone(status.value)}>{status.label}</Badge>
+      {mail.verificationObservedAt && <time dateTime={mail.verificationObservedAt} className="whitespace-nowrap text-[.67rem] text-muted-foreground"
         title={new Date(mail.verificationObservedAt).toLocaleString()}>Observed {new Date(mail.verificationObservedAt).toLocaleString()}</time>}
     </div>
-  </div>
+  </SectionHeading>
     {result?.error && <p role="alert">{result.error}</p>}
     <save.Form method="post" key={mail.revision} onChange={() => setDirty(true)}>
       <fieldset disabled={saveBusy || recoveryRequired} aria-busy={saveBusy}>
         <input type="hidden" name="intent" value="mail" /><input type="hidden" name="revision" value={mail.revision} />
         <input type="hidden" name="passwordAction" value={passwordAction.action} />
         <Switch name="enabled" defaultChecked={mail.enabled} label="Enable mail delivery" />
-        <div className="grid">
-          <label>SMTP host<input name="smtpHost" defaultValue={mail.smtpHost ?? ''} maxLength={253} autoComplete="off" /></label>
-          <label>SMTP port<input name="smtpPort" type="number" min="1" max="65535" defaultValue={mail.smtpPort ?? ''} /></label>
+        <div className={twoUp}>
+          <Field label="SMTP host"><Input name="smtpHost" defaultValue={mail.smtpHost ?? ''} maxLength={253} autoComplete="off" /></Field>
+          <Field label="SMTP port"><Input name="smtpPort" type="number" min="1" max="65535" defaultValue={mail.smtpPort ?? ''} /></Field>
         </div>
-        <label>SMTP security<select name="smtpSecurity" value={security}
+        <Field label="SMTP security"><NativeSelect name="smtpSecurity" value={security}
           aria-describedby="smtp-security-help" onChange={(event) => setSecurity(event.currentTarget.value as MailSecurity | '')}>
           <option value="">Select security mode</option><option value="starttls">STARTTLS (usually port 587)</option>
           <option value="tls">TLS (usually port 465)</option><option value="none">None</option>
-        </select></label>
-        <p id="smtp-security-help" className="setting-help">Use the connection security mode required by your SMTP provider.</p>
-        {security === 'none' ? <div className="mail-auth-disabled">
+        </NativeSelect></Field>
+        <p id="smtp-security-help" className={settingHelp}>Use the connection security mode required by your SMTP provider.</p>
+        {security === 'none' ? <div className="mt-[-.3rem] mb-[1.15rem] rounded-md bg-muted p-3 text-[.8rem] text-muted-foreground [&_p]:m-0">
           <input type="hidden" name="smtpUsername" value="" />
           <p>Authentication is unavailable without connection security. Saving this mode removes any configured SMTP credentials.</p>
-        </div> : <div className="mail-authentication">
+        </div> : <div>
           {removePassword && <input type="hidden" name="smtpUsername" value="" />}
-          <label>SMTP username<input name={removePassword ? undefined : 'smtpUsername'} value={smtpUsername}
+          <Field label="SMTP username"><Input name={removePassword ? undefined : 'smtpUsername'} value={smtpUsername}
             disabled={removePassword} maxLength={320} autoComplete="username"
-            onChange={(event) => setSmtpUsername(event.currentTarget.value)} /></label>
-          <fieldset className="credential-field"><legend className="sr-only">SMTP password</legend>
-            <div className="credential-heading">
-              <label id="smtp-password-label" htmlFor="smtp-password">SMTP password</label>
+            onChange={(event) => setSmtpUsername(event.currentTarget.value)} /></Field>
+          <fieldset className="mb-[1.15rem]"><legend className="sr-only">SMTP password</legend>
+            <div className="mb-[.45rem] flex items-baseline justify-between gap-4">
+              <Label id="smtp-password-label" htmlFor="smtp-password">SMTP password</Label>
             </div>
             {mail.passwordState === 'configured' && !removePassword
-              ? <div className="credential-context"><p id="smtp-password-help" className="hint">Configured. Leave blank to keep current password.</p>
-                <button type="button" className="credential-remove" onClick={() => {
+              ? <div className={credentialContext}><Hint id="smtp-password-help">Configured. Leave blank to keep current password.</Hint>
+                <Button type="button" variant="link" className={credentialAction} onClick={() => {
                   setRemovePassword(true); setSmtpPassword(''); setDirty(true);
-                }}>Remove password</button></div>
+                }}>Remove password</Button></div>
               : mail.passwordState === 'unavailable'
-                ? <p id="smtp-password-help" className="hint">Unavailable — instance master-key recovery is required.</p>
+                ? <Hint id="smtp-password-help" className="mb-[.7rem]">Unavailable — instance master-key recovery is required.</Hint>
                 : removePassword
-                  ? <div className="credential-context"><p id="smtp-password-help" className="hint">Password and username will be removed when saved.</p>
-                    <button type="button" className="credential-remove" onClick={() => {
+                  ? <div className={credentialContext}><Hint id="smtp-password-help">Password and username will be removed when saved.</Hint>
+                    <Button type="button" variant="link" className={credentialAction} onClick={() => {
                       setRemovePassword(false); setDirty(true);
-                    }}>Undo password removal</button></div>
+                    }}>Undo password removal</Button></div>
                   : null}
-            <div className="credential-password-input"><PasswordField id="smtp-password" label="SMTP password"
+            {/* The field names itself through the heading above, so its own
+                label would be the same words twice. */}
+            <div className="[&_[data-slot=label]]:sr-only"><PasswordField id="smtp-password" label="SMTP password"
               aria-labelledby="smtp-password-label" name="smtpPassword" value={smtpPassword}
               maxLength={1024} autoComplete="new-password"
               aria-describedby={mail.passwordState !== 'none' || removePassword ? 'smtp-password-help' : undefined}
@@ -173,45 +201,48 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
               onChange={(event) => { setSmtpPassword(event.currentTarget.value); setRemovePassword(false); }} /></div>
           </fieldset>
         </div>}
-        <div className="grid">
-          <label>Sender email<input name="senderAddress" type="email" defaultValue={mail.senderAddress ?? ''} maxLength={254} /></label>
-          <label>Sender name<input name="senderName" defaultValue={mail.senderName ?? ''} maxLength={100} /></label>
+        <div className={twoUp}>
+          <Field label="Sender email"><Input name="senderAddress" type="email" defaultValue={mail.senderAddress ?? ''} maxLength={254} /></Field>
+          <Field label="Sender name"><Input name="senderName" defaultValue={mail.senderName ?? ''} maxLength={100} /></Field>
         </div>
-        <div className="mail-action-row"><button disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</button>
-          <div className="mail-action-status" role="status" aria-live="polite" aria-atomic="true">
+        <ActionRow><Button disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</Button>
+          <ActionStatus className="w-22 min-w-22">
             <TransientSuccess trigger={result?.saved && !dirty ? result : null} label="Saved" />
-          </div>
-        </div>
+          </ActionStatus>
+        </ActionRow>
       </fieldset>
     </save.Form>
 
-    <div className="mail-test"><h3>Test delivery</h3><p className="hint">Uses currently persisted configuration.</p>
+    <div className={subSection}><h3 className={subHeading}>Test delivery</h3>
+      <Hint className="mb-4">Uses currently persisted configuration.</Hint>
       {testResult?.error && <p role="alert">{testResult.error}</p>}
-      <test.Form method="post" className="inline"><input type="hidden" name="intent" value="mail-test" />
-        <label>Test recipient<input name="recipient" type="email" required maxLength={254} /></label>
-        <div className="mail-test-action"><button disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
-          {test.state !== 'idle' ? 'Sending…' : 'Send test email'}</button>
-          <div className="mail-action-status" role="status" aria-live="polite" aria-atomic="true">
+      <test.Form method="post" className="flex max-w-[35rem] flex-wrap items-end gap-4">
+        <input type="hidden" name="intent" value="mail-test" />
+        <Field label="Test recipient" className="m-0 flex-1"><Input name="recipient" type="email" required maxLength={254} /></Field>
+        <ActionRow><Button disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
+          {test.state !== 'idle' ? 'Sending…' : 'Send test email'}</Button>
+          <ActionStatus className="w-22 min-w-22">
             <TransientSuccess trigger={testResult?.saved ? testResult : null} label="Sent" />
-          </div>
-        </div>
+          </ActionStatus>
+        </ActionRow>
       </test.Form>
-      {dirty && <p className="hint">Save mail changes before testing.</p>}
+      {dirty && <Hint className="mt-3">Save mail changes before testing.</Hint>}
     </div>
 
-    {mail.masterKeyState !== 'ready' || mail.passwordState === 'unavailable' ? <div className="secret-recovery"><h3>Instance master-key recovery</h3>
-      <p>Restore the instance master key and restart Kannabi, or explicitly reset all encrypted credentials. Reset disables mail and cannot be undone.</p>
+    {mail.masterKeyState !== 'ready' || mail.passwordState === 'unavailable' ? <div className={subSection}>
+      <h3 className={subHeading}>Instance master-key recovery</h3>
+      <p className="text-[.82rem] text-muted-foreground">Restore the instance master key and restart Kannabi, or explicitly reset all encrypted credentials. Reset disables mail and cannot be undone.</p>
       {resetResult?.error && <p role="alert">{resetResult.error}</p>}
-      <div className="secret-reset-status" role="status" aria-live="polite" aria-atomic="true">
+      <ActionStatus className="mb-2 min-h-8">
         <TransientSuccess trigger={resetResult?.saved ? resetResult : null} label="Encrypted credentials reset" />
-      </div>
+      </ActionStatus>
       <reset.Form method="post"><input type="hidden" name="intent" value="secret-reset" />
         <input type="hidden" name="revision" value={mail.revision} />
-        <label className="checkbox"><input type="checkbox" name="confirmed" required />I understand this removes all encrypted credentials.</label>
-        <button className="danger" disabled={reset.state !== 'idle'}>Reset encrypted credentials</button>
+        <Label className="mb-[1.15rem]"><Checkbox name="confirmed" required />I understand this removes all encrypted credentials.</Label>
+        <Button variant="destructive" disabled={reset.state !== 'idle'}>Reset encrypted credentials</Button>
       </reset.Form>
     </div> : null}
-  </section>;
+  </Panel>;
 }
 
 export default function Administration({ loaderData: { settings, mail } }: Route.ComponentProps) {
@@ -254,43 +285,46 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     setColorSchemePreview(mode);
   }
   return <>
-    <div className="page-heading settings-page-heading"><div><p className="eyebrow">Administration</p>
-      <div className="settings-title-row"><h1>Instance settings</h1>
-        <div className="settings-save-status" aria-live="polite" aria-atomic="true">
-          {busy ? <span className="settings-status-pill saving">Saving…</span>
-            : fetcher.data?.kind === 'settings' && fetcher.data.error ? <span className="settings-status-pill error" role="alert"
-              title={fetcher.data.error}>Error: {fetcher.data.error}</span>
+    {/* Each preference saves on selection, so the page has no Save button and
+        needs one place that says whether the last change landed. */}
+    <div className="mb-8 max-sm:items-stretch">
+      <Eyebrow>Administration</Eyebrow>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-[.6rem]"><h1>Instance settings</h1>
+        <ActionStatus className="h-9 w-52 min-w-0 max-sm:w-44">
+          {busy ? <StatusPill>Saving…</StatusPill>
+            : fetcher.data?.kind === 'settings' && fetcher.data.error
+              ? <StatusPill tone="error" role="alert" title={fetcher.data.error}>Error: {fetcher.data.error}</StatusPill>
               : fetcher.data?.kind === 'settings' && fetcher.data.saved
                 ? <TransientSuccess trigger={fetcher.data} label="Saved" /> : null}
-        </div>
+        </ActionStatus>
       </div>
-      <p>Reporting policy, time presentation, theme, and mail delivery for this deployment.</p>
-    </div></div>
-    <section className="panel form-panel"><h2>Reporting, display, and appearance</h2>
+      <p className="mt-[.65rem] text-[.9rem] text-muted-foreground">Reporting policy, time presentation, theme, and mail delivery for this deployment.</p>
+    </div>
+    <Panel form><h2>Reporting, display, and appearance</h2>
       <fetcher.Form method="post"><fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="settings" />
         <Switch name="requirePhoto" checked={current.requirePhoto}
           onCheckedChange={(requirePhoto) => update({ requirePhoto })}
           label="Require photo when reporting an Asset" />
-        <p className="setting-help">Applies to new Asset reports.</p>
+        <p className={settingHelp}>Applies to new Asset reports.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />
-        <p className="setting-help">Timestamps remain stored as absolute instants.</p>
+        <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
         <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
           onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
-        <label>Longest API token lifetime (days)
-          <input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
+        <Field label="Longest API token lifetime (days)">
+          <Input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
             defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
             onBlur={(event) => {
               const raw = event.currentTarget.value.trim();
               const next = raw === '' ? null : Number(raw);
               if (next !== current.apiTokenMaxLifetimeDays) update({ apiTokenMaxLifetimeDays: next });
             }} />
-        </label>
-        <p className="setting-help">Leave empty to allow tokens that never expire. A token's expiry is
+        </Field>
+        <p className={settingHelp}>Leave empty to allow tokens that never expire. A token's expiry is
           absolute and is fixed when it is created.</p>
       </fieldset></fetcher.Form>
-    </section>
+    </Panel>
     <MailSettings mail={mail} />
   </>;
 }

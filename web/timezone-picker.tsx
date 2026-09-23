@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { filterTimezones } from './timezones';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 export function TimezonePicker({ name, value, disabled = false, onChange }: {
   name: string; value: string; disabled?: boolean; onChange?(value: string): void;
@@ -43,19 +45,20 @@ export function TimezonePicker({ name, value, disabled = false, onChange }: {
     setOpen(true);
   }
 
-  return <div className="timezone-field" ref={root}
+  return <div ref={root} className="relative mb-[1.15rem] grid max-w-[30rem] gap-2"
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
-    <label id={`${id}-label`} htmlFor={`${id}-trigger`}>Display timezone</label>
+    <Label id={`${id}-label`} htmlFor={`${id}-trigger`}>Display timezone</Label>
     <input type="hidden" name={name} value={selected} readOnly />
-    <button id={`${id}-trigger`} ref={trigger} type="button" className="timezone-trigger"
-      disabled={disabled}
+    <button id={`${id}-trigger`} ref={trigger} type="button" disabled={disabled}
+      className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-card px-2.5 py-1 text-left text-sm shadow-xs outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
       aria-labelledby={`${id}-label ${id}-value`} aria-controls={listId} aria-expanded={open} aria-haspopup="listbox"
       onClick={() => open ? setOpen(false) : openPicker()}>
       <span id={`${id}-value`}>{selected}</span><span aria-hidden="true">⌄</span>
     </button>
-    {open && <div className="timezone-popover">
-      <label className="sr-only" htmlFor={`${id}-search`}>Search timezones</label>
-      <input id={`${id}-search`} ref={search} type="search" role="combobox" value={query} placeholder="Search timezones…"
+    {open && <div className="absolute inset-x-0 top-[calc(100%+.25rem)] z-[4] rounded-lg border border-input bg-card p-[.65rem] shadow-xl">
+      <Label className="sr-only" htmlFor={`${id}-search`}>Search timezones</Label>
+      <Input id={`${id}-search`} ref={search} type="search" role="combobox" value={query}
+        className="mb-[.55rem]" placeholder="Search timezones…"
         autoComplete="off" aria-autocomplete="list" aria-controls={listId} aria-expanded="true" aria-activedescendant={activeId}
         onChange={(event) => { setQuery(event.currentTarget.value); setActive(0); }}
         onKeyDown={(event) => {
@@ -74,14 +77,17 @@ export function TimezonePicker({ name, value, disabled = false, onChange }: {
             trigger.current?.focus();
           }
         }} />
-      <ul id={listId} role="listbox" aria-labelledby={`${id}-label`} className="timezone-list">
+      <ul id={listId} role="listbox" aria-labelledby={`${id}-label`}
+        className="max-h-64 overflow-y-auto text-sm font-normal [&_li[aria-selected=true]]:font-[650]">
         {matches.map((zone, index) => <li id={`${id}-option-${index}`} key={zone} role="option"
-          aria-selected={zone === selected} className={index === active ? 'active' : undefined}
+          aria-selected={zone === selected}
+          className={'cursor-pointer rounded px-[.7rem] py-[.6rem]'
+            + (index === active ? ' bg-selected-surface text-selected-text' : '')}
           onMouseEnter={() => setActive(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(zone)}>
           {zone}
         </li>)}
       </ul>
-      {!matches.length && <p className="timezone-empty" role="status">No matching timezones.</p>}
+      {!matches.length && <p role="status" className="m-2 text-[.82rem] font-normal text-muted-foreground">No matching timezones.</p>}
     </div>}
   </div>;
 }
