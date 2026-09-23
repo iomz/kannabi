@@ -112,6 +112,9 @@
      its own bottom edge. The countdown is information rather than decoration,
      which is why it survives a reduced-motion preference when the message's
      own arrival and departure do not. */
+  --animate-photo-reveal: photo-reveal .2s ease-out;
+  @keyframes photo-reveal { from { opacity: 0; } to { opacity: 1; } }
+
   --animate-transient-enter: transient-enter .16s ease both;
   --animate-transient-exit: transient-exit .18s ease both;
   --animate-transient-lifetime: transient-lifetime linear forwards;

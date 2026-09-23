@@ -15,6 +15,8 @@ test('reporter attribution distinguishes deleted provenance from an active membe
     reporter: { key: 'deleted', name: 'David Test', status: 'deleted' },
   }));
   assert.match(deleted, />David Test</);
-  assert.match(deleted, /class="badge">Deleted member</);
+  // Marked as its own thing beside the name, rather than folded into it.
+  assert.match(deleted, /data-slot="badge"[^>]*>Deleted member</);
+  // A tombstone is not a discoverable User, so nothing here links anywhere.
   assert.doesNotMatch(deleted, /href=/);
 });

@@ -31,9 +31,11 @@ export function Eyebrow({ className, ...props }: ComponentProps<'p'>) {
 }
 
 /** The title of a page, and whatever belongs beside it. */
-export function PageHeading({ eyebrow, title, children, className }: {
+export function PageHeading({ eyebrow, title, description, children, className }: {
   eyebrow?: ReactNode;
   title: ReactNode;
+  /** A sentence under the title, saying what this page is for. */
+  description?: ReactNode;
   /** Actions or status that belong on the title's own line. */
   children?: ReactNode;
   className?: string;
@@ -42,6 +44,7 @@ export function PageHeading({ eyebrow, title, children, className }: {
     <div className="min-w-0">
       {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
       <h1>{title}</h1>
+      {description ? <p className="mt-[.65rem] mb-0 text-[.9rem] text-muted-foreground">{description}</p> : null}
     </div>
     {children}
   </div>;
@@ -89,6 +92,17 @@ export function Field({ label, hint, className, children }: {
     {children}
     {hint ? <Hint className="font-normal">{hint}</Hint> : null}
   </label>;
+}
+
+/** The browser's own select, styled to match the shared input.
+ *
+ * Kannabi's choice lists are short and static, inside forms that are read and
+ * submitted natively. A scripted listbox would add a popup — and, inside the
+ * filter panel, a popup within a popup — for nothing the native control does
+ * not already do better on a phone.
+ */
+export function NativeSelect({ className, ...props }: ComponentProps<'select'>) {
+  return <select {...props} className={cn('h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50', className)} />;
 }
 
 /** A table that becomes a list of cards where a table would not fit.

@@ -7,6 +7,6 @@ export function copyAssetUri(uri: string, clipboard: ClipboardWriter): Promise<v
 }
 
 export function AssetUri({ uri }: { uri: string }) {
-  return <CopyField className="asset-uri" id="asset-uri" value={uri} label="Asset URI"
+  return <CopyField className="mt-5" id="asset-uri" value={uri} label="Asset URI"
     copyLabel="Copy Asset URI" copiedLabel="Asset URI copied" />;
 }

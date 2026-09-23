@@ -8,6 +8,8 @@ import { Icon } from '../icon';
 import { AssetRow } from '../asset-row';
 import { InventoryControls, inventoryPath, type InventoryView } from '../inventory-controls';
 import type { Route } from './+types/home';
+import { Button } from '@/components/ui/button';
+import { EmptyState, PageHeading, Panel } from '../ui';
 
 /** The API query for a URL, keeping repeated parameters intact.
  *
@@ -98,30 +100,33 @@ function Inventory({ initial, view, groups }: {
   const { q, scope, filters } = view;
   const filtered = canonicalFilters(filters).length > 0;
   return <>
-    <div className="page-heading"><div><p className="eyebrow">Inventory</p><h1>Assets</h1>
-      <p>{q ? `Results for “${q}”` : 'Physical things, shared knowledge, lasting identity.'}</p></div>
-      <Link to="/assets/report" className="button"><Icon name="plus" />Report Asset</Link>
-    </div>
-    <section className="inventory" aria-label="Asset inventory" aria-busy={loading}>
+    <PageHeading eyebrow="Inventory" title="Assets"
+      description={q ? `Results for “${q}”` : 'Physical things, shared knowledge, lasting identity.'}>
+      <Button className="shrink-0" render={<Link to="/assets/report" />}><Icon name="plus" />Report Asset</Button>
+    </PageHeading>
+    <section aria-label="Asset inventory" aria-busy={loading}>
       <InventoryControls view={view} groups={groups} scopes={page.scopes} />
-      {q && <p className="search-context">
+      {q && <p className="mt-2 mb-4 text-[.8rem]">
         <Link to={inventoryPath({ ...view, q: '' })}>Clear search</Link></p>}
       {!page.assets.length
-        ? <div className="panel empty-state">
+        ? <Panel className="p-0"><EmptyState>
           <h2>{q || scope !== 'all' || filtered ? 'No matching Assets' : 'Your inventory starts here'}</h2>
           <p>{q || scope !== 'all' || filtered
             ? 'Try another scope, adjust the view, or search by name.'
             : 'Report an Asset and choose a Group to collaborate with.'}</p>
           {!q && scope === 'all' && !filtered && <Link to="/assets/report">Report your first Asset →</Link>}
-        </div>
-        : <ul className="inventory-list">{page.assets.map((asset) =>
+        </EmptyState></Panel>
+        : <ul className="overflow-hidden rounded border bg-card">{page.assets.map((asset) =>
           <AssetRow key={asset.id} asset={asset} detail={view.sort === 'reportedAt' ? 'reportedAt' : undefined} />)}</ul>}
-      <div ref={sentinel} className="inventory-load">
-        {loading && <p role="status"><span className="spinner" aria-hidden="true" />Loading more assets…</p>}
+      <div ref={sentinel} className="py-5 text-center text-[.85rem] text-muted-foreground [&>p]:flex [&>p]:items-center [&>p]:justify-center [&>p]:gap-3">
+        {loading && <p role="status">
+          <span aria-hidden="true" className="size-[1.1rem] animate-spin rounded-full border-2 border-border border-t-brand motion-reduce:animate-none" />
+          Loading more assets…</p>}
         {error && <p role="alert">Could not load more Assets. Your current results are still here.</p>}
-        {page.nextCursor && <button className={error ? "secondary" : "load-more"} disabled={loading} onClick={() => void loadMore()}>
+        {page.nextCursor && <Button variant={error ? 'outline' : 'link'} disabled={loading}
+          className={loading ? 'hidden' : ''} onClick={() => void loadMore()}>
           {error ? 'Retry loading' : 'Load more Assets'}
-        </button>}
+        </Button>}
       </div>
     </section>
   </>;
