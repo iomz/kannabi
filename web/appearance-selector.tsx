@@ -41,7 +41,11 @@ export function AppearanceSelector({ value, theme }: { value: AppearancePreferen
     previous.current = persisted.current;
     setSelected(preference);
     setAppearance(preference);
-    void fetcher.submit({ intent: 'appearance', appearance: preference }, { method: 'post', action: '/profile' });
+    // The submission belongs to whichever route renders this selector, so it
+    // names no route of its own. Naming one is how this came to post at a
+    // route that no longer answers, and the local `setAppearance` above hid
+    // the failure by applying the choice anyway.
+    void fetcher.submit({ intent: 'appearance', appearance: preference }, { method: 'post' });
   }
 
   return <fetcher.Form method="post"><fieldset className="appearance-selector" disabled={fetcher.state !== 'idle'} aria-busy={fetcher.state !== 'idle'}>
