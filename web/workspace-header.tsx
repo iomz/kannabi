@@ -4,20 +4,23 @@ import { Icon } from './icon';
 import { isApplePlatform, platformHint, searchKeyShortcuts, searchShortcutHint } from './platform';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { SidebarTrigger } from '@/components/ui/sidebar';
+import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 
-/** The head of the workspace: how wide the navigation is, and how to search.
+/** The head of the workspace: searching, and on a narrow screen, the way in.
  *
- * The control that narrows the navigation sits here, at the boundary it moves,
- * rather than inside the brand block where it competed with the tagline for a
- * row. It keeps a full-size target: this is the one control on the page whose
- * job is to be hit without looking.
+ * On a wide screen the navigation's own rail toggles it, so nothing about the
+ * navigation appears here — a control for the sidebar sitting in the
+ * workspace reads as belonging to the workspace.
+ *
+ * A narrow screen has no rail: the navigation is a sheet that is not on the
+ * page until it is asked for, so the only possible place to ask is here.
  */
 export function WorkspaceHeader({ enabled, search }: {
   enabled: boolean;
   search: boolean;
 }) {
   const location = useLocation();
+  const { isMobile } = useSidebar();
   const field = useRef<HTMLInputElement>(null);
   // Starts at the Apple form so the first paint matches the prerendered shell,
   // then corrects itself once there is a platform to read.
@@ -37,9 +40,15 @@ export function WorkspaceHeader({ enabled, search }: {
   const q = params.get('q') ?? '';
   const scope = location.pathname === '/' ? params.get('scope') ?? 'all' : 'all';
 
+  // With neither a search field nor a sheet to open there is nothing to put
+  // in a bar, and an empty one is just a rule across the top of the page.
+  if (!search && !isMobile) return null;
+
   return <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-card px-3 sm:px-5">
-    <SidebarTrigger size="icon-lg" />
-    <Separator orientation="vertical" className="mr-1 h-5" />
+    {isMobile && <>
+      <SidebarTrigger size="icon-lg" />
+      <Separator orientation="vertical" className="mr-1 h-5" />
+    </>}
     {search ? <Form action="/" method="get" role="search" className="relative flex min-w-0 flex-1 items-center sm:max-w-md">
       <input type="hidden" name="scope" value={scope} />
       <label className="sr-only" htmlFor="asset-search">Search Assets by name</label>

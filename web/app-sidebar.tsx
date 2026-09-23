@@ -8,8 +8,7 @@ import {
   SidebarMenuSubItem, SidebarRail, useSidebar,
 } from '@/components/ui/sidebar';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
 export type ShellUser = { key: string; name: string; email: string };
@@ -38,8 +37,11 @@ type Destination = { to: string; icon: IconName; label: string };
  * navigation to be reorganised around it. Inventory is therefore not a
  * destination of its own: there is nothing at the category, only inside it.
  */
-const inventory: { label: string; icon: IconName; items: readonly Destination[] } = {
-  label: 'Inventory', icon: 'assets',
+const inventory: { label: string; icon: IconName; to: string; items: readonly Destination[] } = {
+  // The category leads to its default surface. That is a convenience, not an
+  // equivalence: Inventory is where the surfaces live, and Assets is the one
+  // it opens today.
+  label: 'Inventory', icon: 'assets', to: '/',
   items: [{ to: '/', icon: 'assets', label: 'Assets' }],
 };
 
@@ -89,7 +91,9 @@ function Workspace({ active }: { active: string | null }) {
       {narrowed
         ? inventory.items.map((item) => <Destination key={item.to} item={item} active={active} close={close} />)
         : <SidebarMenuItem>
-          <SidebarMenuButton render={<span />} className="cursor-default hover:bg-transparent">
+          {/* Selection stays on the surface rather than being shown twice, so
+              arriving through the category still says which surface is open. */}
+          <SidebarMenuButton render={<Link to={inventory.to} onClick={close} />}>
             <Icon name={inventory.icon} /><span>{inventory.label}</span>
           </SidebarMenuButton>
           <SidebarMenuSub>
@@ -151,8 +155,8 @@ function Brand() {
  * opens. A menu is anchored instead, so the thing just clicked stays where it
  * was clicked.
  */
-function Account({ user, isAdmin, avatarHash, busy }: {
-  user: ShellUser; isAdmin: boolean; avatarHash?: string | null; busy: boolean;
+function Account({ user, avatarHash, busy }: {
+  user: ShellUser; avatarHash?: string | null; busy: boolean;
 }) {
   const { setOpenMobile } = useSidebar();
   const submit = useSubmit();
@@ -165,17 +169,11 @@ function Account({ user, isAdmin, avatarHash, busy }: {
         <span className="truncate">{user.name}</span>
         <span aria-hidden="true" className="ml-auto text-sidebar-foreground/60">⌄</span>
       </SidebarMenuButton>} />
-    <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-56">
-      {/* The label names the group it heads, which is what makes it the menu's
-          own heading rather than a first item somebody can land on. */}
-      <DropdownMenuGroup>
-        <DropdownMenuLabel className="font-normal">
-          <span className="block truncate font-medium">{user.name}</span>
-          <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
-          {isAdmin && <span className="block truncate text-xs text-muted-foreground">System administrator</span>}
-        </DropdownMenuLabel>
-      </DropdownMenuGroup>
-      <DropdownMenuSeparator />
+    <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-52">
+      {/* Straight into what can be done. The row that opened this menu is the
+          account, still visible underneath it, so repeating the name, the
+          address and the role here would say nothing the person did not just
+          click on. */}
       <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>
       <DropdownMenuItem render={<Link to="/settings" onClick={close} />}>Settings</DropdownMenuItem>
       <DropdownMenuSeparator />
@@ -204,7 +202,7 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
       <SidebarMenu>
         <SidebarMenuItem>
           {user
-            ? <Account user={user} isAdmin={isAdmin} avatarHash={avatarHash} busy={busy} />
+            ? <Account user={user} avatarHash={avatarHash} busy={busy} />
             : location.pathname !== '/signin'
               ? <SidebarMenuButton size="lg" tooltip="Sign in" render={<Link to="/signin" />}>
                 <span>Sign in</span></SidebarMenuButton>

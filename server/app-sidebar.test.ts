@@ -29,7 +29,7 @@ test('the brand block holds the brand and nothing that competes with it', () => 
     'nothing in the brand block narrows the navigation');
 });
 
-test('Inventory is a category and Assets is the surface inside it', () => {
+test('Inventory is a category that opens its default surface', () => {
   const markup = render({ user, isAdmin: true, avatarHash: null, busy: false });
   for (const label of ['Inventory', 'Assets', 'Lookup', 'Groups', 'Members', 'Instance settings']) {
     assert.match(markup, new RegExp(`>${label}<`), `${label} is present`);
@@ -38,8 +38,11 @@ test('Inventory is a category and Assets is the surface inside it', () => {
   // inside it, which is what lets another surface arrive there later.
   const links = [...markup.matchAll(/<a [^>]*href="([^"]*)"[^>]*>(?:(?!<\/a>).)*?>([^<]+)<\/span>/gs)]
     .map(([, href, label]) => [label, href]);
-  assert.ok(links.some(([label, href]) => label === 'Assets' && href === '/'), 'Assets is the destination');
-  assert.ok(!links.some(([label]) => label === 'Inventory'), 'Inventory is not one');
+  assert.ok(links.some(([label, href]) => label === 'Assets' && href === '/'), 'Assets is the surface');
+  // The category opens its default surface, which is a convenience rather than
+  // an equivalence: Inventory is where surfaces live, Assets is today's.
+  assert.ok(links.some(([label, href]) => label === 'Inventory' && href === '/'),
+    'Inventory opens its default surface');
   // Assets sits under Inventory rather than beside it.
   assert.match(markup, /data-slot="sidebar-menu-sub"/);
 });
@@ -106,12 +109,18 @@ function open(props: Parameters<typeof AppSidebar>[0], at = '/') {
   };
 }
 
-test('the account menu opens and offers the account’s own destinations', () => {
+test('the account menu is actions, not a second copy of the account', () => {
   const view = open({ user, isAdmin: true, avatarHash: null, busy: false });
   assert.deepEqual(view.items(), ['View profile', 'Settings', 'Sign out']);
-  // The identity the menu belongs to is stated in it, not left to the avatar.
-  assert.match(view.text(), /hanako@example\.test/);
-  assert.match(view.text(), /System administrator/);
+  // The row that opened the menu is the account and is still on screen, so
+  // nothing in the menu repeats who it belongs to.
+  const menu = document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent ?? '';
+  assert.doesNotMatch(menu, /hanako@example\.test/, 'no address');
+  assert.doesNotMatch(menu, /System administrator/, 'no role');
+  assert.doesNotMatch(menu, /Hanako/, 'no name');
+  // Subtracted from the menu, not from the account: the address is still the
+  // account's own to see in Settings.
+  assert.match(view.text(), /Hanako/, 'the anchor still names the account');
   view.stop();
 });
 
@@ -126,10 +135,15 @@ test('View profile reaches this account’s own User page', () => {
   view.stop();
 });
 
-test('an ordinary member is not told they are an administrator', () => {
-  const view = open({ user, isAdmin: false, avatarHash: null, busy: false });
-  assert.doesNotMatch(view.text(), /System administrator/);
-  view.stop();
+test('the account menu says the same thing to everybody', () => {
+  // Nothing in it depends on the role, so an administrator and an ordinary
+  // member see one menu rather than two that have to be kept in step.
+  const ordinary = open({ user, isAdmin: false, avatarHash: null, busy: false });
+  const items = ordinary.items();
+  ordinary.stop();
+  const administrator = open({ user, isAdmin: true, avatarHash: null, busy: false });
+  assert.deepEqual(administrator.items(), items);
+  administrator.stop();
 });
 
 test('narrowing the navigation leaves every surface reachable', () => {

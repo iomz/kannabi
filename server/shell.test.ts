@@ -1,5 +1,6 @@
 import './dom';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -31,15 +32,19 @@ test('the shell mounts as one piece, with navigation and workspace beside each o
   view.stop();
 });
 
-test('the control that narrows the navigation sits at the workspace boundary', () => {
+test('the navigation is narrowed by its own rail, not by a control in the workspace', () => {
   const view = shell('/');
-  const trigger = document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]');
-  assert.ok(trigger, 'the control exists');
-  // In the header, not in the brand block whose tagline it used to crowd.
-  assert.ok(trigger.closest('header'), 'it is in the workspace header');
-  assert.equal(trigger.closest('[data-slot="sidebar-header"]'), null);
-  // Named for anybody who cannot see which way it points.
-  assert.match(trigger.textContent ?? '', /Toggle Sidebar/);
+  const rail = document.querySelector<HTMLButtonElement>('[data-slot="sidebar-rail"]');
+  assert.ok(rail, 'the rail is present');
+  // It belongs to the navigation by construction: it is inside it.
+  assert.ok(rail.closest('[data-slot="sidebar"]'), 'the rail is part of the navigation');
+  assert.equal(rail.closest('header'), null, 'and nothing of it is in the workspace');
+  // Named and reachable: a pointer finds it on the boundary, a keyboard finds
+  // it in the tab order, and either way it says what it does.
+  assert.equal(rail.getAttribute('aria-label'), 'Toggle Sidebar');
+  assert.equal(rail.tabIndex, 0);
+  // On a wide screen the workspace header carries no sidebar control at all.
+  assert.equal(document.querySelector('header [data-slot="sidebar-trigger"]'), null);
   view.stop();
 });
 
@@ -47,10 +52,13 @@ test('narrowing the navigation is a state the whole shell can see', () => {
   const view = shell('/');
   const sidebar = () => document.querySelector('[data-slot="sidebar"]');
   assert.equal(sidebar()?.getAttribute('data-state'), 'expanded');
-  view.click(document.querySelector('[data-slot="sidebar-trigger"]'));
+  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
   assert.equal(sidebar()?.getAttribute('data-state'), 'collapsed');
   // Collapsed to icons rather than away: every destination stays reachable.
   assert.equal(sidebar()?.getAttribute('data-collapsible'), 'icon');
+  // And the same control puts it back, so nothing has to be found elsewhere.
+  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
+  assert.equal(sidebar()?.getAttribute('data-state'), 'expanded');
   view.stop();
 });
 
@@ -63,7 +71,18 @@ test('Asset search is offered where looking an Asset up is the thing to do', () 
   // them reads as leftover workspace chrome.
   const settings = shell('/settings', { search: false });
   assert.equal(document.querySelector('[role="search"]'), null);
-  // The header itself stays, because the navigation control lives in it.
-  assert.ok(document.querySelector('[data-slot="sidebar-trigger"]'));
+  // With nothing to put in it, the bar itself goes rather than leaving a rule
+  // across the top of the page.
+  assert.equal(document.querySelector('header'), null);
   settings.stop();
+});
+
+test('a narrow screen keeps the only way into the navigation it has', () => {
+  // There is no rail on a phone: the navigation is a sheet that is not on the
+  // page until it is asked for, and the workspace header is the only place
+  // left to ask from.
+  const header = readFileSync('web/workspace-header.tsx', 'utf8');
+  assert.match(header, /\{isMobile && <>[\s\S]*?<SidebarTrigger/,
+    'the trigger is offered exactly where the rail cannot reach');
+  assert.match(header, /if \(!search && !isMobile\) return null;/);
 });
