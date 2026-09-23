@@ -133,7 +133,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
   return <>
     {authenticated && <Link to={back} className="mb-6 inline-block text-[.85rem]">{back.startsWith('/lookup') ? '← Lookup' : '← Assets'}</Link>}
     <PageHeading eyebrow="Asset" title={asset.name}>
-      {authenticated ? <Badge variant={asset.isPublic ? 'default' : 'secondary'}>{asset.isPublic ? 'Public' : 'Group access'}</Badge>
+      {authenticated ? <Badge variant={asset.isPublic ? 'brand' : 'secondary'}>{asset.isPublic ? 'Public' : 'Group access'}</Badge>
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
     <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">

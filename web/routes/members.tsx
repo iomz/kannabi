@@ -177,7 +177,7 @@ export default function Members({ loaderData: { members, settings, actorKey }, a
         <TableCell data-label="Email">{member.email}</TableCell>
         <TableCell data-label="Joined">{member.createdAt ? <time dateTime={member.createdAt}>{displayInstant(member.createdAt, settings.displayTimezone)}</time> : <span aria-label="Unknown">—</span>}</TableCell>
         <TableCell data-label="Access"><AccessBadge member={member} /></TableCell>
-        <TableCell data-label="Role"><Badge variant={member.isAdmin ? 'default' : 'secondary'}>{member.isAdmin ? 'System administrator' : 'Member'}</Badge></TableCell>
+        <TableCell data-label="Role"><Badge variant={member.isAdmin ? 'brand' : 'secondary'}>{member.isAdmin ? 'System administrator' : 'Member'}</Badge></TableCell>
       </TableRow>)}</TableBody></Table></div>
       : <EmptyState className="rounded-lg border bg-card"><p>No members match “{query.trim()}”.</p></EmptyState>}
     {creating && <CreateMemberDialog actionData={actionData} onDismiss={() => setCreating(false)} />}

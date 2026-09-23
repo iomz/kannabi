@@ -236,7 +236,7 @@ export function ApiTokens({ tokens: initial, maxLifetimeDays, isAdmin }: {
         </TableRow></TableHeader>
         <TableBody>{tokens.map((token) => <TableRow key={token.id}>
           <TableCell data-label="Token" className="font-medium">{token.label}</TableCell>
-          {isAdmin && <TableCell data-label="Access"><Badge variant={token.admin ? 'default' : 'secondary'}>
+          {isAdmin && <TableCell data-label="Access"><Badge variant={token.admin ? 'brand' : 'secondary'}>
             {token.admin ? 'Administrator' : 'Standard'}</Badge></TableCell>}
           <TableCell data-label="Expires">{token.expiresAt
             ? <time dateTime={token.expiresAt}>{displayDate(token.expiresAt)}</time>

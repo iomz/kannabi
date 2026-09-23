@@ -117,7 +117,7 @@ function GiaiNamespaces({ groupKey, namespaces, busy }: {
         className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted px-[.8rem] py-[.6rem]">
         <div className="flex flex-wrap items-center gap-2">
           <code>{namespace.gcp}</code>
-          <Badge variant={namespace.active ? 'default' : 'secondary'}>
+          <Badge variant={namespace.active ? 'brand' : 'secondary'}>
             {namespace.active ? 'Active' : 'Inactive'}</Badge>
           <Hint>Next reference {namespace.nextSequence}
             {namespace.exclusions.length

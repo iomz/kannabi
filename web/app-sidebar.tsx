@@ -4,10 +4,11 @@ import { Avatar } from './avatar';
 import { displayVersion, kannabiVersion } from './version';
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarRail, useSidebar,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton,
+  SidebarMenuSubItem, SidebarRail, useSidebar,
 } from '@/components/ui/sidebar';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -28,35 +29,91 @@ export function activeDestination(pathname: string): string | null {
   return null;
 }
 
-const workspace = [
-  { to: '/', icon: 'assets', label: 'Inventory' },
+type Destination = { to: string; icon: IconName; label: string };
+
+/** Inventory is the category; Assets is the surface it currently has.
+ *
+ * Keeping the two apart is what lets the next inventory surface — identifier
+ * management, say — arrive underneath Inventory rather than forcing the
+ * navigation to be reorganised around it. Inventory is therefore not a
+ * destination of its own: there is nothing at the category, only inside it.
+ */
+const inventory: { label: string; icon: IconName; items: readonly Destination[] } = {
+  label: 'Inventory', icon: 'assets',
+  items: [{ to: '/', icon: 'assets', label: 'Assets' }],
+};
+
+const workspace: readonly Destination[] = [
   { to: '/lookup', icon: 'search', label: 'Lookup' },
   { to: '/groups', icon: 'groups', label: 'Groups' },
-] as const;
+];
 
-const administration = [
+const administration: readonly Destination[] = [
   { to: '/admin/members', icon: 'members', label: 'Members' },
   { to: '/admin/settings', icon: 'settings', label: 'Instance settings' },
-] as const;
+];
 
-function Destinations({ label, items, active }: {
-  label: string;
-  items: readonly { to: string; icon: IconName; label: string }[];
-  active: string | null;
+/** Selection is a state of the navigation, not a link colour.
+ *
+ * A navigation item takes the chrome foreground like everything else in the
+ * sidebar; what marks the current one is the selected surface and the rule
+ * down its leading edge, which is how it read before this became a component.
+ */
+const selected = 'data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground'
+  + ' data-active:font-[650] data-active:shadow-[inset_3px_0_var(--kannabi-selected-indicator)]';
+
+function Destination({ item, active, close }: {
+  item: Destination; active: string | null; close: () => void;
 }) {
-  const { setOpenMobile } = useSidebar();
+  // The label is also the collapsed tooltip, so nothing becomes unreachable or
+  // unnameable when the navigation is narrowed.
+  return <SidebarMenuItem>
+    <SidebarMenuButton isActive={active === item.to} tooltip={item.label} className={selected}
+      render={<Link to={item.to} aria-current={active === item.to ? 'page' : undefined}
+        onClick={close} />}>
+      <Icon name={item.icon} /><span>{item.label}</span>
+    </SidebarMenuButton>
+  </SidebarMenuItem>;
+}
+
+function Workspace({ active }: { active: string | null }) {
+  const { setOpenMobile, state } = useSidebar();
+  const close = () => setOpenMobile(false);
+  // Narrowed to icons, the sidebar is a column of destinations and a category
+  // has nothing to show in it. Its surfaces stand in its place rather than
+  // going with it.
+  const narrowed = state === 'collapsed';
   return <SidebarGroup>
-    <SidebarGroupLabel>{label}</SidebarGroupLabel>
+    <SidebarGroupLabel>Workspace</SidebarGroupLabel>
     <SidebarMenu>
-      {items.map((item) => <SidebarMenuItem key={item.to}>
-        {/* The label is also the collapsed tooltip, so nothing becomes
-            unreachable or unnameable when the navigation is narrowed. */}
-        <SidebarMenuButton isActive={active === item.to} tooltip={item.label}
-          render={<Link to={item.to} aria-current={active === item.to ? 'page' : undefined}
-            onClick={() => setOpenMobile(false)} />}>
-          <Icon name={item.icon} /><span>{item.label}</span>
-        </SidebarMenuButton>
-      </SidebarMenuItem>)}
+      {narrowed
+        ? inventory.items.map((item) => <Destination key={item.to} item={item} active={active} close={close} />)
+        : <SidebarMenuItem>
+          <SidebarMenuButton render={<span />} className="cursor-default hover:bg-transparent">
+            <Icon name={inventory.icon} /><span>{inventory.label}</span>
+          </SidebarMenuButton>
+          <SidebarMenuSub>
+            {inventory.items.map((item) => <SidebarMenuSubItem key={item.to}>
+              <SidebarMenuSubButton isActive={active === item.to} className={selected}
+                render={<Link to={item.to} aria-current={active === item.to ? 'page' : undefined}
+                  onClick={close} />}>
+                <span>{item.label}</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>)}
+          </SidebarMenuSub>
+        </SidebarMenuItem>}
+      {workspace.map((item) => <Destination key={item.to} item={item} active={active} close={close} />)}
+    </SidebarMenu>
+  </SidebarGroup>;
+}
+
+function Administration({ active }: { active: string | null }) {
+  const { setOpenMobile } = useSidebar();
+  const close = () => setOpenMobile(false);
+  return <SidebarGroup>
+    <SidebarGroupLabel>Administration</SidebarGroupLabel>
+    <SidebarMenu>
+      {administration.map((item) => <Destination key={item.to} item={item} active={active} close={close} />)}
     </SidebarMenu>
   </SidebarGroup>;
 }
@@ -109,11 +166,15 @@ function Account({ user, isAdmin, avatarHash, busy }: {
         <span aria-hidden="true" className="ml-auto text-sidebar-foreground/60">⌄</span>
       </SidebarMenuButton>} />
     <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-56">
-      <DropdownMenuLabel className="font-normal">
-        <span className="block truncate font-medium">{user.name}</span>
-        <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
-        {isAdmin && <span className="block truncate text-xs text-muted-foreground">System administrator</span>}
-      </DropdownMenuLabel>
+      {/* The label names the group it heads, which is what makes it the menu's
+          own heading rather than a first item somebody can land on. */}
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="font-normal">
+          <span className="block truncate font-medium">{user.name}</span>
+          <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
+          {isAdmin && <span className="block truncate text-xs text-muted-foreground">System administrator</span>}
+        </DropdownMenuLabel>
+      </DropdownMenuGroup>
       <DropdownMenuSeparator />
       <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>
       <DropdownMenuItem render={<Link to="/settings" onClick={close} />}>Settings</DropdownMenuItem>
@@ -136,8 +197,8 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
   return <Sidebar collapsible="icon">
     <SidebarHeader><Brand /></SidebarHeader>
     <SidebarContent>
-      <Destinations label="Workspace" items={workspace} active={active} />
-      {isAdmin && <Destinations label="Administration" items={administration} active={active} />}
+      <Workspace active={active} />
+      {isAdmin && <Administration active={active} />}
     </SidebarContent>
     <SidebarFooter>
       <SidebarMenu>
@@ -151,6 +212,9 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>
-    <SidebarRail />
+    {/* The boundary affordance stays on the sidebar's own edge. Upstream
+        straddles the border, which puts a full-height strip on top of the
+        workspace — over the header's left edge and every row beneath it. */}
+    <SidebarRail className="translate-x-0 group-data-[side=left]:right-0 after:start-auto after:end-0" />
   </Sidebar>;
 }

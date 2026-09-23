@@ -69,3 +69,23 @@ test('no component writes a colour of its own', () => {
     }
   }
 });
+
+test('application navigation is chrome, not content', () => {
+  // The migration gave every anchor the content-link colour, which turned the
+  // sidebar cyan. An anchor a component rendered is that component and keeps
+  // the colour its component decided; only a bare link into content is a link.
+  assert.match(stylesheet, /a:not\(\[data-slot\]\) \{ color: var\(--kannabi-link\)/);
+  assert.doesNotMatch(stylesheet, /^\s*a \{ color: var\(--kannabi-link\)/m);
+});
+
+test('an informational badge never wears the colour that means “do this”', () => {
+  // Public, administrator and active-prefix are facts worth noticing, not
+  // actions. They carry Kannabi's brand tint; `default` is the action colour
+  // and the migration had reached for it.
+  const badge = readFileSync('web/components/ui/badge.tsx', 'utf8');
+  assert.match(badge, /brand: "bg-brand-soft text-brand-text"/);
+  for (const [file, source] of uiSources()) {
+    assert.doesNotMatch(source, /<Badge variant=\{[^}]*\? 'default'/,
+      `${file} marks a fact with the action colour`);
+  }
+});

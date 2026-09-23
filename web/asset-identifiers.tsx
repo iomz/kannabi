@@ -23,7 +23,7 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
     <div>
       <div className="flex flex-wrap items-center gap-2">
         <strong>{schemeLabels[identifier.scheme]}</strong>
-        <Badge variant={identifier.level === 'individual' ? 'default' : 'secondary'}>
+        <Badge variant={identifier.level === 'individual' ? 'brand' : 'secondary'}>
           {levelLabels[identifier.level]}
         </Badge>
       </div>

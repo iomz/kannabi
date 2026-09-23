@@ -165,8 +165,13 @@
   h2 { margin: 0 0 1.3rem; font-size: 1.05rem; font-weight: 650; }
   h3 { margin: 1em 0; font-size: 1.1rem; }
 
-  a { color: var(--kannabi-link); text-underline-offset: .2em; }
-  a:hover { color: var(--kannabi-link-hover); }
+  /* A link into content is link-coloured. An anchor that a component rendered
+     is that component — a navigation item, a menu item, a button — and keeps
+     the colour its component decided, which is why this excludes anything
+     carrying a `data-slot`. Application navigation is chrome and takes the
+     chrome foreground; only content links are cyan. */
+  a:not([data-slot]) { color: var(--kannabi-link); text-underline-offset: .2em; }
+  a:not([data-slot]):hover { color: var(--kannabi-link-hover); }
 
   /* One focus ring for the whole application, so nothing has to remember to
      draw its own and nothing can draw a quieter one. */

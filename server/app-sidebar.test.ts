@@ -1,6 +1,8 @@
+import './dom';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { AppSidebar, activeDestination } from '../web/app-sidebar.js';
@@ -27,15 +29,19 @@ test('the brand block holds the brand and nothing that competes with it', () => 
     'nothing in the brand block narrows the navigation');
 });
 
-test('every destination keeps a name when the navigation is narrowed', () => {
+test('Inventory is a category and Assets is the surface inside it', () => {
   const markup = render({ user, isAdmin: true, avatarHash: null, busy: false });
-  for (const label of ['Inventory', 'Lookup', 'Groups', 'Members', 'Instance settings']) {
-    assert.match(markup, new RegExp(`>${label}<`), `${label} is reachable`);
+  for (const label of ['Inventory', 'Assets', 'Lookup', 'Groups', 'Members', 'Instance settings']) {
+    assert.match(markup, new RegExp(`>${label}<`), `${label} is present`);
   }
-  // Collapsing hides the words, so each destination carries its own tooltip
-  // rather than becoming an unnamed icon.
-  const buttons = markup.match(/data-slot="sidebar-menu-button"/g) ?? [];
-  assert.ok(buttons.length >= 6, 'the brand, five destinations and the account are all menu buttons');
+  // The category is not a destination: there is nothing at Inventory, only
+  // inside it, which is what lets another surface arrive there later.
+  const links = [...markup.matchAll(/<a [^>]*href="([^"]*)"[^>]*>(?:(?!<\/a>).)*?>([^<]+)<\/span>/gs)]
+    .map(([, href, label]) => [label, href]);
+  assert.ok(links.some(([label, href]) => label === 'Assets' && href === '/'), 'Assets is the destination');
+  assert.ok(!links.some(([label]) => label === 'Inventory'), 'Inventory is not one');
+  // Assets sits under Inventory rather than beside it.
+  assert.match(markup, /data-slot="sidebar-menu-sub"/);
 });
 
 test('administration is only offered to an administrator', () => {
@@ -51,8 +57,6 @@ test('the account opens over the shell rather than growing the footer', () => {
   assert.doesNotMatch(markup, /<details/);
   assert.match(markup, /data-slot="dropdown-menu-trigger"/);
   assert.match(markup, /aria-label="Account menu"/);
-  // The menu itself is anchored in a portal and only exists once opened, so
-  // what is asserted here is the trigger and its resting state.
   assert.match(markup, /aria-haspopup="menu"/);
   assert.match(markup, />Hanako</);
 });
@@ -73,4 +77,79 @@ test('Asset detail and reporting belong to the inventory, not to Lookup', () => 
   assert.equal(activeDestination('/groups'), '/groups');
   assert.equal(activeDestination('/admin/members'), '/admin/members');
   assert.equal(activeDestination('/settings'), null);
+});
+
+/** Opening the menu is the only way to find out whether it composes.
+ *
+ * A menu is anchored in a portal, so nothing of it exists until it is opened:
+ * a shell that mounts, and a trigger that renders, say nothing about what
+ * happens when somebody clicks. A mis-composed part throws during that render,
+ * and React Router reports it at the root — which is how this surfaced, as the
+ * whole application replaced by its Connection Error page.
+ */
+function open(props: Parameters<typeof AppSidebar>[0], at = '/') {
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
+  const root = createRoot(host);
+  const router = createMemoryRouter(
+    [{ path: '*', element: createElement(SidebarProvider, null, createElement(AppSidebar, props)) }],
+    { initialEntries: [at] });
+  act(() => { root.render(createElement(RouterProvider, { router })); });
+  act(() => { document.querySelector<HTMLElement>('[aria-label="Account menu"]')?.click(); });
+  return {
+    items: () => [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')]
+      .map((node) => node.textContent?.trim()),
+    link: (name: string) => [...document.querySelectorAll('a')]
+      .find((node) => node.textContent?.trim() === name) ?? null,
+    text: () => document.body.textContent ?? '',
+    stop: () => { act(() => root.unmount()); host.remove(); },
+  };
+}
+
+test('the account menu opens and offers the account’s own destinations', () => {
+  const view = open({ user, isAdmin: true, avatarHash: null, busy: false });
+  assert.deepEqual(view.items(), ['View profile', 'Settings', 'Sign out']);
+  // The identity the menu belongs to is stated in it, not left to the avatar.
+  assert.match(view.text(), /hanako@example\.test/);
+  assert.match(view.text(), /System administrator/);
+  view.stop();
+});
+
+test('View profile reaches this account’s own User page', () => {
+  const view = open({ user, isAdmin: false, avatarHash: null, busy: false });
+  const profile = view.link('View profile');
+  assert.ok(profile, 'the destination is a link, so it can be opened in a new tab');
+  assert.equal(profile.getAttribute('href'), `/users/${user.key}`);
+  assert.equal(view.link('Settings')?.getAttribute('href'), '/settings');
+  // Signing out is an action, not a destination, so it is deliberately not one.
+  assert.equal(view.link('Sign out'), null);
+  view.stop();
+});
+
+test('an ordinary member is not told they are an administrator', () => {
+  const view = open({ user, isAdmin: false, avatarHash: null, busy: false });
+  assert.doesNotMatch(view.text(), /System administrator/);
+  view.stop();
+});
+
+test('narrowing the navigation leaves every surface reachable', () => {
+  // A category has nothing to show in a column of icons, so its surfaces stand
+  // in its place; collapsing must not take Assets away with Inventory.
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
+  const root = createRoot(host);
+  const router = createMemoryRouter([{
+    path: '*',
+    element: createElement(SidebarProvider, { defaultOpen: false } as never,
+      createElement(AppSidebar, { user, isAdmin: false, avatarHash: null, busy: false })),
+  }], { initialEntries: ['/'] });
+  act(() => { root.render(createElement(RouterProvider, { router })); });
+
+  const labels = [...document.querySelectorAll('[data-slot="sidebar-menu-button"] span')]
+    .map((node) => node.textContent);
+  assert.ok(labels.includes('Assets'), 'Assets is a destination in its own right');
+  assert.ok(!labels.includes('Inventory'), 'and the category it belongs to is not shown');
+  assert.equal(document.querySelector('[data-slot="sidebar-menu-sub"]'), null);
+  act(() => root.unmount());
+  host.remove();
 });

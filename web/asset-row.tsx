@@ -31,7 +31,7 @@ export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt
             <time dateTime={asset.reportedAt}>{displayDate(asset.reportedAt)}</time></>}
         </span>
       </div>
-      <Badge variant={asset.isPublic ? 'default' : 'secondary'}
+      <Badge variant={asset.isPublic ? 'brand' : 'secondary'}
         className="gap-[.6rem] max-sm:col-start-2 max-sm:justify-self-start max-sm:text-[.67rem] [&_.icon]:size-4">
         <Icon name={asset.isPublic ? 'globe' : 'lock'} />{asset.isPublic ? 'Public' : 'Group access'}</Badge>
     </Link>
