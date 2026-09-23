@@ -14,9 +14,9 @@ export type ThemePalette = {
   chromeText: string;
   chromeMuted: string;
   brandMark: string;
-  accent: string;
-  accentSoft: string;
-  accentText: string;
+  brand: string;
+  brandSoft: string;
+  brandText: string;
   link: string;
   linkHover: string;
   focus: string;

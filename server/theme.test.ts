@@ -21,7 +21,7 @@ test('built-in themes provide complete paired palettes with readable semantic co
   const expectedTokens = Object.keys(builtInThemes[0].light).sort();
   const textPairs = [
     ['text', 'surface'], ['textMuted', 'surface'], ['chromeText', 'chrome'], ['chromeMuted', 'chrome'],
-    ['accentText', 'accentSoft'], ['link', 'surface'], ['linkHover', 'surface'],
+    ['brandText', 'brandSoft'], ['link', 'surface'], ['linkHover', 'surface'],
     ['actionText', 'action'], ['actionText', 'actionHover'], ['selectedText', 'selectedSurface'],
     ['successText', 'successSurface'], ['warningText', 'warningSurface'], ['dangerText', 'dangerSurface'],
   ] as const;
@@ -42,7 +42,7 @@ test('generated theme stylesheet covers every built-in light and dark palette', 
   for (const id of themeIds) for (const mode of ['light', 'dark']) {
     assert.match(css, new RegExp(`data-theme="${id}"\\]\\[data-color-scheme="${mode}"`));
   }
-  assert.equal((css.match(/--color-canvas:/g) ?? []).length, themeIds.length * 2);
-  assert.equal((css.match(/--color-danger-text:/g) ?? []).length, themeIds.length * 2);
-  assert.equal((css.match(/--color-warning-text:/g) ?? []).length, themeIds.length * 2);
+  assert.equal((css.match(/--kannabi-canvas:/g) ?? []).length, themeIds.length * 2);
+  assert.equal((css.match(/--kannabi-danger-text:/g) ?? []).length, themeIds.length * 2);
+  assert.equal((css.match(/--kannabi-warning-text:/g) ?? []).length, themeIds.length * 2);
 });
