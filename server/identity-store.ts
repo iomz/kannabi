@@ -36,6 +36,17 @@ export type ResolvedUser = Readonly<{ key: string; name: string }>;
 export type Member = { key: string; name: string; email: string; isAdmin: boolean;
   credentialState: 'pending' | 'established'; createdAt: string | null };
 export type MemberAccount = Member & { id: string };
+/** What one User may learn about another: who they are, and how much of their
+ * work this particular viewer can already see. */
+export type UserProfile = Readonly<{
+  key: string;
+  name: string;
+  avatarHash: string | null;
+  /** Counted through the viewer's own readability, never the target's. */
+  reportedAssets: number;
+  self: boolean;
+}>;
+
 export type AccountState = {
   isAdmin: boolean;
   appearance: AppearancePreference;
@@ -970,6 +981,46 @@ export class IdentityStore {
     const email = result.records[0].get('email');
     const avatarHash = gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null;
     return { isAdmin: result.records[0].get('isAdmin') === true, appearance, gravatar, avatarHash };
+  }
+
+  /** A User as another User may see them.
+   *
+   * Nothing here is new visibility. The name and the deleted state are what
+   * `reportedBy` already shows to anybody who can read an Asset; the avatar
+   * exists only where its owner asked for one; and the Asset count is counted
+   * through the viewer's own readability rule, so it can never reveal that
+   * something exists which they could not otherwise reach.
+   *
+   * Email and Group membership are deliberately absent.
+   */
+  async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
+    const audience = audienceParameters(requiredText(actorKey, 'actorKey'));
+    const result = await this.write((tx) => tx.run(`
+      MATCH (u:User {key: $targetKey}) WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL
+      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableAsset}
+      RETURN u.key AS key, u.name AS name, coalesce(u.gravatar, false) AS gravatar,
+        u.email AS email, count(a) AS reportedAssets`,
+    { targetKey: requiredText(targetKey, 'user key'), ...audience }));
+    // A tombstoned account is not a person to visit. It keeps only the
+    // attribution a record needs, and stays undiscoverable here.
+    if (!result.records.length) return null;
+    const row = result.records[0];
+    const reportedAssets = row.get('reportedAssets').toNumber();
+    // Somebody already reachable: yourself, a person whose work you can
+    // already see, or — for an administrator — anybody, which the member list
+    // already shows them. None of this reaches an Asset.
+    const entitled = actorKey === targetKey || reportedAssets > 0
+      || await this.isAdministrator(actorKey);
+    if (!entitled) return null;
+    const gravatar = row.get('gravatar') === true;
+    const email = row.get('email');
+    return {
+      key: row.get('key'),
+      name: row.get('name'),
+      avatarHash: gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null,
+      reportedAssets,
+      self: actorKey === targetKey,
+    };
   }
 
   /** Records whether this User wants Gravatar used for their own avatar.

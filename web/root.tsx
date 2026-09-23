@@ -138,6 +138,8 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
         <div className="account-popover"><strong>{user.name}</strong>
           <p className="account-email">{user.email}</p>
           {isAdmin && <p className="account-role">System administrator</p>}
+          <Link to={`/users/${user.key}`} className="account-profile-link"
+            aria-label="Your profile"><span>View profile</span><span aria-hidden="true">›</span></Link>
           <Link to="/settings" className={'account-profile-link' + (settingsActive ? ' active' : '')}
             aria-current={settingsActive ? 'page' : undefined} aria-label="Settings"><span>Settings</span><span aria-hidden="true">›</span></Link>
           <Form method="post" action="/"><button aria-label="Sign out" disabled={busy}>Sign out</button></Form>

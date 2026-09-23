@@ -558,3 +558,9 @@ img.avatar { object-fit: cover; background: var(--color-accent-soft); }
 .avatar-preference { display: flex; align-items: flex-start; gap: 1rem; }
 .avatar-preference .avatar-preview { width: 3.5rem; height: 3.5rem; font-size: 1.3rem; flex-shrink: 0; }
 .avatar-preference .hint { margin: .5rem 0 0; max-width: 38rem; }
+
+/* A User page. Sparse on purpose: identity, and one number the viewer could
+   have counted themselves. */
+.user-heading { display: flex; align-items: center; gap: .9rem; }
+.user-heading h1 { margin: 0; }
+.user-avatar { width: 3.5rem; height: 3.5rem; font-size: 1.3rem; flex-shrink: 0; }

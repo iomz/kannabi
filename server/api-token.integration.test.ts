@@ -360,6 +360,70 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal((await (await bearer(second.secret)('/me')).json()).user.key, victimKey);
   });
 
+  await t.test('a User page shows only what the viewer could already see', async () => {
+    const profile = async (caller: ReturnType<typeof client>, key: string) =>
+      caller.request(`/users/${key}`);
+
+    // Yourself, always.
+    const own = await profile(owner, people.owner.key);
+    assert.equal(own.status, 200);
+    const mine = (await own.json()).profile;
+    assert.equal(mine.name, 'Token owner');
+    assert.equal(mine.self, true);
+    assert.ok(mine.reportedAssets >= 1);
+    // Never an address, never a Group list.
+    assert.deepEqual(Object.keys(mine).sort(),
+      ['avatarHash', 'key', 'name', 'reportedAssets', 'self']);
+
+    // Two unrelated, non-administrator accounts that share nothing.
+    const stranger = client();
+    const bystander = client();
+    for (const [name, caller] of [['Unrelated person', stranger], ['Another person', bystander]] as const) {
+      assert.equal((await caller.request('/auth/sign-up/email', 'POST',
+        { name, email: `${name.toLowerCase().replaceAll(' ', '-')}@example.com`, password: userPassword })).status, 200);
+    }
+    const strangerKey = (await (await stranger.request('/me')).json()).user.key;
+    const bystanderKey = (await (await bystander.request('/me')).json()).user.key;
+
+    // Sharing nothing means absent rather than refused, so a User page cannot
+    // be used to discover that an account exists.
+    assert.equal((await profile(stranger, bystanderKey)).status, 404);
+    assert.equal((await profile(bystander, strangerKey)).status, 404);
+    assert.equal((await profile(stranger, people.owner.key)).status, 404);
+    assert.equal((await profile(stranger, 'not-a-key')).status, 404);
+
+    // An administrator does see an unrelated member, because the member list
+    // already shows them every account. It reaches none of their Assets.
+    assert.equal((await profile(owner, strangerKey)).status, 200);
+    assert.equal((await owner.request(`/assets/${foreignAsset}`)).status, 404);
+
+    // Sharing a readable Asset is what makes somebody visible, and the count
+    // is the viewer's own: the stranger joins a Group the owner reports into.
+    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[:MEMBER_OF]->(g)`,
+      { userKey: strangerKey, groupKey: ownerGroup });
+    const visible = await profile(stranger, people.owner.key);
+    assert.equal(visible.status, 200);
+    const seen = (await visible.json()).profile;
+    assert.equal(seen.self, false);
+    // The stranger counts only what the stranger can read, never the total.
+    assert.ok(seen.reportedAssets >= 1);
+    assert.ok(seen.reportedAssets <= mine.reportedAssets);
+    // Seeing a person is not reaching their private work.
+    assert.equal((await stranger.request(`/assets/${foreignAsset}`)).status, 404);
+    // And it does not make unrelated accounts visible to them.
+    assert.equal((await profile(stranger, bystanderKey)).status, 404);
+
+    // A deleted account is not a person to visit, for anybody — including the
+    // administrator who could see them a moment ago.
+    await store.deactivateMember(people.owner.key, strangerKey);
+    assert.equal((await profile(owner, strangerKey)).status, 404);
+    assert.equal((await (await owner.request('/members')).json()).members
+      .some((member: { key: string }) => member.key === strangerKey), false);
+
+    // Anonymous callers have no User pages at all.
+    assert.equal((await client().request(`/users/${people.owner.key}`)).status, 401);
+  });
+
   await t.test('allocation authority stays independent of the asserting credential', async () => {
     const namespace = await store.configureGiaiNamespace(people.owner.key, ownerGroup, { gcp: '0991122' });
     const call = bearer(adminSecret);

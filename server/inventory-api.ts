@@ -310,6 +310,14 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeOwn(actor(c.get('user')), c.req.param('id'));
       return c.json({ revoked: true });
     })
+    // A User page, for somebody the viewer can already see. It grants no Asset
+    // access: the count it shows is counted through the viewer's own
+    // readability, and an unreachable person is absent rather than refused.
+    .get('/users/:key', async (c) => {
+      const profile = await store.userProfile(actor(c.get('user')), c.req.param('key'));
+      if (!profile) return c.json({ error: 'User not found' }, 404);
+      return c.json({ profile });
+    })
     .get('/groups', async (c) => c.json({ groups: await store.listGroups(actor(c.get('user'))) }))
     .post('/groups', validator('json', (value) => {
       const input = record(value, ['name']);
