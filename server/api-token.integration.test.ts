@@ -65,7 +65,10 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
 
   const owner = client();
   const outsider = client();
-  const people: Record<string, { key: string; name: string }> = {};
+  const people: Record<string, { key: string; name: string; email: string }> = {};
+  /** Public attribution is key, name and status — never an address. */
+  const attribution = (person: { key: string; name: string }, status: 'active' | 'deleted') =>
+    ({ key: person.key, name: person.name, status });
   let ownerGroup = '';
   let outsiderGroup = '';
   let ownedAsset = '';
@@ -92,7 +95,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal(response.status, 200);
     const { asset } = await response.json();
     assert.equal(asset.provenance.assertedBy, null);
-    assert.deepEqual(asset.provenance.acceptedBy, { ...people.owner, status: 'active' });
+    assert.deepEqual(asset.provenance.acceptedBy, attribution(people.owner, 'active'));
     assert.equal(asset.provenance.basis, null);
   });
 
@@ -130,7 +133,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal(response.status, 200);
     const { asset } = await response.json();
     // Accepted under the owning User's authority; asserted by the credential.
-    assert.deepEqual(asset.provenance.acceptedBy, { ...people.owner, status: 'active' });
+    assert.deepEqual(asset.provenance.acceptedBy, attribution(people.owner, 'active'));
     assert.deepEqual(asset.provenance.assertedBy, { id: ordinaryId, label: 'Bench integration' });
   });
 
@@ -338,7 +341,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     const { asset } = await allocated.json();
     // The ledger records the authorizing User, never the credential, and the
     // credential appears only where it belongs.
-    assert.deepEqual(asset.allocation.allocatedBy, { ...people.owner, status: 'active' });
+    assert.deepEqual(asset.allocation.allocatedBy, attribution(people.owner, 'active'));
     assert.equal(asset.provenance.assertedBy.label, 'Admin automation');
     assert.equal(asset.provenance.basis, 'depot:assets:900');
   });

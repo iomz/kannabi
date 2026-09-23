@@ -16,7 +16,10 @@ import { AdministrationError, LastAdministratorError, DuplicateIdentityError, Re
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
 
-type User = { key: string; name: string };
+/** The authenticated caller as the rest of the request sees them. `email` is
+ * the caller's own address, carried so a client can show which account is
+ * active without a second request; it is never another person's. */
+type User = { key: string; name: string; email: string };
 type Env = { Variables: { user: User | null; token: TokenCredential | null } };
 
 /** The bearer credential this request presented, if any.
@@ -109,7 +112,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         ? { id: session.session.id, label, admin: session.session.apiTokenAdmin === true } : null;
       const authenticated = bearer ? Boolean(token) : Boolean(session);
       c.set('token', token);
-      c.set('user', authenticated && session && key ? { key, name: session.user.name } : null);
+      c.set('user', authenticated && session && key
+        ? { key, name: session.user.name, email: session.user.email } : null);
       await next();
     })
     // Administrator operations are reachable with a browser session, or with a

@@ -15,6 +15,19 @@ export function isPublicShellHandle(handle: unknown): boolean {
     && handle.shell === publicShellHandle.shell;
 }
 
+/** Whether a route is a workspace page, and therefore whether the Asset-search
+ * bar belongs above it.
+ *
+ * Settings and Administration are management contexts: looking an Asset up is
+ * not what somebody is there to do, and a search toolbar over them reads as
+ * leftover workspace chrome. The shortcut follows the field rather than being
+ * duplicated into a hidden input, so it simply has nothing to focus here.
+ */
+export function usesWorkspaceHeader(pathname: string): boolean {
+  return !(pathname === '/settings' || pathname.startsWith('/settings/')
+    || pathname === '/admin' || pathname.startsWith('/admin/'));
+}
+
 export function usesAnonymousShell(handles: unknown[], authenticated: boolean): boolean {
   return handles.some(isAnonymousShellHandle)
     || (!authenticated && handles.some(isPublicShellHandle));

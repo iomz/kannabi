@@ -11,6 +11,11 @@ export default [
   route('lookup', 'routes/lookup.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),
+  route('settings', 'routes/settings-layout.tsx', [
+    index('routes/settings-profile.tsx'),
+    route('appearance', 'routes/settings-appearance.tsx'),
+    route('security', 'routes/settings-security.tsx'),
+  ]),
   route('admin/members', 'routes/members.tsx'),
   route('admin/settings', 'routes/settings.tsx'),
 ] satisfies RouteConfig;

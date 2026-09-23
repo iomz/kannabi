@@ -40,7 +40,10 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   const member = client();
   const stranger = client();
   const anonymous = client();
-  const people: { key: string; name: string }[] = [];
+  const people: { key: string; name: string; email: string }[] = [];
+  /** Public attribution is key, name and status — never an address. */
+  const attribution = (person: { key: string; name: string }, status: 'active' | 'deleted') =>
+    ({ key: person.key, name: person.name, status });
 
   await t.test('signup persists credentials and binds sessions to existing User model', async () => {
     for (const [i, caller] of [reporter, member, stranger].entries()) {
@@ -52,6 +55,9 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       const { user } = await me.json();
       assert.ok(user.key && user.key !== 'forged');
       people.push(user);
+      // `/me` names the caller's own account, address included, so a client can
+      // show which one is active without a second request.
+      assert.equal(user.email, `person${i}@example.com`);
     }
     assert.deepEqual(await (await reporter.request('/assets')).json(), { assets: [], total: 0, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
     const session = driver.session();
@@ -117,7 +123,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.ok(isAssetId(asset.id), asset.id);
     assetPath = '/assets/' + asset.id;
     assert.deepEqual(asset.identifiers.map((i: { canonical: string }) => i.canonical), [canonical]);
-    assert.deepEqual(asset.reportedBy, { ...people[0], status: 'active' });
+    assert.deepEqual(asset.reportedBy, attribution(people[0], 'active'));
     assert.equal(asset.groups[0].key, groupKey);
     assert.equal(asset.isPublic, false);
     reportedAt = asset.reportedAt;
@@ -223,7 +229,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     // Public provenance matches reportedBy: attribution, not an internal key,
     // and nothing private rides along with it.
     assert.deepEqual(Object.keys(allocation.allocatedBy).sort(), ['key', 'name', 'status']);
-    assert.deepEqual(allocation.allocatedBy, { ...people[1], status: 'active' });
+    assert.deepEqual(allocation.allocatedBy, attribution(people[1], 'active'));
     for (const field of ['email', 'role', 'password']) {
       assert.equal(field in allocation.allocatedBy, false, field);
     }
@@ -297,7 +303,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const response = await member.request(assetPath);
     const { asset } = await response.json();
     assert.equal('/assets/' + asset.id, assetPath);
-    assert.deepEqual(asset.reportedBy, { ...people[0], status: 'active' });
+    assert.deepEqual(asset.reportedBy, attribution(people[0], 'active'));
     assert.equal(asset.reportedAt, reportedAt);
     assert.equal(asset.name, 'Bench instrument');
     assert.equal((await (await reporter.request('/assets')).json()).assets.length, 0);

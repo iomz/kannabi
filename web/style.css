@@ -43,11 +43,11 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .nav-toggle { display: none; }
 .app-main { min-width: 0; }
 .global-header { height: 5rem; position: sticky; top: 0; z-index: 5; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding: 0 2.5rem; }
-.global-search { position: relative; display: flex; align-items: center; flex: 1; max-width: 43rem; min-width: 0; }
+.global-search { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
 .global-search > .icon { position: absolute; left: .85rem; color: var(--color-text-muted); pointer-events: none; }
 .global-search input { background: var(--color-surface-muted); border-color: var(--color-border); font-size: .88rem; padding-left: 2.6rem; padding-right: 3.4rem; }
 .global-search:focus-within input { border-color: var(--color-focus); }
-.global-search .search-shortcut { position: absolute; right: .45rem; padding: .2rem .4rem; background: var(--color-surface-hover); color: var(--color-text-muted); border: 0; font-size: .78rem; }
+.global-search .search-shortcut { position: absolute; right: .45rem; padding: .2rem .45rem; background: var(--color-surface-hover); color: var(--color-text-muted); border: 0; font-size: .78rem; white-space: nowrap; }
 kbd { font: inherit; }
 .icon { width: 1.15rem; height: 1.15rem; flex-shrink: 0; vertical-align: middle; }
 .account-menu { position: relative; flex-shrink: 0; }
@@ -57,6 +57,8 @@ kbd { font: inherit; }
 .account-name { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-popover { position: absolute; top: 2.7rem; right: 0; padding: 1.1rem; width: 15rem; border: 1px solid var(--color-border); background: var(--color-surface); border-radius: .6rem; box-shadow: 0 8px 25px #0002; overflow-wrap: anywhere; }
 .account-popover p { font-size: .8rem; color: var(--color-text-muted); margin-top: .4rem; }
+.account-popover .account-email { margin-top: .15rem; font-size: .78rem; }
+.account-popover .account-role { margin-top: .45rem; font-size: .7rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .account-popover button { width: 100%; }
 .account-signin { white-space: nowrap; font-size: .9rem; }
 .workspace { padding: 2.4rem 2.5rem 4rem; max-width: 88rem; margin: 0 auto; }
@@ -243,6 +245,17 @@ dt { color: var(--color-text-muted); } dd { margin: 0; overflow-wrap: anywhere; 
   .auth-brand svg { width: 28px; }
   .app-shell { display: block; }
   .sidebar { position: static; height: auto; padding: 1rem; display: grid; grid-template-columns: 1fr auto; align-items: center; }
+  .app-shell.collapsed { grid-template-columns: none; }
+  .sidebar-head { display: contents; }
+  .sidebar-collapse { display: none; }
+  .sidebar-account { grid-column: 1 / -1; margin: .75rem 0 0; }
+  .sidebar-account .account-popover { bottom: auto; top: 2.7rem; }
+  .app-shell.collapsed .brand span, .app-shell.collapsed .account-name,
+  .app-shell.collapsed .nav-label, .app-shell.collapsed .nav-group span,
+  .app-shell.collapsed .sidebar nav a span { display: revert; }
+  .app-shell.collapsed .sidebar nav a, .app-shell.collapsed .sidebar .nav-group { justify-content: flex-start; }
+  .app-shell.collapsed .sidebar .nav-child { padding-left: 2.4rem; }
+  .app-shell.collapsed .sidebar .nav-child .icon { display: none; }
   .brand { font-size: 1.1rem; padding: 0; }
   .brand svg { width: 26px; }
   .nav-toggle { display: block; background: transparent; border-color: var(--color-chrome-muted); color: var(--color-chrome-text); font-size: .8rem; padding: .5rem; }
@@ -451,3 +464,77 @@ button.danger:hover { color: var(--color-danger-surface); background: var(--colo
   .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .appearance-grid { grid-template-columns: 1fr; }
 }
+
+/* Navigation shell. The sidebar carries the account entry point at its foot and
+   can narrow to icons; the collapsed width is applied by the boot script so the
+   first paint is already the right one. */
+.sidebar-head { display: flex; align-items: center; gap: .5rem; }
+.sidebar-head .brand { flex: 1 1 auto; min-width: 0; }
+.sidebar-collapse { display: grid; place-items: center; flex-shrink: 0; width: 2.5rem; height: 2.5rem; padding: 0; border: 0; border-radius: .45rem; color: var(--color-chrome-muted); background: transparent; }
+.sidebar-collapse:hover { color: var(--color-chrome-text); background: var(--color-chrome-hover); }
+.sidebar-collapse .icon { width: 1.35rem; height: 1.35rem; }
+.sidebar-account { margin: .9rem -.35rem 0; padding-top: .9rem; border-top: 1px solid var(--color-chrome-hover); }
+.sidebar-account summary { padding: .5rem .45rem; border-radius: .4rem; color: var(--color-chrome-text); }
+.sidebar-account summary:hover { background: var(--color-chrome-hover); }
+.sidebar-account .account-popover { top: auto; bottom: 3rem; right: auto; left: 0; width: 14rem; }
+.sidebar-account .account-name { flex: 1 1 auto; min-width: 0; }
+a.sidebar-account { display: flex; align-items: center; padding: .9rem .45rem 0; text-decoration: none; }
+.account-profile-link.active { font-weight: 650; }
+
+/* Collapsed navigation keeps the icons, the active state and the account
+   control; only the words go. Titles carry the names for pointer users and the
+   accessible names stay on the controls themselves. */
+.app-shell.collapsed { grid-template-columns: 4.5rem minmax(0, 1fr); }
+.app-shell.collapsed .sidebar { padding-left: .6rem; padding-right: .6rem; align-items: stretch; }
+.app-shell.collapsed .sidebar-head { flex-direction: column; gap: .35rem; }
+.app-shell.collapsed .brand span, .app-shell.collapsed .nav-label,
+.app-shell.collapsed .sidebar-note, .app-shell.collapsed .account-name,
+.app-shell.collapsed .account-caret, .app-shell.collapsed .nav-group span,
+.app-shell.collapsed .sidebar nav a span { display: none; }
+.app-shell.collapsed .sidebar nav a, .app-shell.collapsed .sidebar .nav-group { justify-content: center; padding: .7rem .4rem; }
+.app-shell.collapsed .sidebar .nav-child { padding-left: .4rem; }
+.app-shell.collapsed .sidebar-account { margin-inline: 0; }
+.app-shell.collapsed .sidebar-account summary { justify-content: center; }
+.app-shell.collapsed .sidebar-account .account-popover { left: 0; width: 13rem; }
+
+/* User settings. Sections rather than one long account page. */
+/* Child destinations show words when there is room and icons when there is
+   not, so neither state repeats itself. */
+.sidebar .nav-child .icon { display: none; }
+.app-shell.collapsed .sidebar .nav-child .icon { display: block; }
+
+.settings-nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--color-border); }
+.settings-nav a { display: inline-flex; align-items: center; gap: .45rem; padding: .6rem .85rem; border-bottom: 2px solid transparent; color: var(--color-text-muted); text-decoration: none; font-size: .9rem; }
+.settings-nav a:hover { color: var(--color-text); }
+.settings-nav a.active { color: var(--color-text); border-bottom-color: var(--color-selected-indicator); font-weight: 600; }
+.settings-nav .icon { width: 1rem; height: 1rem; }
+
+/* API tokens. A person's own programmable credentials. */
+.api-token-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; margin-bottom: 1.3rem; }
+.api-token-heading h2 { margin: 0; }
+.api-token-heading .hint { margin: .5rem 0 0; max-width: 42rem; }
+.api-token-heading button { flex-shrink: 0; display: inline-flex; align-items: center; gap: .4rem; }
+.api-token-heading .icon { width: 1rem; height: 1rem; }
+.api-token-empty { display: grid; gap: .3rem; justify-items: center; text-align: center; padding: 2.2rem 1rem; }
+.api-token-empty p { margin: 0; }
+.api-token-empty .icon { width: 1.6rem; height: 1.6rem; color: var(--color-text-muted); }
+.api-token-never { color: var(--color-text-muted); }
+.api-token-revoke { padding: .35rem .7rem; border-color: var(--color-border); color: var(--color-danger-text, var(--color-text)); background: transparent; font-size: .8rem; }
+.api-token-lifetime { display: grid; gap: .55rem; margin: 0 0 1.15rem; padding: 0; border: 0; }
+.api-token-lifetime > legend { margin-bottom: .4rem; font-size: .9rem; font-weight: 550; }
+.api-token-lifetime .checkbox { display: inline-flex; align-items: center; gap: .45rem; margin: 0; }
+.api-token-lifetime-option { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.api-token-lifetime-option input[type="number"] { width: 5.5rem; }
+.api-token-lifetime-unit { color: var(--color-text-muted); font-size: .85rem; }
+.api-token-lifetime .hint { margin: .15rem 0 0; }
+.api-token-admin { margin-bottom: 1.15rem; }
+.api-token-admin details { margin-top: .5rem; border: 0; padding: 0; }
+.api-token-admin summary { color: var(--color-link); font-size: .82rem; cursor: pointer; }
+.api-token-admin .hint { margin: .45rem 0 0; }
+
+/* An informative notice, not a danger one: nothing has failed here. */
+.notice { display: flex; align-items: flex-start; gap: .55rem; margin: 0 0 1.1rem; padding: .75rem .85rem; border-radius: .45rem; color: var(--color-text); background: var(--color-surface-muted); font-size: .85rem; }
+.notice .icon { flex-shrink: 0; width: 1.05rem; height: 1.05rem; margin-top: .05rem; color: var(--color-text-muted); }
+.copy-field { margin-bottom: 1.1rem; }
+.copy-field > label { display: block; margin-bottom: .5rem; }
+.copy-field input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
