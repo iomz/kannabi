@@ -30,7 +30,7 @@ function resetToken(message: MailMessage) {
   return token;
 }
 
-test('administrator-controlled member lifecycle preserves auth and domain invariants',
+test('administrator-controlled user lifecycle preserves auth and domain invariants',
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
@@ -72,14 +72,31 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
     await migrated.close();
 
     await t.test('admin plugin routes stay private and non-admin lifecycle requests fail', async () => {
-      assert.equal((await anonymous('/members')).status, 401);
-      assert.equal((await member('/members')).status, 403);
-      assert.equal((await member('/members', 'POST', {
+      assert.equal((await anonymous('/admin/users')).status, 401);
+      assert.equal((await member('/admin/users')).status, 403);
+      assert.equal((await member('/admin/users', 'POST', {
         name: 'Forbidden', email: 'forbidden@example.com', isAdmin: false,
       })).status, 403);
       assert.equal((await admin('/auth/admin/create-user', 'POST', {
         name: 'Bypass', email: 'bypass@example.com',
       })).status, 404);
+    });
+
+    await t.test('Workspace Members stays Group-derived for users and administrators', async () => {
+      const before = await Promise.all([admin('/members'), member('/members')]);
+      assert.deepEqual((await before[0].json()).members.map((user: { key: string }) => user.key), [keys[0]]);
+      assert.deepEqual((await before[1].json()).members.map((user: { key: string }) => user.key), [keys[1]]);
+
+      const group = await store.createReportingGroup('Shared workspace', keys[1]);
+      await store.addGroupMember(keys[1], group.key, keys[0]);
+      for (const caller of [admin, member]) {
+        const response = await caller('/members');
+        assert.equal(response.status, 200);
+        const listed = (await response.json()).members as { key: string; sharedGroups: { name: string }[] }[];
+        assert.deepEqual(listed.map((user) => user.key).sort(), [...keys].sort());
+        assert.ok(listed.every((user) => user.sharedGroups.map((shared) => shared.name)
+          .includes('Shared workspace')));
+      }
     });
 
     await t.test('self-service profile and appearance remain isolated', async () => {
@@ -105,7 +122,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
         email: 'self-delete@example.com', password: 'test-password-12345' })).status, 200);
       assert.equal((await (await selfDeleting('/profile')).json()).deletionBlocked, false);
       const selfKey = (await (await selfDeleting('/me')).json()).user.key;
-      const account = await store.memberAccount(keys[0], selfKey);
+      const account = await store.managedUserAccount(keys[0], selfKey);
       const group = await store.createReportingGroup('Self deletion group', selfKey);
       const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'SELF-DELETED' };
       const asset = await store.reportAsset({ name: 'Self-deleted provenance', identifiers: [identifier] },
@@ -145,7 +162,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       assert.deepEqual((await publicAsset.json()).asset.reportedBy,
         { key: selfKey, name: 'Self deleting member', status: 'deleted' });
       await assert.rejects(store.createReportingGroup('Rejected tombstone group', selfKey), /User does not exist/);
-      const replacement = await admin('/members', 'POST', {
+      const replacement = await admin('/admin/users', 'POST', {
         name: 'Self-delete replacement', email: 'self-delete@example.com', isAdmin: false,
       });
       assert.equal(replacement.status, 201, await replacement.clone().text());
@@ -154,13 +171,13 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
     let pendingKey = '';
     await t.test('creation issues setup link and Better Auth establishes credential', async () => {
       const before = mailer.messages.length;
-      const response = await admin('/members', 'POST', {
+      const response = await admin('/admin/users', 'POST', {
         name: 'Pending Member', email: 'pending@example.com', isAdmin: false,
       });
       assert.equal(response.status, 201, await response.clone().text());
       const created = await response.json();
-      pendingKey = created.member.key;
-      assert.equal(created.member.credentialState, 'pending');
+      pendingKey = created.user.key;
+      assert.equal(created.user.credentialState, 'pending');
       await mailer.waitFor(before + 1);
       const setupMessage = mailer.messages.at(-1)!;
       assert.equal(setupMessage.subject, 'Set up your Kannabi account');
@@ -170,15 +187,15 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       assert.equal((await client(5)('/auth/sign-in/email', 'POST', {
         email: 'pending@example.com', password: 'established-password-12345',
       })).status, 200);
-      const listed = await (await admin('/members')).json();
-      assert.equal(listed.members.find((item: { key: string }) => item.key === pendingKey).credentialState, 'established');
+      const listed = await (await admin('/admin/users')).json();
+      assert.equal(listed.users.find((item: { key: string }) => item.key === pendingKey).credentialState, 'established');
     });
 
     await t.test('admin identity edit uses Better Auth, rejects self email, and revokes target sessions', async () => {
-      assert.equal((await admin(`/members/${keys[0]}`, 'PATCH', {
+      assert.equal((await admin(`/admin/users/${keys[0]}`, 'PATCH', {
         name: 'Admin renamed', email: 'admin-new@example.com',
       })).status, 409);
-      const changed = await admin(`/members/${keys[1]}`, 'PATCH', {
+      const changed = await admin(`/admin/users/${keys[1]}`, 'PATCH', {
         name: 'Edited member', email: 'edited@example.com',
       });
       assert.equal(changed.status, 200, await changed.clone().text());
@@ -193,7 +210,7 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
 
     await t.test('recovery action sends existing Better Auth reset flow', async () => {
       const before = mailer.messages.length;
-      assert.equal((await admin(`/members/${keys[1]}/recovery`, 'POST')).status, 200);
+      assert.equal((await admin(`/admin/users/${keys[1]}/recovery`, 'POST')).status, 200);
       await mailer.waitFor(before + 1);
       assert.equal(mailer.messages.at(-1)!.subject, 'Reset your Kannabi password');
       assert.match(mailer.messages.at(-1)!.text, /one hour/i);
@@ -210,9 +227,9 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
         { actorKey: keys[1], groupKey: group.key });
       assert.deepEqual(asset.reportedBy, { key: keys[1], name: 'Edited member', status: 'active' });
       await store.updateAsset(asset.id, { isPublic: true }, keys[1]);
-      const targetAccount = await store.memberAccount(keys[0], keys[1]);
-      assert.equal((await admin(`/members/${keys[0]}`, 'DELETE')).status, 403);
-      assert.equal((await admin(`/members/${keys[1]}`, 'DELETE')).status, 200);
+      const targetAccount = await store.managedUserAccount(keys[0], keys[1]);
+      assert.equal((await admin(`/admin/users/${keys[0]}`, 'DELETE')).status, 403);
+      assert.equal((await admin(`/admin/users/${keys[1]}`, 'DELETE')).status, 200);
       assert.equal((await (await targetClient('/me')).json()).user, null);
       assert.notEqual((await client(9)('/auth/sign-in/email', 'POST', {
         email: 'edited@example.com', password: 'test-password-12345',
@@ -246,12 +263,12 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       const inventory = await (await admin('/assets?q=Retained%20provenance')).json();
       assert.deepEqual(inventory.assets[0].reportedBy,
         { key: keys[1], name: 'Edited member', status: 'deleted' });
-      const replacement = await admin('/members', 'POST', {
+      const replacement = await admin('/admin/users', 'POST', {
         name: 'Replacement', email: 'edited@example.com', isAdmin: false,
       });
       assert.equal(replacement.status, 201, await replacement.clone().text());
-      const active = await (await admin('/members')).json();
-      assert.ok(!active.members.some((item: { key: string }) => item.key === keys[1]));
+      const active = await (await admin('/admin/users')).json();
+      assert.ok(!active.users.some((item: { key: string }) => item.key === keys[1]));
     });
 
     await t.test('final administrator role protection remains atomic', async () => {
@@ -259,16 +276,16 @@ test('administrator-controlled member lifecycle preserves auth and domain invari
       const privateAsset = await store.reportAsset({ name: 'Role-independent access',
         identifiers: [{ scheme: 'grai' as const, assetType: '0614141234561', serial: '789' }] },
       { actorKey: keys[0], groupKey: privateGroup.key });
-      assert.equal((await admin(`/members/${keys[0]}/role`, 'PATCH', { isAdmin: false })).status, 409);
-      assert.equal((await admin(`/members/${pendingKey}/role`, 'PATCH', { isAdmin: true })).status, 200);
+      assert.equal((await admin(`/admin/users/${keys[0]}/role`, 'PATCH', { isAdmin: false })).status, 409);
+      assert.equal((await admin(`/admin/users/${pendingKey}/role`, 'PATCH', { isAdmin: true })).status, 200);
       assert.equal(await store.getAsset(privateAsset.id, pendingKey), null);
       const secondAdmin = client(10);
       assert.equal((await secondAdmin('/auth/sign-in/email', 'POST', {
         email: 'pending@example.com', password: 'established-password-12345',
       })).status, 200);
       const responses = await Promise.all([
-        admin(`/members/${pendingKey}/role`, 'PATCH', { isAdmin: false }),
-        secondAdmin(`/members/${keys[0]}/role`, 'PATCH', { isAdmin: false }),
+        admin(`/admin/users/${pendingKey}/role`, 'PATCH', { isAdmin: false }),
+        secondAdmin(`/admin/users/${keys[0]}/role`, 'PATCH', { isAdmin: false }),
       ]);
       assert.equal(responses.filter((response) => response.status === 200).length, 1);
       const session = driver.session();

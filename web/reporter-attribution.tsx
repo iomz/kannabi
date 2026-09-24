@@ -2,17 +2,15 @@ import { Link } from 'react-router';
 import type { ReporterAttribution as Reporter } from '../server/identity-store';
 import { Badge } from '@/components/ui/badge';
 
-/** Who reported this, and whether they can be opened.
+/** Who reported this, and whether Workspace authorization permits opening them.
  *
- * Anybody reading an Asset may already know its reporter — that is one of the
- * ways a User becomes reachable — so the name leads to their page. Three cases
- * do not: a tombstone is not a person to visit, an anonymous reader of a
- * public Asset has no workspace to open it in, and a row that is itself one
- * link to the Asset stays one target rather than becoming two.
+ * Asset readability never implies profile reachability. Caller supplies the
+ * server-derived decision. Tombstones never link, and an Asset row that is
+ * itself one link stays one target rather than becoming two.
  */
 export function ReporterAttribution({ reporter, link = false }: {
   reporter: Reporter;
-  /** Whether the reader is signed in, and so has a User page to arrive at. */
+  /** Whether this viewer may open this User's Workspace profile. */
   link?: boolean;
 }) {
   const deleted = reporter.status === 'deleted';

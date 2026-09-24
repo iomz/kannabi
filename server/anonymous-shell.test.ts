@@ -25,7 +25,7 @@ test('the Asset-search header belongs to the workspace, not to management contex
     assert.equal(usesWorkspaceHeader(pathname), true, pathname);
   }
   for (const pathname of ['/settings', '/settings/appearance', '/settings/security',
-    '/admin', '/admin/members', '/admin/settings']) {
+    '/admin', '/admin/users', '/admin/settings']) {
     assert.equal(usesWorkspaceHeader(pathname), false, pathname);
   }
   // Prefix matching must not swallow unrelated destinations that merely start

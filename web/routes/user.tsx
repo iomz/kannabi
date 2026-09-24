@@ -24,7 +24,7 @@ export default function UserPage({ loaderData: { profile } }: Route.ComponentPro
   return <>
     <div className="mb-8 flex items-center justify-between gap-6">
       <div className="min-w-0">
-        <Eyebrow>{profile.self ? 'Your account' : 'Member'}</Eyebrow>
+        <Eyebrow>{profile.self ? 'Your account' : 'User'}</Eyebrow>
         <div className="flex items-center gap-[.9rem]">
           <Avatar name={profile.name} hash={profile.avatarHash} size={56} />
           <h1>{profile.name}</h1>

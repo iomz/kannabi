@@ -6,10 +6,10 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter,
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-const memberCopy = 'Deleting this member disables sign-in, removes personal account data, and removes them from every Group membership. Their Groups remain. Reported Asset history remains attributed to a non-personal deleted-member record.';
-const accountCopy = 'Deleting your account disables sign-in, removes your personal account data, and removes you from every Group membership. Your Groups remain. Reported Asset history remains attributed to a non-personal deleted-member record.';
+const userCopy = 'Deleting this user disables sign-in, removes personal account data, and removes them from every Group membership. Their Groups remain. Reported Asset history remains attributed to a non-personal deleted-user record.';
+const accountCopy = 'Deleting your account disables sign-in, removes your personal account data, and removes you from every Group membership. Your Groups remain. Reported Asset history remains attributed to a non-personal deleted-user record.';
 
-export const deletionCopy = { member: memberCopy, account: accountCopy } as const;
+export const deletionCopy = { user: userCopy, account: accountCopy } as const;
 
 /** Two stages, because there are two different things to be sure of.
  *
@@ -27,7 +27,7 @@ export function DestructiveConfirmation({ open, onClose, displayName, email, mod
   onClose(): void;
   displayName: string;
   email: string;
-  mode: 'member' | 'account';
+  mode: 'user' | 'account';
   confirmLabel: string;
   fields: Record<string, string>;
   busy: boolean;
@@ -46,7 +46,7 @@ export function DestructiveConfirmation({ open, onClose, displayName, email, mod
         <DialogTitle>Delete “{displayName}”</DialogTitle>
         {blocked
           ? <DialogDescription>This account is the final System administrator and cannot
-            currently be deleted. Promote another member to System administrator first.</DialogDescription>
+            currently be deleted. Promote another user to System administrator first.</DialogDescription>
           : reviewed
             ? <DialogDescription>To confirm, type “{email}” below.</DialogDescription>
             : <DialogDescription>{deletionCopy[mode]}</DialogDescription>}

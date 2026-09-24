@@ -9,7 +9,7 @@ import { DestructiveConfirmation, deletionCopy } from '../web/destructive-confir
 type Props = Parameters<typeof DestructiveConfirmation>[0];
 const base: Props = {
   open: true, onClose() {}, displayName: 'Hanako', email: 'hanako@example.test',
-  mode: 'member', confirmLabel: 'Delete member', fields: { intent: 'delete', key: 'u-1' },
+  mode: 'user', confirmLabel: 'Delete user', fields: { intent: 'delete', key: 'u-1' },
   busy: false, error: null,
 };
 
@@ -42,7 +42,7 @@ test('the explanation comes before the confirmation, not beside it', () => {
   const view = show(base);
   assert.match(view.text(), /Delete “Hanako”/);
   assert.match(view.text(), /removes the personal account, not its recorded provenance/);
-  assert.match(view.text(), new RegExp(deletionCopy.member.slice(0, 40)));
+  assert.match(view.text(), new RegExp(deletionCopy.user.slice(0, 40)));
   // Nothing can be typed yet: the address is asked for only after the effects
   // have been shown.
   assert.equal(view.field(), null);
@@ -56,7 +56,7 @@ test('deletion stays refused until the address matches exactly', () => {
   const view = show(base);
   act(() => { view.button('I understand these effects')?.click(); });
   const confirm = () => [...document.querySelectorAll('button')]
-    .find((node) => node.textContent?.trim() === 'Delete member') as HTMLButtonElement;
+    .find((node) => node.textContent?.trim() === 'Delete user') as HTMLButtonElement;
   assert.equal(confirm().disabled, true, 'an empty field deletes nothing');
   const enter = (value: string) => act(() => type(view.field()!, value));
   enter('hanako@example.tes');
@@ -71,7 +71,7 @@ test('deletion stays refused until the address matches exactly', () => {
 test('an account that cannot be deleted says why instead of offering the path', () => {
   const view = show({ ...base, mode: 'account', blocked: true });
   assert.match(view.text(), /final System administrator/);
-  assert.match(view.text(), /Promote another member/);
+  assert.match(view.text(), /Promote another user/);
   assert.equal(view.button('I understand these effects'), null);
   assert.equal(view.field(), null);
   view.stop();
@@ -80,7 +80,7 @@ test('an account that cannot be deleted says why instead of offering the path', 
 test('the deletion an account asks about is its own, not somebody else’s', () => {
   const view = show({ ...base, mode: 'account' });
   assert.match(view.text(), /Deleting your account/);
-  assert.doesNotMatch(view.text(), /Deleting this member/);
+  assert.doesNotMatch(view.text(), /Deleting this user/);
   view.stop();
 });
 

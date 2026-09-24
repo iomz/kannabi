@@ -15,7 +15,7 @@ import { MediaService } from './media.js';
 import { S3Storage } from './storage.js';
 import { assetPageRequest } from './asset-page.js';
 import { runDemo } from '../scripts/demo/run.js';
-import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoPassword,
+import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoMembers, demoPassword,
   demoScopes } from '../scripts/demo/fixtures.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -94,10 +94,10 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     // the fixture rather than from the query, so the two have to agree about
     // every account without either being able to explain the other away.
     for (const [index, account] of demoAccounts.entries()) {
-      const seen = await store.listUsers(users[index]);
+      const seen = await store.listMembers(users[index]);
       assert.deepEqual(seen.map((person) => users.indexOf(person.key)).sort((a, b) => a - b),
-        demoDiscoverable(index), account.email);
-      // A page exists for everybody the directory lists, and for nobody else.
+        demoMembers(index), account.email);
+      // Workspace profiles use exactly the same boundary as Members.
       for (const [other] of demoAccounts.entries()) {
         const reachable = demoDiscoverable(index).includes(other);
         assert.equal(await store.userProfile(users[index], users[other]) !== null, reachable,

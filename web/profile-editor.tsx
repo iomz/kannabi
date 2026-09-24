@@ -1,6 +1,6 @@
 import { Form, useNavigation } from 'react-router';
 import { useEffect, useState } from 'react';
-import type { Member } from '../server/identity-store';
+import type { UserAccount } from '../server/identity-store';
 import { api, unwrap } from './api';
 import { DestructiveConfirmation } from './destructive-confirmation';
 import { PasswordField } from './password-field';
@@ -27,7 +27,7 @@ export async function saveProfile(request: Request) {
   } catch (error) { return { saved: false, error: error instanceof Error ? error.message : 'Profile update failed' }; }
 }
 
-export function ProfileEditor({ member, feedback }: { member: Member; feedback?: FormFeedback }) {
+export function ProfileEditor({ member, feedback }: { member: UserAccount; feedback?: FormFeedback }) {
   const busy = useNavigation().state !== 'idle';
   return <Form method="post"><fieldset disabled={busy}>
     <Field label="Name"><Input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" /></Field>
@@ -78,14 +78,14 @@ export function PasswordEditor({ feedback }: { feedback?: FormFeedback }) {
 }
 
 export function DeleteAccount({ member, deletionBlocked, feedback }: {
-  member: Member; deletionBlocked: boolean; feedback?: FormFeedback;
+  member: UserAccount; deletionBlocked: boolean; feedback?: FormFeedback;
 }) {
   const busy = useNavigation().state !== 'idle';
   const [confirming, setConfirming] = useState(false);
   return <>
     <h2>Delete account</h2>
     <Hint className="mb-3">Disables sign-in, removes personal account data and Group memberships, and preserves Asset provenance.</Hint>
-    {member.isAdmin && <Hint className="mb-3">A final system administrator must promote another member before deleting their account.</Hint>}
+    {member.isAdmin && <Hint className="mb-3">A final system administrator must promote another user before deleting their account.</Hint>}
     <Button type="button" variant="destructive" onClick={() => setConfirming(true)}>Delete account</Button>
     <DestructiveConfirmation open={confirming} onClose={() => setConfirming(false)} displayName={member.name}
       email={member.email} mode="account" confirmLabel="Delete account" fields={{ intent: 'delete' }} busy={busy}

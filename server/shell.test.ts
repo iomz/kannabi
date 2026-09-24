@@ -44,11 +44,8 @@ test('the navigation carries the control that narrows it', () => {
   assert.equal(trigger.closest('header'), null, 'and not in the workspace');
   assert.match(trigger.textContent ?? '', /Toggle Sidebar/, 'named for anybody who cannot see it');
 
-  // The rail stays as the wide pointer target along the boundary, deliberately
-  // out of the tab order so one action does not take two tab stops.
-  const rail = document.querySelector<HTMLButtonElement>('[data-slot="sidebar-rail"]');
-  assert.ok(rail?.closest('[data-slot="sidebar"]'), 'the rail is part of the navigation too');
-  assert.equal(rail?.tabIndex, -1);
+  assert.equal(document.querySelector('[data-slot="sidebar-rail"]'), null,
+    'no boundary rail duplicates the explicit control');
   view.stop();
 });
 
@@ -66,9 +63,6 @@ test('narrowing the navigation is a state the whole shell can see', () => {
   assert.ok(trigger?.closest('[data-slot="sidebar-header"]'), 'still in the navigation');
   view.click(trigger);
   assert.equal(sidebar()?.getAttribute('data-state'), 'expanded');
-  // Either control does it: the rail is the same action with a wider target.
-  view.click(document.querySelector('[data-slot="sidebar-rail"]'));
-  assert.equal(sidebar()?.getAttribute('data-state'), 'collapsed');
   view.stop();
 });
 

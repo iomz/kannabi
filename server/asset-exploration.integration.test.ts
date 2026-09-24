@@ -165,21 +165,24 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.deepEqual(await ids({ reportedFrom: '2025-03-01', reportedTo: '2025-03-01' }), [made.plain]);
 
     // Filters AND together, and compose with q and scope. The Group filter is
-    // the narrower question the scope tabs cannot ask: `scope=group` means any
-    // Group access, `group=<key>` means this one Group.
+    // the narrower question the scope tabs cannot ask: `scope=group` means
+    // non-public Assets readable through any Group, `group=<key>` means this
+    // one Group.
     assert.deepEqual(await ids({ scheme: 'gtin', reportedFrom: '2026-01-01' }), [made.classed]);
     assert.deepEqual(await ids({ q: 'published' }), [made.published]);
     assert.deepEqual(await ids({ q: 'filter', identified: 'none' }), [made.plain]);
     assert.deepEqual(await ids({ scope: 'public' }), [made.published]);
     assert.deepEqual(await ids({ scope: 'public', q: 'filter' }), [made.published]);
     assert.deepEqual(await ids({ scheme: 'giai', q: 'individual' }), [made.individual]);
-    // The Group filter narrows a scope that is already wider than one Group.
+    // The Group scope is specifically what depends on Group membership, so a
+    // public Asset remains under All and Public even when this Group carries it.
     const anyGroup = await store.findAssets(actor.key, assetPageRequest({ scope: 'group', q: 'Filter' }));
-    assert.ok(anyGroup.assets.length >= 4);
+    assert.deepEqual(anyGroup.assets.map((asset) => asset.id).sort(),
+      [made.classed, made.individual, made.plain].sort());
     const oneGroup = await store.findAssets(actor.key,
       assetPageRequest({ scope: 'group', q: 'Filter', group: filterGroup.key }));
     assert.deepEqual(oneGroup.assets.map((asset) => asset.id).sort(),
-      [made.classed, made.individual, made.plain, made.published].sort());
+      [made.classed, made.individual, made.plain].sort());
     // A contradiction simply yields nothing rather than a special case.
     assert.deepEqual(await ids({ identified: 'none', scheme: 'gtin' }), []);
 
@@ -188,6 +191,7 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.equal(narrowed.matching, 2);
     assert.equal(narrowed.matching, narrowed.scopes.all);
     assert.equal(narrowed.scopes.public, 1);
+    assert.equal(narrowed.scopes.group, 1);
 
     // Sorting composes with filters in both directions.
     for (const dir of ['asc', 'desc'] as const) {

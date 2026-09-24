@@ -5,7 +5,7 @@ import { displayVersion, kannabiVersion } from './version';
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton,
-  SidebarMenuSubItem, SidebarRail, SidebarTrigger, useSidebar,
+  SidebarMenuSubItem, SidebarTrigger, useSidebar,
 } from '@/components/ui/sidebar';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel,
@@ -25,8 +25,8 @@ export function activeDestination(pathname: string): string | null {
   if (pathname === '/' || pathname.startsWith('/asset/') || pathname.startsWith('/assets/')) return '/';
   if (pathname.startsWith('/groups')) return '/groups';
   // A person's page belongs to the directory it was opened from.
-  if (pathname === '/users' || pathname.startsWith('/users/')) return '/users';
-  if (pathname.startsWith('/admin/members')) return '/admin/members';
+  if (pathname === '/members' || pathname.startsWith('/users/')) return '/members';
+  if (pathname.startsWith('/admin/users')) return '/admin/users';
   if (pathname.startsWith('/admin/settings')) return '/admin/settings';
   return null;
 }
@@ -51,13 +51,12 @@ const inventory: { label: string; icon: IconName; to: string; items: readonly De
 const workspace: readonly Destination[] = [
   { to: '/lookup', icon: 'search', label: 'Lookup' },
   { to: '/groups', icon: 'groups', label: 'Groups' },
-  // Workspace discovery of people, which is a different thing from
-  // Administration's member management and stays separate from it.
-  { to: '/users', icon: 'user', label: 'Users' },
+  // Group-derived collaborators, separate from instance account administration.
+  { to: '/members', icon: 'user', label: 'Members' },
 ];
 
 const administration: readonly Destination[] = [
-  { to: '/admin/members', icon: 'members', label: 'Members' },
+  { to: '/admin/users', icon: 'members', label: 'Users' },
   { to: '/admin/settings', icon: 'settings', label: 'Instance settings' },
 ];
 
@@ -214,7 +213,8 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
           back is always the visible thing. */}
       <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
         <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden"><Brand /></div>
-        <SidebarTrigger size="icon" className="shrink-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground" />
+        <SidebarTrigger size="icon-lg"
+          className="shrink-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground [&_svg]:size-5" />
       </div>
     </SidebarHeader>
     <SidebarContent>
@@ -233,9 +233,5 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>
-    {/* The boundary affordance stays on the sidebar's own edge. Upstream
-        straddles the border, which puts a full-height strip on top of the
-        workspace — over the header's left edge and every row beneath it. */}
-    <SidebarRail className="translate-x-0 group-data-[side=left]:right-0 after:start-auto after:end-0" />
   </Sidebar>;
 }

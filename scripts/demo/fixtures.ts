@@ -1,14 +1,12 @@
 export const demoPassword = 'Kannabi-demo-only-2026!';
 
-/** A cast chosen so the User directory's visibility rule can be read off the
+/** A cast chosen so Members and profile reachability can be read off the
  * screen rather than taken on trust. Every name is invented.
  *
- * Between them they cover each way a person becomes discoverable and the ways
- * they do not: somebody sharing one Group, somebody sharing two, somebody in
- * no shared Group who is nonetheless known through a public Asset they
- * reported, somebody in a Group of their own who is known to nobody, members
- * who have reported nothing, a second administrator, and two accounts that
- * turned Gravatar on.
+ * Between them they cover somebody sharing one Group, somebody sharing two,
+ * somebody whose public reporting provenance grants no profile reachability,
+ * somebody in a Group of their own, Users who reported nothing, a second
+ * administrator, and two accounts that turned Gravatar on.
  */
 export const demoAccounts = [
   { name: 'Alex Demo', email: 'evaluator@demo.invalid' },
@@ -127,9 +125,9 @@ export function demoAssets() {
                   : [{ scheme: 'grai', assetType: crateType }];
     const group = index < 48 ? 0 : index < 88 ? 1 : index < 120 ? 2 : 3;
     // A reporter is always a member of the Group they report into. Kai and Noa
-    // take a share of Shared Studio and Private Store so that reporting, and
-    // therefore being known through one's work, is spread beyond the first
-    // three accounts. Demo Workshop stays entirely Alex's, which keeps the
+    // take a share of Shared Studio and Private Store so reporting is spread
+    // beyond the first three accounts. Demo Workshop stays entirely Alex's,
+    // which keeps the
     // evaluator's own counts the ones the demo has always printed.
     const reporter = group === 0 ? 0
       : group === 1 ? (index % 3 === 0 ? 4 : 1)
@@ -145,7 +143,7 @@ export function demoAssets() {
     };
   });
 }
-export const evaluatorScopes = { all: 124, mine: 64, group: 120, public: 34 };
+export const evaluatorScopes = { all: 124, mine: 64, group: 90, public: 34 };
 
 /** What one account can see, derived from the same fixture the seed plants, so
  * a change to memberships or reporters cannot leave an expectation stale. */
@@ -156,28 +154,22 @@ export function demoScopes(account: number) {
   return {
     all: readable.length,
     mine: readable.filter((asset) => asset.reporter === account).length,
-    group: assets.filter((asset) => groups.includes(asset.group)).length,
+    group: assets.filter((asset) => groups.includes(asset.group) && !asset.isPublic).length,
     public: assets.filter((asset) => asset.isPublic).length,
   };
 }
 
-/** Who each account may know exists, by the one discoverability rule: yourself,
- * anybody for an administrator, anybody sharing a Group, and anybody whose
- * reported Asset you can read. Stated here independently of the Cypher that
- * implements it, so the two can be held against each other. */
+/** Which Workspace profiles this account may open: self and shared-Group Users. */
 export function demoDiscoverable(viewer: number): number[] {
-  if ((demoAdministrators as readonly number[]).includes(viewer)) {
-    return demoAccounts.map((_, index) => index);
-  }
-  const groups = demoGroupMembers.flatMap((members, group) => (members.includes(viewer) ? [group] : []));
-  const reporters = new Set(demoAssets()
-    .filter((asset) => asset.isPublic || groups.includes(asset.group))
-    .map((asset) => asset.reporter));
+  return demoMembers(viewer);
+}
+
+/** Workspace Members: self plus active Users sharing a Group. */
+export function demoMembers(viewer: number): number[] {
   const shares = new Set(demoGroupMembers
     .filter((members) => members.includes(viewer))
     .flatMap((members) => [...members]));
-  return demoAccounts.flatMap((_, index) =>
-    (index === viewer || shares.has(index) || reporters.has(index) ? [index] : []));
+  return demoAccounts.flatMap((_, index) => index === viewer || shares.has(index) ? [index] : []);
 }
 
 /** GIAI namespaces, arranged so every allocation UI state is reachable:

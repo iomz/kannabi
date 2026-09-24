@@ -6,7 +6,7 @@ import { emptyAssetFilters } from '../../server/asset-page.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
 import { MediaService } from '../../server/media.js';
-import { demoAccounts, demoAdministrators, demoAllocations, demoAssets, demoDiscoverable,
+import { demoAccounts, demoAdministrators, demoAllocations, demoAssets, demoDiscoverable, demoMembers,
   demoGravatarAccounts, demoGroupMembers, demoGroups, demoNamespaces, demoOwners, demoPassword,
   demoScopes, evaluatorScopes } from './fixtures.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket, type DemoMode } from './safety.js';
@@ -133,10 +133,14 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
           throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected ${scope} Assets`);
         }
       }
-      const discoverable = (await store.listUsers(users[index])).map((person) => users.indexOf(person.key));
-      const intended = demoDiscoverable(index);
-      if (JSON.stringify([...discoverable].sort((a, b) => a - b)) !== JSON.stringify(intended)) {
-        throw new Error(`Demo verification failed: ${demoAccounts[index].email} discovers unexpected Users`);
+      const members = (await store.listMembers(users[index])).map((person) => users.indexOf(person.key));
+      if (JSON.stringify([...members].sort((a, b) => a - b)) !== JSON.stringify(demoMembers(index))) {
+        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected Members`);
+      }
+      for (const [target] of demoAccounts.entries()) {
+        if ((await store.userProfile(users[index], users[target]) !== null) !== demoDiscoverable(index).includes(target)) {
+          throw new Error(`Demo verification failed: ${demoAccounts[index].email} reaches an unexpected profile`);
+        }
       }
     }
     return { assets: demoAssets().length, photos: demoAssets().filter((asset) => asset.photo).length,

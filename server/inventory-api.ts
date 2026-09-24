@@ -120,8 +120,6 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // token its owner issued as admin-enabled. The flag is a ceiling on the
     // credential and never an authority: the owning User's current role still
     // decides, and neither ever reaches an Asset outside their Groups.
-    .use('/members', administrativeCredential)
-    .use('/members/*', administrativeCredential)
     .use('/admin/*', administrativeCredential)
     .use('/settings', async (c, next) => (c.req.method === 'GET'
       ? next() : administrativeCredential(c, next)))
@@ -178,8 +176,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await store.deactivateOwnAccount(actor(c.get('user')));
       return c.json({ deleted: true });
     })
-    .get('/members', async (c) => c.json({ members: await store.members(actor(c.get('user'))) }))
-    .post('/members', validator('json', (value) => {
+    .get('/admin/users', async (c) => c.json({ users: await store.users(actor(c.get('user'))) }))
+    .post('/admin/users', validator('json', (value) => {
       const input = record(value, ['name', 'email', 'isAdmin']);
       if (typeof input.email !== 'string' || typeof input.isAdmin !== 'boolean') {
         throw new ValidationError('Name, email, and administrator status are required');
@@ -193,16 +191,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         } });
         await auth.api.requestPasswordReset({ body: { email: created.user.email } });
         const createdUser = created.user as typeof created.user & { key: string };
-        return c.json({ member: await store.profile(createdUser.key), recoveryRequested: true }, 201);
-      } catch (error) { memberAuthError(error, 'Member could not be created'); }
+        return c.json({ user: await store.profile(createdUser.key), recoveryRequested: true }, 201);
+      } catch (error) { memberAuthError(error, 'User could not be created'); }
     })
-    .patch('/members/:key', validator('json', (value) => {
+    .patch('/admin/users/:key', validator('json', (value) => {
       const input = record(value, ['name', 'email']);
       if (typeof input.email !== 'string') throw new ValidationError('Email is required');
       return { name: requiredText(input.name, 'name'), email: input.email };
     }), async (c) => {
       const actorKey = actor(c.get('user'));
-      const target = await store.memberAccount(actorKey, c.req.param('key'));
+      const target = await store.managedUserAccount(actorKey, c.req.param('key'));
       const normalizedEmail = c.req.valid('json').email.trim().toLowerCase();
       if (target.key === actorKey && normalizedEmail !== target.email) {
         throw new HTTPException(409, { message: 'Change your own email from Profile' });
@@ -215,29 +213,29 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         if (normalizedEmail !== target.email) {
           await auth.api.revokeUserSessions({ headers: c.req.raw.headers, body: { userId: target.id } });
         }
-        return c.json({ member: await store.profile(target.key) });
-      } catch (error) { memberAuthError(error, 'Member could not be updated'); }
+        return c.json({ user: await store.profile(target.key) });
+      } catch (error) { memberAuthError(error, 'User could not be updated'); }
     })
-    .patch('/members/:key/role', validator('json', (value) => {
+    .patch('/admin/users/:key/role', validator('json', (value) => {
       const input = record(value, ['isAdmin']);
       if (typeof input.isAdmin !== 'boolean') throw new ValidationError('Administrator status must be a boolean');
       return { isAdmin: input.isAdmin };
-    }), async (c) => c.json({ member: await store.updateMemberRole(actor(c.get('user')),
+    }), async (c) => c.json({ user: await store.updateUserRole(actor(c.get('user')),
       c.req.param('key'), c.req.valid('json').isAdmin) }))
-    .post('/members/:key/recovery', async (c) => {
-      const target = await store.memberAccount(actor(c.get('user')), c.req.param('key'));
+    .post('/admin/users/:key/recovery', async (c) => {
+      const target = await store.managedUserAccount(actor(c.get('user')), c.req.param('key'));
       try {
         await auth.api.requestPasswordReset({ body: { email: target.email } });
         return c.json({ requested: true });
       } catch (error) { memberAuthError(error, 'Recovery email could not be requested'); }
     })
-    .delete('/members/:key/api-tokens/:id', async (c) => {
+    .delete('/admin/users/:key/api-tokens/:id', async (c) => {
       if (!tokens) throw new HTTPException(503, { message: 'API tokens unavailable' });
       await tokens.revokeFor(actor(c.get('user')), c.req.param('key'), c.req.param('id'));
       return c.json({ revoked: true });
     })
-    .delete('/members/:key', async (c) => {
-      await store.deactivateMember(actor(c.get('user')), c.req.param('key'));
+    .delete('/admin/users/:key', async (c) => {
+      await store.deactivateUser(actor(c.get('user')), c.req.param('key'));
       return c.json({ deleted: true });
     })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
@@ -310,11 +308,9 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeOwn(actor(c.get('user')), c.req.param('id'));
       return c.json({ revoked: true });
     })
-    // The people this viewer may know exist. The same rule and the same
-    // projection as a single User's page, so the list and the page can never
-    // disagree about somebody. It grants no Asset access and returns no
-    // address.
-    .get('/users', async (c) => c.json({ users: await store.listUsers(actor(c.get('user'))) }))
+    // Workspace Members and individual User profiles share one boundary:
+    // self, or active Users joined through at least one shared Group.
+    .get('/members', async (c) => c.json({ members: await store.listMembers(actor(c.get('user'))) }))
     // A User page, for somebody the viewer can already see. It grants no Asset
     // access: the count it shows is counted through the viewer's own
     // readability, and an unreachable person is absent rather than refused.
@@ -363,7 +359,11 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const asset = await store.getAsset(assetId(c.req.param('id')), user?.key ?? null);
       if (!asset) return c.json({ error: 'Asset not found' }, 404);
       const groups = user ? await store.listGroups(user.key) : [];
-      return c.json({ asset, canEdit: groups.some((g) => asset.groups.some((access) => access.key === g.key)) });
+      const canViewReporterProfile = user
+        ? await store.userProfile(user.key, asset.reportedBy.key) !== null
+        : false;
+      return c.json({ asset, canEdit: groups.some((g) => asset.groups.some((access) => access.key === g.key)),
+        canViewReporterProfile });
     })
     .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {

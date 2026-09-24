@@ -121,7 +121,8 @@ export function InventoryControls({ view, groups, scopes }: {
           .map(([value, label]) =>
             <Link key={value} to={inventoryPath(view, { scope: value })}
               aria-current={view.scope === value ? 'page' : undefined}
-              title={value === 'mine' ? 'Readable Assets you originally reported' : undefined}
+              title={value === 'mine' ? 'Readable Assets you originally reported'
+                : value === 'group' ? 'Non-public Assets readable through your Groups' : undefined}
               className={['flex items-center gap-[.7rem] whitespace-nowrap border-b-2 px-4 py-[.85rem] text-[.85rem] hover:bg-accent',
                 'max-lg:gap-[.4rem] max-lg:px-[.6rem] max-sm:gap-1 max-sm:px-[.35rem] max-sm:text-[.76rem]',
                 '[&>span]:rounded-full [&>span]:bg-muted [&>span]:px-2 [&>span]:py-[.15rem] [&>span]:text-[.75rem] [&>span]:font-normal max-sm:[&>span]:px-[.3rem] max-sm:[&>span]:py-[.1rem]',

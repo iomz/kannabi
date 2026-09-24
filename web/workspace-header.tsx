@@ -49,7 +49,7 @@ export function WorkspaceHeader({ enabled, search }: {
       <SidebarTrigger size="icon-lg" />
       <Separator orientation="vertical" className="mr-1 h-5" />
     </>}
-    {search ? <Form action="/" method="get" role="search" className="relative flex min-w-0 flex-1 items-center sm:max-w-md">
+    {search ? <Form action="/" method="get" role="search" className="relative flex min-w-0 flex-1 items-center">
       <input type="hidden" name="scope" value={scope} />
       <label className="sr-only" htmlFor="asset-search">Search Assets by name</label>
       <span className="pointer-events-none absolute left-3 text-muted-foreground"><Icon name="search" /></span>

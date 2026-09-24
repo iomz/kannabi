@@ -183,9 +183,9 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
   await t.test('an ordinary token may not exercise administrator operations', async () => {
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: people.owner.key });
     // The owning User is an administrator; the credential still is not.
-    assert.equal((await owner.request('/members')).status, 200);
+    assert.equal((await owner.request('/admin/users')).status, 200);
     const call = bearer(ordinarySecret);
-    assert.equal((await call('/members')).status, 403);
+    assert.equal((await call('/admin/users')).status, 403);
     assert.equal((await call('/settings', 'PATCH', { requirePhoto: true, displayTimezone: 'UTC',
       themeId: 'default', apiTokenMaxLifetimeDays: null })).status, 403);
     assert.equal((await call('/admin/mail')).status, 403);
@@ -206,16 +206,16 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     adminSecret = issued.secret;
     assert.equal(issued.token.admin, true);
     const call = bearer(adminSecret);
-    assert.equal((await call('/members')).status, 200);
+    assert.equal((await call('/admin/users')).status, 200);
     // The flag is a ceiling on the credential, never a grant of Asset access.
     assert.equal((await call(`/assets/${foreignAsset}`)).status, 404);
     assert.equal((await call(`/assets/${foreignAsset}`, 'PATCH', { name: 'Taken' })).status, 404);
     // Administrative authority is read from the User at request time, so it
     // ends when the role does rather than being captured in the credential.
     await query("MATCH (u:User {key: $key}) REMOVE u.role", { key: people.owner.key });
-    assert.equal((await call('/members')).status, 403);
+    assert.equal((await call('/admin/users')).status, 403);
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: people.owner.key });
-    assert.equal((await call('/members')).status, 200);
+    assert.equal((await call('/admin/users')).status, 200);
   });
 
   await t.test('a bearer credential never falls back to a cookie, and cookies still need the Origin', async () => {
@@ -318,7 +318,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
       { label: 'Outsider automation', lifetimeDays: null })).json();
     const doomedCall = bearer(doomed.secret);
     assert.equal((await (await doomedCall('/me')).json()).user.key, people.outsider.key);
-    await store.deactivateMember(people.owner.key, people.outsider.key);
+    await store.deactivateUser(people.owner.key, people.outsider.key);
     assert.equal((await (await doomedCall('/me')).json()).user, null);
     assert.equal((await doomedCall(`/assets/${foreignAsset}`)).status, 404);
   });
@@ -351,12 +351,12 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     const owned = (await (await owner.request('/api-tokens')).json()).tokens;
     assert.equal(owned.some((entry: { id: string }) => entry.id === issued.token.id), false);
     // Stopping one is instance administration and is allowed.
-    assert.equal((await owner.request(`/members/${victimKey}/api-tokens/${issued.token.id}`, 'DELETE')).status, 200);
+    assert.equal((await owner.request(`/admin/users/${victimKey}/api-tokens/${issued.token.id}`, 'DELETE')).status, 200);
     assert.equal((await (await bearer(issued.secret)('/me')).json()).user, null);
     // A non-administrator cannot revoke somebody else's credential.
     const second = await (await victim.request('/api-tokens', 'POST',
       { label: 'Victim automation 2', lifetimeDays: null })).json();
-    assert.equal((await victim.request(`/members/${victimKey}/api-tokens/${second.token.id}`, 'DELETE')).status, 403);
+    assert.equal((await victim.request(`/admin/users/${victimKey}/api-tokens/${second.token.id}`, 'DELETE')).status, 403);
     assert.equal((await (await bearer(second.secret)('/me')).json()).user.key, victimKey);
   });
 
@@ -371,9 +371,10 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal(mine.name, 'Token owner');
     assert.equal(mine.self, true);
     assert.ok(mine.reportedAssets >= 1);
-    // Never an address, never a Group list.
+    // Never an address or a complete Group list. Shared Groups are the only
+    // membership context this viewer receives.
     assert.deepEqual(Object.keys(mine).sort(),
-      ['avatarHash', 'key', 'name', 'reportedAssets', 'self']);
+      ['avatarHash', 'key', 'name', 'reportedAssets', 'self', 'sharedGroups']);
 
     // Two unrelated, non-administrator accounts that share nothing.
     const stranger = client();
@@ -392,13 +393,13 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal((await profile(stranger, people.owner.key)).status, 404);
     assert.equal((await profile(stranger, 'not-a-key')).status, 404);
 
-    // An administrator does see an unrelated member, because the member list
-    // already shows them every account. It reaches none of their Assets.
-    assert.equal((await profile(owner, strangerKey)).status, 200);
+    // Account administration stays at /admin/users. Administrator status does
+    // not broaden Workspace profile reachability.
+    assert.equal((await profile(owner, strangerKey)).status, 404);
     assert.equal((await owner.request(`/assets/${foreignAsset}`)).status, 404);
 
-    // Sharing a readable Asset is what makes somebody visible, and the count
-    // is the viewer's own: the stranger joins a Group the owner reports into.
+    // Sharing a Group makes the Workspace profile reachable. Count remains the
+    // viewer's own and does not expose private work elsewhere.
     await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[:MEMBER_OF]->(g)`,
       { userKey: strangerKey, groupKey: ownerGroup });
     const visible = await profile(stranger, people.owner.key);
@@ -413,11 +414,10 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     // And it does not make unrelated accounts visible to them.
     assert.equal((await profile(stranger, bystanderKey)).status, 404);
 
-    // A deleted account is not a person to visit, for anybody — including the
-    // administrator who could see them a moment ago.
-    await store.deactivateMember(people.owner.key, strangerKey);
+    // A deleted account is not a person to visit, including from a shared Group.
+    await store.deactivateUser(people.owner.key, strangerKey);
     assert.equal((await profile(owner, strangerKey)).status, 404);
-    assert.equal((await (await owner.request('/members')).json()).members
+    assert.equal((await (await owner.request('/admin/users')).json()).users
       .some((member: { key: string }) => member.key === strangerKey), false);
 
     // Anonymous callers have no User pages at all.

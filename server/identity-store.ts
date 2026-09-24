@@ -33,15 +33,17 @@ export class LastAdministratorError extends Error {}
  * answers who is acting, and every later authorization decision is made from
  * the Group model as usual rather than from anything carried here. */
 export type ResolvedUser = Readonly<{ key: string; name: string }>;
-export type Member = { key: string; name: string; email: string; isAdmin: boolean;
+export type UserAccount = { key: string; name: string; email: string; isAdmin: boolean;
   credentialState: 'pending' | 'established'; createdAt: string | null };
-export type MemberAccount = Member & { id: string };
+export type ManagedUserAccount = UserAccount & { id: string };
 /** What one User may learn about another: who they are, and how much of their
  * work this particular viewer can already see. */
 export type UserProfile = Readonly<{
   key: string;
   name: string;
   avatarHash: string | null;
+  /** Group memberships shared with this viewer, never the target's complete membership. */
+  sharedGroups: readonly Entity[];
   /** Counted through the viewer's own readability, never the target's. */
   reportedAssets: number;
   self: boolean;
@@ -57,7 +59,7 @@ export type AccountState = {
    * server for this purpose. */
   avatarHash: string | null;
 };
-const memberProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
+const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
     THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
 
@@ -444,36 +446,38 @@ const readableAsset = `($systemRead OR a.isPublic = true OR ${collaboration})`;
  * never the system-wide audience. */
 const readableByViewer = `(a.isPublic = true OR ${collaboration})`;
 
-/** Who a viewer may know exists, as Cypher. Requires `u` in scope, `$actorKey`,
- * and `$actorIsAdministrator`.
+const activeUser = `u.accountDeletedAt IS NULL AND u.id IS NOT NULL`;
+const sharesGroupWithViewer = `EXISTS {
+  MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(shared:Group)
+  WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(shared) }
+}`;
+
+/** Who may have an individual Workspace profile opened, as Cypher. Requires
+ * `u` in scope and `$actorKey`.
  *
- * One rule, used by the directory and by a User's own page, so the two can
- * never answer differently about the same person. Four ways to be reachable:
+ * Two ways make an individual profile reachable:
  *
  *  - yourself;
  *  - somebody you share a Group with, because Kannabi has already put you in a
  *    room together;
- *  - somebody whose work you can already read, since their name is on it;
- *  - anybody, to an administrator, who is already shown every account by the
- *    member list.
  *
- * This is discoverability and nothing else. Knowing that somebody exists
- * reaches none of their Assets, says nothing about which Groups they are in
- * beyond the one already shared, and never produces their address. A
- * tombstoned account is not a person to visit: it keeps only the attribution a
- * record needs, and is unreachable here.
+ * Asset readability and system administration do not broaden this Workspace
+ * boundary. Instance-wide account visibility belongs only to `/admin/users`.
+ * A tombstoned account is not a person to visit.
  */
-const discoverableUser = `(u.accountDeletedAt IS NULL AND u.id IS NOT NULL AND (
+const reachableUserProfile = `(${activeUser} AND (
   u.key = $actorKey
-  OR $actorIsAdministrator
-  OR EXISTS { MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)<-[:MEMBER_OF]-(u) }
-  OR EXISTS { MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer} }
+  OR ${sharesGroupWithViewer}
 ))`;
+
+/** Workspace Members and individual profiles share one boundary. */
+const workspaceMember = reachableUserProfile;
 
 /** The shape every User surface returns, counted through the viewer's own
  * readability rather than the target's. */
 const discoveredUser = `u.key AS key, u.name AS name, coalesce(u.gravatar, false) AS gravatar,
-  u.email AS email, count(a) AS reportedAssets`;
+  u.email AS email, count(DISTINCT a) AS reportedAssets,
+  collect(DISTINCT sharedGroup { .key, .name }) AS sharedGroups`;
 const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
@@ -879,7 +883,7 @@ export class IdentityStore {
           RETURN count(a) AS total,
             {all: count(CASE WHEN matches THEN 1 END),
              mine: count(CASE WHEN matches AND mine THEN 1 END),
-             group: count(CASE WHEN matches AND inGroup THEN 1 END),
+             group: count(CASE WHEN matches AND inGroup AND a.isPublic = false THEN 1 END),
              public: count(CASE WHEN matches AND a.isPublic = true THEN 1 END)} AS scopes
         }
         CALL {
@@ -887,7 +891,7 @@ export class IdentityStore {
           WHERE ${readableAsset} AND toLower(a.name) CONTAINS toLower($text)
             AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
-              OR ($scope = 'group' AND ${collaboration})
+              OR ($scope = 'group' AND a.isPublic = false AND ${collaboration})
               OR ($scope = 'mine' AND EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) }))
             AND ${keysetPredicate(sort, dir)}
           WITH a ${order} LIMIT $fetchSize
@@ -979,19 +983,19 @@ export class IdentityStore {
     });
   }
 
-  async members(actorKey: string): Promise<Member[]> {
+  async users(actorKey: string): Promise<UserAccount[]> {
     return this.write(async (tx) => {
       const allowed = await tx.run("MATCH (:User {key: $actorKey, role: 'admin'}) RETURN true", { actorKey });
       if (!allowed.records.length) throw new AdministrationError('Administrator access required');
-      const result = await tx.run(`MATCH (u:User) WHERE u.id IS NOT NULL RETURN ${memberProjection} AS member ORDER BY toLower(u.name), u.key`);
-      return result.records.map((row) => row.get('member'));
+      const result = await tx.run(`MATCH (u:User) WHERE u.id IS NOT NULL RETURN ${userAccountProjection} AS user ORDER BY toLower(u.name), u.key`);
+      return result.records.map((row) => row.get('user'));
     });
   }
 
-  async profile(actorKey: string): Promise<Member> {
-    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL RETURN ${memberProjection} AS member`, { actorKey }));
+  async profile(actorKey: string): Promise<UserAccount> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL RETURN ${userAccountProjection} AS user`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
-    return result.records[0].get('member');
+    return result.records[0].get('user');
   }
 
   async ownDeletionBlocked(actorKey: string): Promise<boolean> {
@@ -1021,26 +1025,17 @@ export class IdentityStore {
 
   /** A User as another User may see them.
    *
-   * Nothing here is new visibility. The name and the deleted state are what
-   * `reportedBy` already shows to anybody who can read an Asset; the avatar
-   * exists only where its owner asked for one; and the Asset count is counted
-   * through the viewer's own readability rule, so it can never reveal that
-   * something exists which they could not otherwise reach.
+   * Shared Group membership supplies visibility. The avatar exists only where
+   * its owner asked for one, and the Asset count is counted through the
+   * viewer's own readability rule, so it can never reveal an unreadable Asset.
    *
-   * Email and Group membership are deliberately absent.
+   * Email and non-shared Group membership are deliberately absent.
    */
-  /** The parameters `discoverableUser` needs, with the one fact that cannot be
-   * asked of the graph in the same breath. */
-  private async discoveryParameters(actorKey: string) {
-    return {
-      actorKey: requiredText(actorKey, 'actorKey'),
-      actorIsAdministrator: await this.isAdministrator(actorKey),
-    };
-  }
-
   private static discovered(row: Neo4jRecord, actorKey: string): UserProfile {
     const gravatar = row.get('gravatar') === true;
     const email = row.get('email');
+    const sharedGroups = [...row.get('sharedGroups') as Entity[]]
+      .sort((left, right) => left.name.localeCompare(right.name) || left.key.localeCompare(right.key));
     return {
       key: row.get('key'),
       name: row.get('name'),
@@ -1048,31 +1043,35 @@ export class IdentityStore {
       // an address: the hash is one-way and exists only for a User who asked
       // for Gravatar.
       avatarHash: gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null,
+      sharedGroups: Object.freeze(sharedGroups),
       reportedAssets: row.get('reportedAssets').toNumber(),
       self: row.get('key') === actorKey,
     };
   }
 
-  /** Everybody this viewer may know exists, by name.
+  /** This viewer and active Users sharing at least one Group with them.
    *
-   * Deliberately the same rule and the same projection as a single User's
-   * page, so a person who appears here can always be opened and a person who
-   * cannot be opened never appears.
+   * Workspace profiles use this same boundary. Administrator status and
+   * readable reporting provenance grant neither enumeration nor reachability.
    */
-  async listUsers(actorKey: string): Promise<UserProfile[]> {
-    const parameters = await this.discoveryParameters(actorKey);
+  async listMembers(actorKey: string): Promise<UserProfile[]> {
+    const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
     const result = await this.write((tx) => tx.run(`
-      MATCH (u:User) WHERE ${discoverableUser}
+      MATCH (u:User) WHERE ${workspaceMember}
       OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
+        WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
       RETURN ${discoveredUser} ORDER BY toLower(u.name), u.key`, parameters));
     return result.records.map((row) => IdentityStore.discovered(row, parameters.actorKey));
   }
 
   async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
-    const parameters = await this.discoveryParameters(actorKey);
+    const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
     const result = await this.write((tx) => tx.run(`
-      MATCH (u:User {key: $targetKey}) WHERE ${discoverableUser}
+      MATCH (u:User {key: $targetKey}) WHERE ${reachableUserProfile}
       OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
+        WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
       RETURN ${discoveredUser}`,
     { ...parameters, targetKey: requiredText(targetKey, 'user key') }));
     if (!result.records.length) return null;
@@ -1104,15 +1103,15 @@ export class IdentityStore {
     return result.records[0].get('appearance');
   }
 
-  async memberAccount(actorKey: string, targetKey: string): Promise<MemberAccount> {
+  async managedUserAccount(actorKey: string, targetKey: string): Promise<ManagedUserAccount> {
     const result = await this.write((tx) => tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}),
       (u:User {key: $targetKey}) WHERE u.id IS NOT NULL
-      RETURN ${memberProjection} AS member, u.id AS id`, { actorKey, targetKey }));
+      RETURN ${userAccountProjection} AS user, u.id AS id`, { actorKey, targetKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
-    return { ...result.records[0].get('member'), id: result.records[0].get('id') };
+    return { ...result.records[0].get('user'), id: result.records[0].get('id') };
   }
 
-  async updateMemberRole(actorKey: string, targetKey: string, isAdmin: boolean): Promise<Member> {
+  async updateUserRole(actorKey: string, targetKey: string, isAdmin: boolean): Promise<UserAccount> {
     if (typeof isAdmin !== 'boolean') throw new ValidationError('Administrator status must be a boolean');
     return this.write(async (tx) => {
       // Serialize role changes before checking the actor and counting administrators.
@@ -1128,12 +1127,12 @@ export class IdentityStore {
       }
       const result = await tx.run(`MATCH (u:User {key: $targetKey})
         SET u.role = $role, u.updatedAt = $updatedAt
-        RETURN ${memberProjection} AS member`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
-      return result.records[0].get('member');
+        RETURN ${userAccountProjection} AS user`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
+      return result.records[0].get('user');
     });
   }
 
-  async deactivateMember(actorKey: string, targetKey: string): Promise<void> {
+  async deactivateUser(actorKey: string, targetKey: string): Promise<void> {
     await this.deactivateAccount(actorKey, targetKey, 'administrator');
   }
 

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { canonicalIdentifiers } from './gs1.js';
 import { demoAccounts, demoAdministrators, demoAllocatedSequences, demoAllocations, demoAssets,
-  demoDiscoverable, demoGroupMembers, demoNamespaces, demoScopes,
+  demoDiscoverable, demoGroupMembers, demoMembers, demoNamespaces, demoScopes,
   evaluatorScopes } from '../scripts/demo/fixtures.js';
 import { allocatableSequence, canonicalExclusions, firstSequence } from './giai-allocation.js';
 import { canonicalGcp } from './gs1.js';
@@ -48,7 +48,8 @@ test('demo contents and supported identifiers are deterministic with overlapping
   assert.equal(new Set(pallets.map((identifier) => identifier.components.assetType)).size, 1);
   const readable = assets.filter((a) => a.group !== 3 || a.isPublic);
   assert.deepEqual({ all: readable.length, mine: readable.filter((a) => a.reporter === 0).length,
-    group: readable.filter((a) => a.group !== 3).length, public: readable.filter((a) => a.isPublic).length }, evaluatorScopes);
+    group: readable.filter((a) => a.group !== 3 && !a.isPublic).length,
+    public: readable.filter((a) => a.isPublic).length }, evaluatorScopes);
   assert.ok(readable.some((a) => a.reporter === 0 && a.isPublic));
   assert.ok(assets.some((a) => a.owner === null));
   assert.ok(assets.some((a) => a.owner !== null));
@@ -115,7 +116,7 @@ test('demo refuses buckets that could retain hidden media versions', () => {
   for (const status of ['Enabled', 'Suspended', 'unknown']) assert.throws(() => requireUnversionedBucket(status));
 });
 
-test('the demo cast makes the User visibility rule inspectable', () => {
+test('the demo cast makes Members and User profile reachability inspectable', () => {
   // Fictional identities only, and enough of them that each way of being
   // discoverable — and of not being — is represented by somebody.
   assert.equal(demoAccounts.length, 10);
@@ -123,6 +124,7 @@ test('the demo cast makes the User visibility rule inspectable', () => {
   for (const account of demoAccounts) assert.match(account.email, /@demo\.invalid$/);
   // Deterministic: the same cast, the same memberships, the same answers.
   assert.deepEqual(demoDiscoverable(0), demoDiscoverable(0));
+  assert.deepEqual(demoMembers(0), demoMembers(0));
   assert.deepEqual(demoScopes(1), demoScopes(1));
 
   // Every reporter is a member of the Group they reported into, which is what
@@ -136,19 +138,17 @@ test('the demo cast makes the User visibility rule inspectable', () => {
   // the seed has always verified.
   assert.deepEqual(demoScopes(0), evaluatorScopes);
 
-  // Administration reaches every account. It reaches no more Assets for it:
-  // the second administrator reads only what their own Groups allow.
-  for (const index of demoAdministrators) {
-    assert.deepEqual(demoDiscoverable(index), demoAccounts.map((_, at) => at));
-  }
+  // Administration never broadens Workspace profiles or Asset access.
+  for (const index of demoAdministrators) assert.deepEqual(demoDiscoverable(index), demoMembers(index));
+  assert.ok(demoMembers(9).length < demoAccounts.length,
+    'administrator status does not broaden Workspace Members');
   assert.ok(demoScopes(9).all < demoScopes(0).all, 'an administrator is not an Asset superuser');
 
   const seenBy = (viewer: number) => new Set(demoDiscoverable(viewer));
-  // Somebody in a Group of their own who has reported nothing readable is
-  // known to nobody but an administrator — the case the rule exists to refuse.
+  // Somebody in a Group of their own is visible only to themself.
   const alone = 6;
   const finds = demoAccounts.flatMap((_, viewer) => (seenBy(viewer).has(alone) ? [viewer] : []));
-  assert.deepEqual(finds, [0, alone, 9], 'only administrators and themselves');
+  assert.deepEqual(finds, [alone], 'only themselves');
 
   // Sharing a Group is enough on its own: these two have reported nothing.
   for (const quiet of [3, 8]) {
@@ -156,8 +156,8 @@ test('the demo cast makes the User visibility rule inspectable', () => {
     assert.ok(seenBy(0).has(quiet) && seenBy(3).has(quiet) && !seenBy(1).has(quiet),
       'seen by the Group they share, not beyond it');
   }
-  // And a readable Asset is enough without any shared Group: Noa shares one
-  // only with Robin, yet reported public Assets everybody can read.
+  // Readable reporting provenance is not enough without a shared Group.
   assert.ok(!demoGroupMembers.some((members) => members.includes(1) && members.includes(5)));
-  assert.ok(seenBy(1).has(5), 'known through their work alone');
+  assert.ok(!seenBy(1).has(5), 'not known through their work alone');
+  assert.ok(!demoMembers(1).includes(5), 'reporter-only reachability does not enumerate a Member');
 });

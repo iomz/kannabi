@@ -54,7 +54,7 @@ test('Inventory is a category that opens its default surface', () => {
 
 test('administration is only offered to an administrator', () => {
   const ordinary = render({ user, isAdmin: false, avatarHash: null, busy: false });
-  assert.doesNotMatch(ordinary, />Members</);
+  assert.doesNotMatch(ordinary, /href="\/admin\/users"/);
   assert.doesNotMatch(ordinary, />Instance settings</);
 });
 
@@ -83,11 +83,11 @@ test('Asset detail and reporting belong to the inventory, not to Lookup', () => 
   assert.equal(activeDestination('/assets/report'), '/');
   assert.equal(activeDestination('/lookup'), '/lookup');
   assert.equal(activeDestination('/groups'), '/groups');
-  // A person's page belongs to the directory it was opened from, and that
-  // directory is workspace discovery rather than member administration.
-  assert.equal(activeDestination('/users'), '/users');
-  assert.equal(activeDestination('/users/u-1'), '/users');
-  assert.equal(activeDestination('/admin/members'), '/admin/members');
+  // A person's page belongs to Workspace Members even when Asset provenance,
+  // rather than directory enumeration, supplied the link.
+  assert.equal(activeDestination('/members'), '/members');
+  assert.equal(activeDestination('/users/u-1'), '/members');
+  assert.equal(activeDestination('/admin/users'), '/admin/users');
   assert.equal(activeDestination('/settings'), null);
 });
 

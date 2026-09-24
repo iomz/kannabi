@@ -132,7 +132,10 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   await t.test('member reads and edits private Asset; unrelated and anonymous callers cannot', async () => {
     const read = await member.request(assetPath);
     assert.equal(read.status, 200);
-    assert.equal((await read.json()).canEdit, true);
+    const readable = await read.json();
+    assert.equal(readable.canEdit, true);
+    assert.equal(readable.canViewReporterProfile, true,
+      'shared Group makes reporter profile reachable');
     assert.equal((await member.request(assetPath, 'PATCH', { name: 'Bench instrument' })).status, 200);
     for (const [caller, editStatus] of [[stranger, 404], [anonymous, 401]] as const) {
       const inaccessible = await caller.request(assetPath);
@@ -194,6 +197,8 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal('role' in result.asset.reportedBy, false);
       assert.equal('password' in result.asset.reportedBy, false);
       assert.equal(result.canEdit, false);
+      assert.equal(result.canViewReporterProfile, false,
+        'public Asset readability does not make reporter profile reachable');
       assert.equal((await caller.request(assetPath, 'PATCH', { name: 'Denied' })).status, editStatus);
     }
     assert.equal((await member.request(assetPath, 'PATCH', { isPublic: false })).status, 200);
@@ -393,7 +398,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.deepEqual(mineAfterLeaving.scopes, { all: 2, mine: 0, group: 1, public: 1 });
     const searchScopes = await (await stranger.request('/assets?q=Twin&scope=mine')).json();
     assert.equal(searchScopes.matching, 2);
-    assert.deepEqual(searchScopes.scopes, { all: 2, mine: 2, group: 2, public: 1 });
+    assert.deepEqual(searchScopes.scopes, { all: 2, mine: 2, group: 1, public: 1 });
   });
 
 });
