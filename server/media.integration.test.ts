@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { isAssetId } from './asset-id.js';
 import { IdentityStore } from './identity-store.js';
+import { defaultToastSeconds } from './settings.js';
 import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
 import { createAuth } from './auth.js';
@@ -21,8 +22,11 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   await legacy.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0 REMOVE s.themeId, s.accentColor");
   await legacy.close();
   const store = await IdentityStore.open(driver);
+  // An instance older than a setting reads as the shipped default rather than
+  // as a missing value, so an upgrade needs no migration to be usable.
   assert.deepEqual(await store.settings(),
-    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null });
+    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
+      toastSeconds: defaultToastSeconds });
   const storage = storageFromEnv();
   await storage.check();
   const media = new MediaService(store, storage);
@@ -58,7 +62,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: user.key });
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
     assert.deepEqual(await store.settings(),
-      { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: null });
+      { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: null,
+        toastSeconds: defaultToastSeconds });
     // The API token lifetime ceiling is instance policy and travels with the
     // rest of the settings object, including back to the unconfigured state.
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
@@ -68,6 +73,18 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: 0 }))).status, 400);
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
     assert.equal((await store.settings()).apiTokenMaxLifetimeDays, null);
+    // How long a message stays is instance policy too, in seconds, and is
+    // refused outside a range in which it can be read and still be transient.
+    assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
+      displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', toastSeconds: 12 }))).status, 200);
+    assert.equal((await store.settings()).toastSeconds, 12);
+    for (const toastSeconds of [1, 31, 5.5, '5']) {
+      assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
+        displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', toastSeconds }))).status, 400, String(toastSeconds));
+    }
+    assert.equal((await store.settings()).toastSeconds, 12, 'a refused change leaves the policy alone');
+    assert.equal((await request('/settings', 'PATCH', change)).status, 200);
+    assert.equal((await store.settings()).toastSeconds, defaultToastSeconds, 'omitted means the shipped default');
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'unknown', themeId: 'default' }))).status, 400);
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }))).status, 400);
   });
