@@ -6,8 +6,9 @@ import { emptyAssetFilters } from '../../server/asset-page.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
 import { MediaService } from '../../server/media.js';
-import { demoAccounts, demoAllocations, demoAssets, demoGroups, demoNamespaces, demoOwners,
-  demoPassword, evaluatorScopes } from './fixtures.js';
+import { demoAccounts, demoAdministrators, demoAllocations, demoAssets, demoDiscoverable, demoMembers,
+  demoGravatarAccounts, demoGroupMembers, demoGroups, demoNamespaces, demoOwners, demoPassword,
+  demoScopes, evaluatorScopes } from './fixtures.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket, type DemoMode } from './safety.js';
 
 export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.ProcessEnv) {
@@ -64,12 +65,19 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       users.push(response.user.key);
     }
     // Same explicit administrative grant as admin:grant; it grants no Asset access.
-    await session.run("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.isAdmin", { key: users[0] });
+    for (const index of demoAdministrators) {
+      await session.run("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.isAdmin", { key: users[index] });
+    }
+    // Consent this account gave for itself, exactly as the preference does.
+    for (const index of demoGravatarAccounts) await store.updateGravatar(users[index], { gravatar: true });
     await store.updateSettings(users[0], { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
     const groups = [];
-    for (const [index, name] of demoGroups.entries()) groups.push(await store.createReportingGroup(name, users[[0, 1, 0, 2][index]]));
-    await store.addGroupMember(users[1], groups[1].key, users[0]);
-    await store.addGroupMember(users[0], groups[2].key, users[1]);
+    for (const [index, name] of demoGroups.entries()) {
+      const [founder, ...joined] = demoGroupMembers[index];
+      const group = await store.createReportingGroup(name, users[founder]);
+      for (const member of joined) await store.addGroupMember(users[founder], group.key, users[member]);
+      groups.push(group);
+    }
     const owners = [];
     for (const name of demoOwners) owners.push(await store.createOwner(name));
     for (const namespace of demoNamespaces) {
@@ -114,7 +122,29 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     for (const scope of ['all', 'mine', 'group', 'public'] as const) {
       if (page.scopes[scope] !== evaluatorScopes[scope]) throw new Error('Demo verification failed: unexpected access counts');
     }
+    // The point of the cast is that the visibility rule is inspectable, so the
+    // seed refuses to finish if what the graph answers differs from what the
+    // fixture says each account should be able to see.
+    for (const [index] of demoAccounts.entries()) {
+      const expected = demoScopes(index);
+      const seen = await store.findAssets(users[index], { q: '', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 1, after: null });
+      for (const scope of ['all', 'mine', 'group', 'public'] as const) {
+        if (seen.scopes[scope] !== expected[scope]) {
+          throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected ${scope} Assets`);
+        }
+      }
+      const members = (await store.listMembers(users[index])).map((person) => users.indexOf(person.key));
+      if (JSON.stringify([...members].sort((a, b) => a - b)) !== JSON.stringify(demoMembers(index))) {
+        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected Members`);
+      }
+      for (const [target] of demoAccounts.entries()) {
+        if ((await store.userProfile(users[index], users[target]) !== null) !== demoDiscoverable(index).includes(target)) {
+          throw new Error(`Demo verification failed: ${demoAccounts[index].email} reaches an unexpected profile`);
+        }
+      }
+    }
     return { assets: demoAssets().length, photos: demoAssets().filter((asset) => asset.photo).length,
+      accounts: demoAccounts.length, groups: demoGroups.length,
       namespaces: demoNamespaces.length, allocations: demoAllocations.length, scopes: page.scopes,
       distinctDates, duplicatedDates };
   } finally { await session.close(); await driver.close(); s3.destroy(); }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { validateSettings, type Settings } from './settings.js';
-import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
+import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
+import type { Driver, ManagedTransaction, Record as Neo4jRecord, Session } from 'neo4j-driver';
 import neo4j, { int } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
@@ -11,6 +11,8 @@ import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
+import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change-provenance.js';
+import { gravatarIdentifier } from './avatar.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
   allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
@@ -31,11 +33,33 @@ export class LastAdministratorError extends Error {}
  * answers who is acting, and every later authorization decision is made from
  * the Group model as usual rather than from anything carried here. */
 export type ResolvedUser = Readonly<{ key: string; name: string }>;
-export type Member = { key: string; name: string; email: string; isAdmin: boolean;
+export type UserAccount = { key: string; name: string; email: string; isAdmin: boolean;
   credentialState: 'pending' | 'established'; createdAt: string | null };
-export type MemberAccount = Member & { id: string };
-export type AccountState = { isAdmin: boolean; appearance: AppearancePreference };
-const memberProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
+export type ManagedUserAccount = UserAccount & { id: string };
+/** What one User may learn about another: who they are, and how much of their
+ * work this particular viewer can already see. */
+export type UserProfile = Readonly<{
+  key: string;
+  name: string;
+  avatarHash: string | null;
+  /** Group memberships shared with this viewer, never the target's complete membership. */
+  sharedGroups: readonly Entity[];
+  /** Counted through the viewer's own readability, never the target's. */
+  reportedAssets: number;
+  self: boolean;
+}>;
+
+export type AccountState = {
+  isAdmin: boolean;
+  appearance: AppearancePreference;
+  /** Whether this User asked Kannabi to use Gravatar for their own avatar. */
+  gravatar: boolean;
+  /** The Gravatar identifier, present only while that is true. Kannabi derives
+   * one for nobody who has not asked, and the address itself never leaves the
+   * server for this purpose. */
+  avatarHash: string | null;
+};
+const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
     THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
 
@@ -46,6 +70,7 @@ export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'delete
 /** An external identifier as carried by an Asset. `key` addresses this
  * attachment for detachment; everything else is derived by the GS1 boundary. */
 export type AttachedIdentifier = ExternalIdentifier & Readonly<{ key: string }>;
+
 export type Asset = Readonly<{
   id: string;
   name: string;
@@ -54,6 +79,9 @@ export type Asset = Readonly<{
   allocation: GiaiAllocation | null;
   reportedBy: ReporterAttribution;
   reportedAt: string;
+  /** Null only for an Asset last written before Kannabi recorded this; it
+   * never means the Asset has not changed. */
+  provenance: ChangeProvenance | null;
   owner: Entity | null;
   groups: readonly Entity[];
   isPublic: boolean;
@@ -258,18 +286,28 @@ const attachIdentifiers = `
       ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
     MERGE (a)-[:CLASSIFIED_AS]->(n))`;
 
+/** Public attribution for a stored actor key.
+ *
+ * The key is projected from the stored value rather than from the node,
+ * because an actor key outlives the account it names: a provenance record must
+ * still render after the account is gone, and it must render a tombstone
+ * rather than the person. `node` is therefore allowed to be null even where a
+ * particular caller knows it cannot be.
+ */
+const attribution = (node: string, key: string) => `{ key: ${key},
+        name: CASE WHEN ${node} IS NULL THEN 'Deleted member'
+          WHEN ${node}.accountDeletedAt IS NULL THEN ${node}.name
+          ELSE coalesce(${node}.provenanceName, ${node}.name, 'Deleted member') END,
+        status: CASE WHEN ${node} IS NOT NULL AND ${node}.accountDeletedAt IS NULL
+          THEN 'active' ELSE 'deleted' END }`;
+
 /** One issuance as the domain sees it. Requires `issuance` and `allocator` in
  * scope. Shared by the Asset projection and by the ledger read, so an Asset's
  * allocation and a namespace's issuance can never describe the same record
  * differently. */
 const allocationProjection = `issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
       allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
-      allocatedBy: { key: issuance.allocatedBy,
-        name: CASE WHEN allocator IS NULL THEN 'Deleted member'
-          WHEN allocator.accountDeletedAt IS NULL THEN allocator.name
-          ELSE coalesce(allocator.provenanceName, allocator.name, 'Deleted member') END,
-        status: CASE WHEN allocator IS NOT NULL AND allocator.accountDeletedAt IS NULL
-          THEN 'active' ELSE 'deleted' END } }`;
+      allocatedBy: ${attribution('allocator', 'issuance.allocatedBy')} }`;
 
 const identifierProjection = `
     identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
@@ -284,6 +322,32 @@ const identifierProjection = `
 // representation carries attribution rather than that internal key alone.
 const allocationMatch = `OPTIONAL MATCH (issuance:GiaiAllocation {allocatedForAssetId: a.id})
   OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})`;
+
+/** Resolves the accepting User of the Asset's most recent canonical change.
+ * Optional in both directions: an Asset may predate this record, and the
+ * account may since have been deleted. Requires `a` in scope, yields
+ * `acceptor`, and cannot multiply rows because the User key is unique. */
+const changeMatch = 'OPTIONAL MATCH (acceptor:User {key: a.changeAcceptedBy})';
+
+/** Bounded change provenance as the domain sees it. Requires `a` and
+ * `acceptor` in scope. The whole record is absent together: an Asset written
+ * before Kannabi recorded this has no half-filled provenance. */
+const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
+      assertedBy: CASE WHEN a.changeAssertedById IS NULL THEN null
+        ELSE { id: a.changeAssertedById, label: a.changeAssertedByLabel } END,
+      acceptedBy: ${attribution('acceptor', 'a.changeAcceptedBy')},
+      acceptedAt: toString(a.changeAcceptedAt), basis: a.changeBasis } END`;
+
+/** Stamps the Asset with who made this change true. Requires `a` in scope plus
+ * `$actorKey` and the parameters `changeParams` produces.
+ *
+ * It is a clause in the same statement as the change it describes, so the two
+ * commit or fail together: provenance can never be missing for a change that
+ * happened, or present for one that did not.
+ */
+const recordChange = `SET a.changeAcceptedBy = $actorKey, a.changeAcceptedAt = datetime(),
+    a.changeAssertedById = $assertedById, a.changeAssertedByLabel = $assertedByLabel,
+    a.changeBasis = $basis`;
 
 /** How each sortable field is ordered and compared in Cypher.
  *
@@ -350,12 +414,11 @@ const assetRowsProjection = (order: string) => `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${allocationMatch}
-  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
+  ${changeMatch}
+  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
-    reportedBy: { key: u.key,
-      name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
-      status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END },
+    reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
@@ -377,16 +440,54 @@ const collaboration = `EXISTS {
  * collaboration branch is simply unsatisfied there.
  */
 const readableAsset = `($systemRead OR a.isPublic = true OR ${collaboration})`;
+
+/** One Asset, as this viewer can read it. The `user` audience of `readableAsset`
+ * written on its own, because User discovery always has a signed-in viewer and
+ * never the system-wide audience. */
+const readableByViewer = `(a.isPublic = true OR ${collaboration})`;
+
+const activeUser = `u.accountDeletedAt IS NULL AND u.id IS NOT NULL`;
+const sharesGroupWithViewer = `EXISTS {
+  MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(shared:Group)
+  WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(shared) }
+}`;
+
+/** Who may have an individual Workspace profile opened, as Cypher. Requires
+ * `u` in scope and `$actorKey`.
+ *
+ * Two ways make an individual profile reachable:
+ *
+ *  - yourself;
+ *  - somebody you share a Group with, because Kannabi has already put you in a
+ *    room together;
+ *
+ * Asset readability and system administration do not broaden this Workspace
+ * boundary. Instance-wide account visibility belongs only to `/admin/users`.
+ * A tombstoned account is not a person to visit.
+ */
+const reachableUserProfile = `(${activeUser} AND (
+  u.key = $actorKey
+  OR ${sharesGroupWithViewer}
+))`;
+
+/** Workspace Members and individual profiles share one boundary. */
+const workspaceMember = reachableUserProfile;
+
+/** The shape every User surface returns, counted through the viewer's own
+ * readability rather than the target's. */
+const discoveredUser = `u.key AS key, u.name AS name, coalesce(u.gravatar, false) AS gravatar,
+  u.email AS email, count(DISTINCT a) AS reportedAssets,
+  collect(DISTINCT sharedGroup { .key, .name }) AS sharedGroups`;
 const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${allocationMatch}
-  WITH a, u, o, issuance, allocator, collect(g { .key, .name }) AS groups
+  ${changeMatch}
+  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
-    reportedBy: { key: u.key,
-      name: CASE WHEN u.accountDeletedAt IS NULL THEN u.name ELSE coalesce(u.provenanceName, u.name, 'Deleted member') END,
-      status: CASE WHEN u.accountDeletedAt IS NULL THEN 'active' ELSE 'deleted' END }, owner: o { .key, .name },
+    reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
+    owner: o { .key, .name },
     groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] } AS asset`;
 
@@ -649,7 +750,8 @@ export class IdentityStore {
     });
   }
 
-  async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null): Promise<Asset> {
+  async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const input = record(value, ['name', 'identifiers', 'ownerKey']);
     const actor = record(context, ['actorKey', 'groupKey']);
     const identifiers = canonicalIdentifiers(input.identifiers);
@@ -660,6 +762,7 @@ export class IdentityStore {
       groupKey: requiredText(actor.groupKey, 'groupKey'),
       ownerKey: input.ownerKey === undefined ? null : requiredText(input.ownerKey, 'ownerKey'),
       ...identifierParams(identifiers),
+      ...changeParams(origin),
       photoKey,
     };
     try {
@@ -672,6 +775,8 @@ export class IdentityStore {
           OPTIONAL MATCH (o:Owner {key: $ownerKey})
           WITH u, g, o WHERE $ownerKey IS NULL OR o IS NOT NULL
           CREATE (a:Asset {id: $assetId, name: $name, reportedAt: datetime(), isPublic: false})
+          ${recordChange}
+          WITH a, u, g, o
           CREATE (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
           FOREACH (owner IN CASE WHEN o IS NULL THEN [] ELSE [o] END |
             CREATE (a)-[:OWNED_BY]->(owner))
@@ -778,7 +883,7 @@ export class IdentityStore {
           RETURN count(a) AS total,
             {all: count(CASE WHEN matches THEN 1 END),
              mine: count(CASE WHEN matches AND mine THEN 1 END),
-             group: count(CASE WHEN matches AND inGroup THEN 1 END),
+             group: count(CASE WHEN matches AND inGroup AND a.isPublic = false THEN 1 END),
              public: count(CASE WHEN matches AND a.isPublic = true THEN 1 END)} AS scopes
         }
         CALL {
@@ -786,7 +891,7 @@ export class IdentityStore {
           WHERE ${readableAsset} AND toLower(a.name) CONTAINS toLower($text)
             AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
-              OR ($scope = 'group' AND ${collaboration})
+              OR ($scope = 'group' AND a.isPublic = false AND ${collaboration})
               OR ($scope = 'mine' AND EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) }))
             AND ${keysetPredicate(sort, dir)}
           WITH a ${order} LIMIT $fetchSize
@@ -878,19 +983,19 @@ export class IdentityStore {
     });
   }
 
-  async members(actorKey: string): Promise<Member[]> {
+  async users(actorKey: string): Promise<UserAccount[]> {
     return this.write(async (tx) => {
       const allowed = await tx.run("MATCH (:User {key: $actorKey, role: 'admin'}) RETURN true", { actorKey });
       if (!allowed.records.length) throw new AdministrationError('Administrator access required');
-      const result = await tx.run(`MATCH (u:User) WHERE u.id IS NOT NULL RETURN ${memberProjection} AS member ORDER BY toLower(u.name), u.key`);
-      return result.records.map((row) => row.get('member'));
+      const result = await tx.run(`MATCH (u:User) WHERE u.id IS NOT NULL RETURN ${userAccountProjection} AS user ORDER BY toLower(u.name), u.key`);
+      return result.records.map((row) => row.get('user'));
     });
   }
 
-  async profile(actorKey: string): Promise<Member> {
-    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL RETURN ${memberProjection} AS member`, { actorKey }));
+  async profile(actorKey: string): Promise<UserAccount> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL RETURN ${userAccountProjection} AS user`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
-    return result.records[0].get('member');
+    return result.records[0].get('user');
   }
 
   async ownDeletionBlocked(actorKey: string): Promise<boolean> {
@@ -903,13 +1008,90 @@ export class IdentityStore {
   }
 
   async accountState(actorKey: string | null): Promise<AccountState> {
-    if (!actorKey) return { isAdmin: false, appearance: 'system' };
+    if (!actorKey) return { isAdmin: false, appearance: 'system', gravatar: false, avatarHash: null };
     const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
-      RETURN u.role = 'admin' AS isAdmin, coalesce(u.appearance, 'system') AS appearance`, { actorKey }));
+      RETURN u.role = 'admin' AS isAdmin, coalesce(u.appearance, 'system') AS appearance,
+        coalesce(u.gravatar, false) AS gravatar, u.email AS email`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
     const appearance = result.records[0].get('appearance');
     if (!isAppearancePreference(appearance)) throw new Error('Stored User appearance is invalid');
-    return { isAdmin: result.records[0].get('isAdmin') === true, appearance };
+    // Absent unless this User turned it on, so a stored address alone never
+    // produces a third-party identifier.
+    const gravatar = result.records[0].get('gravatar') === true;
+    const email = result.records[0].get('email');
+    const avatarHash = gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null;
+    return { isAdmin: result.records[0].get('isAdmin') === true, appearance, gravatar, avatarHash };
+  }
+
+  /** A User as another User may see them.
+   *
+   * Shared Group membership supplies visibility. The avatar exists only where
+   * its owner asked for one, and the Asset count is counted through the
+   * viewer's own readability rule, so it can never reveal an unreadable Asset.
+   *
+   * Email and non-shared Group membership are deliberately absent.
+   */
+  private static discovered(row: Neo4jRecord, actorKey: string): UserProfile {
+    const gravatar = row.get('gravatar') === true;
+    const email = row.get('email');
+    const sharedGroups = [...row.get('sharedGroups') as Entity[]]
+      .sort((left, right) => left.name.localeCompare(right.name) || left.key.localeCompare(right.key));
+    return {
+      key: row.get('key'),
+      name: row.get('name'),
+      // Derived per request from consent, never stored and never returned as
+      // an address: the hash is one-way and exists only for a User who asked
+      // for Gravatar.
+      avatarHash: gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null,
+      sharedGroups: Object.freeze(sharedGroups),
+      reportedAssets: row.get('reportedAssets').toNumber(),
+      self: row.get('key') === actorKey,
+    };
+  }
+
+  /** This viewer and active Users sharing at least one Group with them.
+   *
+   * Workspace profiles use this same boundary. Administrator status and
+   * readable reporting provenance grant neither enumeration nor reachability.
+   */
+  async listMembers(actorKey: string): Promise<UserProfile[]> {
+    const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
+    const result = await this.write((tx) => tx.run(`
+      MATCH (u:User) WHERE ${workspaceMember}
+      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
+        WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
+      RETURN ${discoveredUser} ORDER BY toLower(u.name), u.key`, parameters));
+    return result.records.map((row) => IdentityStore.discovered(row, parameters.actorKey));
+  }
+
+  async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
+    const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
+    const result = await this.write((tx) => tx.run(`
+      MATCH (u:User {key: $targetKey}) WHERE ${reachableUserProfile}
+      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
+        WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
+      RETURN ${discoveredUser}`,
+    { ...parameters, targetKey: requiredText(targetKey, 'user key') }));
+    if (!result.records.length) return null;
+    return IdentityStore.discovered(result.records[0], parameters.actorKey);
+  }
+
+  /** Records whether this User wants Gravatar used for their own avatar.
+   *
+   * Turning it off removes the stored consent, and the identifier is derived
+   * per request rather than stored, so nothing survives to be rendered
+   * afterwards.
+   */
+  async updateGravatar(actorKey: string, value: unknown): Promise<boolean> {
+    const input = record(value, ['gravatar']);
+    if (typeof input.gravatar !== 'boolean') throw new ValidationError('Gravatar preference must be a boolean');
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.id IS NOT NULL
+      SET u.gravatar = $gravatar RETURN u.gravatar AS gravatar`,
+    { actorKey, gravatar: input.gravatar }));
+    if (!result.records.length) throw new ReferenceError('User not found');
+    return result.records[0].get('gravatar') === true;
   }
 
   async updateAppearance(actorKey: string, value: unknown): Promise<AppearancePreference> {
@@ -921,15 +1103,15 @@ export class IdentityStore {
     return result.records[0].get('appearance');
   }
 
-  async memberAccount(actorKey: string, targetKey: string): Promise<MemberAccount> {
+  async managedUserAccount(actorKey: string, targetKey: string): Promise<ManagedUserAccount> {
     const result = await this.write((tx) => tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}),
       (u:User {key: $targetKey}) WHERE u.id IS NOT NULL
-      RETURN ${memberProjection} AS member, u.id AS id`, { actorKey, targetKey }));
+      RETURN ${userAccountProjection} AS user, u.id AS id`, { actorKey, targetKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
-    return { ...result.records[0].get('member'), id: result.records[0].get('id') };
+    return { ...result.records[0].get('user'), id: result.records[0].get('id') };
   }
 
-  async updateMemberRole(actorKey: string, targetKey: string, isAdmin: boolean): Promise<Member> {
+  async updateUserRole(actorKey: string, targetKey: string, isAdmin: boolean): Promise<UserAccount> {
     if (typeof isAdmin !== 'boolean') throw new ValidationError('Administrator status must be a boolean');
     return this.write(async (tx) => {
       // Serialize role changes before checking the actor and counting administrators.
@@ -945,12 +1127,12 @@ export class IdentityStore {
       }
       const result = await tx.run(`MATCH (u:User {key: $targetKey})
         SET u.role = $role, u.updatedAt = $updatedAt
-        RETURN ${memberProjection} AS member`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
-      return result.records[0].get('member');
+        RETURN ${userAccountProjection} AS user`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
+      return result.records[0].get('user');
     });
   }
 
-  async deactivateMember(actorKey: string, targetKey: string): Promise<void> {
+  async deactivateUser(actorKey: string, targetKey: string): Promise<void> {
     await this.deactivateAccount(actorKey, targetKey, 'administrator');
   }
 
@@ -988,8 +1170,35 @@ export class IdentityStore {
     });
   }
 
+  /** The Better Auth user id behind a domain actor key, or null when the
+   * account is not active. Credential machinery keys on the auth id; the rest
+   * of the domain never does. */
+  async authUserId(actorKey: string): Promise<string | null> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
+      WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL RETURN u.id AS id`,
+    { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length ? String(result.records[0].get('id')) : null;
+  }
+
+  /** Whether this actor is an administrator right now.
+   *
+   * Read at the moment it matters rather than captured anywhere, so
+   * administrative authority ends when the role does. It says nothing about
+   * Asset access, which stays Group-derived.
+   */
+  async isAdministrator(actorKey: string): Promise<boolean> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey, role: 'admin'})
+      WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL RETURN u.key`,
+    { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length > 0;
+  }
+
   async settings(): Promise<Settings> {
-    const result = await this.write((tx) => tx.run("MATCH (s:Settings {key: 'instance'}) RETURN s { .requirePhoto, .displayTimezone, .themeId } AS settings"));
+    const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'})
+      RETURN s { .requirePhoto, .displayTimezone, .themeId,
+        apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays),
+        toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)) } AS settings`,
+    { defaultToastSeconds }));
     return result.records[0].get('settings');
   }
 
@@ -998,7 +1207,9 @@ export class IdentityStore {
     return this.write(async (tx) => {
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
         SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
-          s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId
+          s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
+          s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
+          s.toastSeconds = $settings.toastSeconds
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;
@@ -1079,12 +1290,14 @@ export class IdentityStore {
   /** Attach an external identifier to an existing Asset. Group authorization is
    * unchanged and identifier knowledge grants nothing: the caller must already
    * be able to edit the Asset. Phase 3 allocation will attach through here. */
-  async attachIdentifier(id: string, actorKey: string, value: unknown): Promise<Asset> {
+  async attachIdentifier(id: string, actorKey: string, value: unknown,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const identifier = canonicalIdentifier(value);
     const assetKey = assetId(id);
+    const change = changeParams(origin);
     try {
       return await this.write(async (tx) => {
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
         const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
           { assetId: assetKey, actorKey });
         return assetFrom(result.records[0].get('asset'));
@@ -1101,7 +1314,8 @@ export class IdentityStore {
    * compatibility, the issuance guard, and persistence. Allocation runs this
    * inside its own transaction rather than duplicating any of it. */
   private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
-    actorKey: string, identifier: ExternalIdentifier): Promise<void> {
+    actorKey: string, identifier: ExternalIdentifier,
+    change: ReturnType<typeof changeParams>): Promise<void> {
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
       RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
         + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
@@ -1121,8 +1335,10 @@ export class IdentityStore {
         throw new ValidationError('Kannabi issued that GIAI for another Asset');
       }
     }
-    await tx.run(`${assetMatch} WHERE ${collaboration} ${attachIdentifiers}`,
-      { assetId: assetKey, actorKey, ...identifierParams([identifier]) });
+    await tx.run(`${assetMatch} WHERE ${collaboration}
+      ${recordChange}
+      ${attachIdentifiers}`,
+    { assetId: assetKey, actorKey, ...change, ...identifierParams([identifier]) });
   }
 
   /** GIAI namespaces the audience can reach, ordered by prefix. */
@@ -1255,9 +1471,11 @@ export class IdentityStore {
    * instead: the loser's whole transaction, counter included, rolls back and it
    * returns the winner's allocation.
    */
-  async allocateGiai(id: string, actorKey: string, namespaceKey: string): Promise<Asset> {
+  async allocateGiai(id: string, actorKey: string, namespaceKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const assetKey = assetId(id);
     const key = requiredText(namespaceKey, 'namespace key');
+    const change = changeParams(origin);
     const project = async (tx: ManagedTransaction) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
@@ -1302,7 +1520,7 @@ export class IdentityStore {
         { key, value: identifier.components.assetReference, gcp: row.get('gcp'),
           sequence: int(sequence), assetId: assetKey, actorKey });
         // 9. Phase 2 attachment semantics, unchanged and not duplicated.
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier);
+        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
         return project(tx);
       });
     } catch (error) {
@@ -1320,7 +1538,8 @@ export class IdentityStore {
   /** Detach an identifier by its attachment key. An individual identifier is
    * exclusive, so its node goes with the link; a class identifier node stays
    * while any other Asset still refers to it. */
-  async detachIdentifier(id: string, actorKey: string, key: string): Promise<Asset> {
+  async detachIdentifier(id: string, actorKey: string, key: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const assetKey = assetId(id);
     const identifierKey = requiredText(key, 'identifier key');
     return this.write(async (tx) => {
@@ -1332,7 +1551,9 @@ export class IdentityStore {
         DELETE individualLink, classLink
         WITH a, individual
         FOREACH (node IN CASE WHEN individual IS NULL THEN [] ELSE [individual] END | DELETE node)
-        RETURN a.id AS id`, { assetId: assetKey, actorKey, key: identifierKey });
+        WITH a
+        ${recordChange}
+        RETURN a.id AS id`, { assetId: assetKey, actorKey, key: identifierKey, ...changeParams(origin) });
       if (!detached.records.length) throw new ReferenceError('Asset access or identifier not found');
       await tx.run(`MATCH (c:ClassIdentifier {key: $key})
         WHERE NOT EXISTS { ()-[:CLASSIFIED_AS]->(c) } DELETE c`, { key: identifierKey });
@@ -1362,25 +1583,31 @@ export class IdentityStore {
     if (!result.records.length) throw new ValidationError('Photo upload expired or unavailable');
   }
 
-  async attachPhoto(id: string, actorKey: string, photoKey: string): Promise<Asset> {
+  async attachPhoto(id: string, actorKey: string, photoKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     return this.write(async (tx) => {
       await this.consumePhoto(tx, photoKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
         MATCH (m:Media {key: $photoKey}) CREATE (a)-[:HAS_PHOTO]->(m)
-        WITH a ${assetProjection}`, { assetId: assetId(id), actorKey, photoKey });
+        ${recordChange}
+        WITH a ${assetProjection}`,
+      { assetId: assetId(id), actorKey, photoKey, ...changeParams(origin) });
       if (!result.records.length) throw new ReferenceError('Asset access not found');
       return assetFrom(result.records[0].get('asset'));
     });
   }
 
-  async beginPhotoDeletion(id: string, actorKey: string, photoKey: string): Promise<void> {
+  async beginPhotoDeletion(id: string, actorKey: string, photoKey: string,
+    origin: ChangeOrigin = {}): Promise<void> {
     const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration}
       MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
       SET m.state = 'deleting', m.expiresAt = datetime()
+      ${recordChange}
       DELETE relationship
       RETURN m.key`, {
       assetId: assetId(id), actorKey,
       photoKey: requiredText(photoKey, 'photoKey'),
+      ...changeParams(origin),
     }));
     if (!result.records.length) throw new ReferenceError('Asset access or photo not found');
   }
@@ -1405,7 +1632,8 @@ export class IdentityStore {
     await this.write((tx) => tx.run("MATCH (m:Media {key: $key, state: 'deleting'}) WHERE m.expiresAt <= datetime() DELETE m", { key }));
   }
 
-  async updateAsset(id: string, changes: AssetChanges, actorKey: string): Promise<Asset> {
+  async updateAsset(id: string, changes: AssetChanges, actorKey: string,
+    origin: ChangeOrigin = {}): Promise<Asset> {
     const input = record(changes, ['name', 'ownerKey', 'isPublic']);
     if (Object.hasOwn(input, 'isPublic') && typeof input.isPublic !== 'boolean') {
       throw new ValidationError('isPublic must be a boolean');
@@ -1419,6 +1647,7 @@ export class IdentityStore {
       changeOwner: Object.hasOwn(input, 'ownerKey'),
       ownerKey: input.ownerKey === null || !Object.hasOwn(input, 'ownerKey')
         ? null : requiredText(input.ownerKey, 'ownerKey'),
+      ...changeParams(origin),
     };
     return this.write(async (tx) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
@@ -1426,6 +1655,7 @@ export class IdentityStore {
         WITH a, owner WHERE $ownerKey IS NULL OR owner IS NOT NULL
         // Lock the Asset before changing its single Owner relationship.
         SET a.name = coalesce($name, a.name), a.isPublic = coalesce($isPublic, a.isPublic)
+        ${recordChange}
         WITH a, owner
         OPTIONAL MATCH (a)-[old:OWNED_BY]->(:Owner)
         FOREACH (r IN CASE WHEN $changeOwner THEN [old] ELSE [] END | DELETE r)

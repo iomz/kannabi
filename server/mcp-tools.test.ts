@@ -23,7 +23,7 @@ const gcp = '0614141';
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
     id, name, identifiers: [], allocation: null, reportedBy: reporter,
-    reportedAt: '2026-06-22T00:00:00.000Z', owner: null, groups: [workshop],
+    reportedAt: '2026-06-22T00:00:00.000Z', provenance: null, owner: null, groups: [workshop],
     isPublic: false, photos: [], ...overrides,
   });
 }

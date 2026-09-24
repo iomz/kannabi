@@ -5,3 +5,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Local worktree tooling, not part of the project.
+.worktreeinclude

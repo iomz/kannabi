@@ -8,6 +8,13 @@ Preserve the README naming story at the bottom of README.
 - Reporting requires an explicit Group context; that Group receives collaboration access.
 - A sole Group may be selected automatically in the UI, but remains explicit in the API/domain.
 - `reportedBy` is immutable provenance, never an authorization grant.
+- Every canonical Asset change records, in the same statement as the change, who asserted it and whose authority accepted it. The asserter stays distinguishable from the acceptor even when they are the same person, the accepting authority comes from the authenticated actor and never from caller input, and appearing in provenance grants nothing.
+- Change provenance is bounded current-state provenance describing the latest change only. It never becomes a history log, and it never replaces `reportedBy`.
+- The asserting credential is recorded as a stable server-generated identity plus the label it carried at the time of the write. The identity is identity; the label is a historical snapshot and is never matched on, keyed by, or looked up. Renaming or revoking a credential never alters or hides existing provenance.
+- `basis` identifies the basis; it is not the basis itself. It is an opaque bounded ASCII reference the asserting client owns, and Kannabi never generates, parses, dereferences, or registers namespace meaning for one. It is the only Tier 1 provenance value a caller supplies, and a public Asset may expose it.
+- An API token is a delegated credential issued under one User's authority, never an independent principal. It authenticates as that User and passes through the same Group-derived authorization, evaluated live. A User issues tokens only for themself; an administrator may revoke another User's token but never create one, because minting one would grant that User's Asset access.
+- An admin-enabled token is a ceiling on the credential, never a grant. Administrator authority is re-read from the owning User on every request, and no token ever reaches an Asset outside its owner's Groups.
+- The browser Origin requirement guards cookie-authenticated writes, which a browser sends automatically. A bearer credential is authenticated on its own and never falls back to a cookie, so presenting one can never opt a cookie-authenticated request out of that check.
 - Do not introduce direct User-to-Asset ACLs.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
@@ -58,12 +65,23 @@ Settings persistence: Simple discrete preferences persist on selection/change. C
 # Implementation
 
 Use Hono for server behavior, React Router v7 Framework Mode for UI, and Neo4j for master data.
+Style the UI with Tailwind CSS and shadcn/ui components on Base UI; do not reintroduce a hand-written application stylesheet.
+`web/themes/` is the only place colour is decided. It publishes a palette at runtime as `--kannabi-*`, and `web/style.css` maps that palette onto Tailwind's `--color-*` namespace — including the names the shadcn components ask for — with `@theme inline`. A component never hard-codes a colour, and a new colour is a new palette token rather than a literal.
+`web/style.css` holds the theme bridge and decisions about the document as a whole. Anything narrower belongs to a component: shared compositions live in `web/ui.tsx`, and vendored primitives in `web/components/ui/`.
+A vendored primitive may be edited, and the edit is explained where it is made; it is Kannabi's file once added.
+Prefer the browser's own control where it already does the job; add a scripted one only for behaviour the native control cannot provide.
+UI tests assert roles, accessible names and behaviour rather than class names or markup shape. A surface anchored in a portal — a dialog, a menu, a toast — is opened in a real document and read back, never asserted against static markup.
 Keep one package and ordinary files until a concrete need requires more structure.
 Keep object bytes behind the small S3 storage interface and photo metadata in Neo4j.
-Keep administrative settings limited to photo-on-report policy, display timezone, and built-in instance theme; store timestamps as absolute instants.
+Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, and the API token lifetime ceiling; store timestamps as absolute instants.
 System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.
+
+Private working context — conversations, research notes, and the examples used in them — is not automatically publishable.
+Before creating or editing a public Issue or Issue comment, remove incidental personal and private detail, and prefer fictional or anonymized examples wherever a real identity is not technically necessary.
+Keep concrete empirical evidence whose specificity the engineering or research record genuinely depends on, and minimize unrelated personal information around it rather than weakening the evidence.
+When it is unclear whether a private detail needs to be published, ask instead of publishing it.
 
 ## Browser and GUI verification
 

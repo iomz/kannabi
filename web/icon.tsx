@@ -11,7 +11,14 @@ const paths = {
   copy: 'M8 8h11v11H8z M5 16H4V5h11v1',
   check: 'm5 12 4 4L19 6',
   trash: 'M4 7h16 M9 7V4h6v3 M7 7l1 14h8l1-14 M10 11v6 M14 11v6',
+  user: 'M16 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M4 21v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2',
+  key: 'M15 7a4 4 0 1 1-3.5 5.9L4 20l-2-2 1.5-1.5L5 18l1.5-1.5L5 15l6.1-6.1A4 4 0 0 1 15 7 M16.5 10.5h.01',
+  sidebar: 'M4 5h16v14H4z M10 5v14',
+  info: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18 M12 11v6 M12 8h.01',
 };
-export function Icon({ name }: { name: keyof typeof paths }) {
-  return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+export type IconName = keyof typeof paths;
+
+export function Icon({ name }: { name: IconName }) {
+  // `icon` is the hook the surrounding composition sizes and colours it by.
+  return <svg className="icon size-[1.15rem] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }

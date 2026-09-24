@@ -5,6 +5,13 @@ import { TransientSuccess } from '../transient-success';
 import { formatExclusionRanges, parseExclusionRanges } from '../../server/giai-allocation.js';
 import type { GiaiNamespace } from '../../server/identity-store.js';
 import type { Route } from './+types/groups';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field, Hint, PageHeading, Panel, StatusPill } from '../ui';
+
+/** Controls that read as one line: a field, and the action that uses it. */
+const inlineForm = 'flex flex-wrap items-center gap-4 [&_label]:m-0 [&_label]:flex-1 [&_button]:self-end';
 
 export async function clientLoader() {
   const { user } = await unwrap(await api.me.$get());
@@ -56,26 +63,29 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
 export default function Groups({ loaderData: { user, groups, namespaces }, actionData }: Route.ComponentProps) {
   const busy = useNavigation().state !== 'idle';
   return <>
-    <div className="page-heading"><div><p className="eyebrow">Collaboration</p><h1>Groups</h1><p>Manage the people you share Asset access with.</p></div></div>
+    <PageHeading eyebrow="Collaboration" title="Groups"
+      description="Manage the people you share Asset access with." />
     {actionData?.status === 'error' && actionData.intent !== 'member' && <p role="alert">{actionData.message}</p>}
-      <section className="panel">
+      <Panel>
         <h2>Your Groups</h2>
-        <p className="hint">Your member key: <code>{user.key}</code>. Share it with a Group member to be added.</p>
-        <Form method="post" className="inline"><input type="hidden" name="intent" value="group" />
-          <label>New Group name<input name="name" required /></label><button disabled={busy}>Create Group</button>
+        <Hint className="mb-4">Your member key: <code>{user.key}</code>. Share it with a Group member to be added.</Hint>
+        <Form method="post" className={inlineForm}><input type="hidden" name="intent" value="group" />
+          <Field label="New Group name"><Input name="name" required /></Field>
+          <Button disabled={busy}>Create Group</Button>
         </Form>
         {!groups.length && <p>Create a Group, or ask an existing member to add you.</p>}
-        {groups.map((group) => <details key={group.key}><summary>{group.name}</summary>
+        {groups.map((group) => <details key={group.key}
+          className="mt-5 border-t pt-5 [&>summary]:mb-4 [&>summary]:cursor-pointer [&>summary]:font-semibold">
+          <summary>{group.name}</summary>
           <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />
           <GiaiNamespaces groupKey={group.key} busy={busy}
             namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
           <Form method="post"><input type="hidden" name="groupKey" value={group.key} />
-            <p className="hint">Leaving removes your access to this Group’s private Assets, including those you reported.</p>
-            <button name="intent" value="leave" disabled={busy} className="secondary">Leave Group</button>
+            <Hint className="mb-3">Leaving removes your access to this Group’s private Assets, including those you reported.</Hint>
+            <Button name="intent" value="leave" disabled={busy} variant="outline">Leave Group</Button>
           </Form>
         </details>)}
-      </section>
-
+      </Panel>
   </>;
 }
 
@@ -83,13 +93,14 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   const form = useRef<HTMLFormElement>(null);
   const result = actionData?.intent === 'member' && actionData.groupKey === groupKey ? actionData : null;
   useEffect(() => { if (result?.status === 'added') form.current?.reset(); }, [result]);
-  return <Form ref={form} method="post" className="inline group-member-form">
+  return <Form ref={form} method="post" className={inlineForm}>
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
-    <label>Member key<input name="userKey" required /></label><button disabled={busy}>Add member</button>
-    <div className="group-member-status" aria-live="polite" aria-atomic="true">
+    <Field label="Member key"><Input name="userKey" required /></Field>
+    <Button disabled={busy}>Add member</Button>
+    <div className="flex min-h-8 basis-full items-center" aria-live="polite" aria-atomic="true">
       {result?.status === 'added' ? <TransientSuccess trigger={result} label={result.message} />
-        : result?.status === 'already-member' ? <span className="settings-status-pill">{result.message}</span>
-          : result?.status === 'error' ? <span className="settings-status-pill error" role="alert">{result.message}</span> : null}
+        : result?.status === 'already-member' ? <StatusPill className="whitespace-normal">{result.message}</StatusPill>
+          : result?.status === 'error' ? <StatusPill tone="error" className="whitespace-normal" role="alert">{result.message}</StatusPill> : null}
     </div>
   </Form>;
 }
@@ -97,35 +108,37 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
 function GiaiNamespaces({ groupKey, namespaces, busy }: {
   groupKey: string; namespaces: GiaiNamespace[]; busy: boolean;
 }) {
-  return <div className="giai-namespaces">
-    <h3>GS1 Company Prefixes</h3>
-    <p className="hint">Configuring a prefix lets this Group allocate GIAIs for its Assets.
-      Kannabi records the prefix you assert here; it cannot verify who licensed it.</p>
+  return <div className="my-4">
+    <h3 className="mt-0 mb-1 text-[.95rem]">GS1 Company Prefixes</h3>
+    <Hint className="mb-3">Configuring a prefix lets this Group allocate GIAIs for its Assets.
+      Kannabi records the prefix you assert here; it cannot verify who licensed it.</Hint>
     {!namespaces.length ? <p>No prefix configured. This Group cannot allocate GIAIs.</p>
-      : <ul className="giai-namespace-list">{namespaces.map((namespace) => <li key={namespace.key}>
-        <div>
+      : <ul className="my-2 grid gap-2">{namespaces.map((namespace) => <li key={namespace.key}
+        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted px-[.8rem] py-[.6rem]">
+        <div className="flex flex-wrap items-center gap-2">
           <code>{namespace.gcp}</code>
-          <span className={'badge ' + (namespace.active ? 'public' : '')}>
-            {namespace.active ? 'Active' : 'Inactive'}</span>
-          <span className="hint">Next reference {namespace.nextSequence}
+          <Badge variant={namespace.active ? 'brand' : 'secondary'}>
+            {namespace.active ? 'Active' : 'Inactive'}</Badge>
+          <Hint>Next reference {namespace.nextSequence}
             {namespace.exclusions.length
-              ? ` · existing use ${formatExclusionRanges(namespace.exclusions)}` : ''}</span>
+              ? ` · existing use ${formatExclusionRanges(namespace.exclusions)}` : ''}</Hint>
         </div>
-        <Form method="post" className="inline">
+        <Form method="post">
           <input type="hidden" name="intent" value="namespace-active" />
           <input type="hidden" name="namespaceKey" value={namespace.key} />
           <input type="hidden" name="active" value={namespace.active ? 'false' : 'true'} />
-          <button className="secondary" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</button>
+          <Button variant="outline" size="sm" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</Button>
         </Form>
       </li>)}</ul>}
-    <Form method="post" className="inline">
+    <Form method="post" className={inlineForm}>
       <input type="hidden" name="intent" value="namespace" />
       <input type="hidden" name="groupKey" value={groupKey} />
-      <label>GS1 Company Prefix<input name="gcp" inputMode="numeric" required /></label>
-      <label>Already-used references<input name="exclusions" placeholder="1-4,9-11,200-300" />
-        <span className="hint">Optional. References issued before Kannabi, which it must never allocate.</span>
-      </label>
-      <button disabled={busy}>Configure prefix</button>
+      <Field label="GS1 Company Prefix"><Input name="gcp" inputMode="numeric" required /></Field>
+      <Field label="Already-used references"
+        hint="Optional. References issued before Kannabi, which it must never allocate.">
+        <Input name="exclusions" placeholder="1-4,9-11,200-300" />
+      </Field>
+      <Button disabled={busy}>Configure prefix</Button>
     </Form>
   </div>;
 }

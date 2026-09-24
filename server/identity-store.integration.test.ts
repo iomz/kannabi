@@ -54,6 +54,14 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     try {
       const public_ = await session.run("MATCH (a:Asset) WHERE a.name STARTS WITH 'Legacy' RETURN DISTINCT a.isPublic AS p");
       assert.deepEqual(public_.records.map((r) => r.get('p')), [false]);
+      // A schema backfill has no actor and asserts nothing. Stamping one would
+      // manufacture provenance for a change nobody made, so every migrated
+      // Asset keeps an absent record rather than a plausible-looking one.
+      const stamped = await session.run(`MATCH (a:Asset) WHERE a.name STARTS WITH 'Legacy'
+        AND (a.changeAcceptedAt IS NOT NULL OR a.changeAcceptedBy IS NOT NULL
+          OR a.changeAssertedById IS NOT NULL OR a.changeBasis IS NOT NULL)
+        RETURN count(a) AS n`);
+      assert.equal(stamped.records[0].get('n').toNumber(), 0);
       const constraints = await session.run('SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties RETURN *');
       for (const label of ['Asset', 'Migration']) {
         assert.ok(constraints.records.some((row) => row.get('type') === 'UNIQUENESS'
@@ -365,6 +373,151 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     // An unknown but well-formed native id is simply absent; a malformed one is rejected.
     assert.equal(await store.getAsset(newAssetId(), user.key), null);
     await assert.rejects(store.getAsset('not-a-native-id', user.key), ValidationError);
+  });
+
+  await t.test('every canonical change records who accepted it and who asserted it', async () => {
+    const stored = async (id: string) => (await query(`MATCH (a:Asset {id: $id})
+      RETURN a.changeAcceptedBy AS acceptedBy, a.changeAssertedById AS assertedById,
+        a.changeAssertedByLabel AS assertedByLabel, a.changeBasis AS basis,
+        a.changeAcceptedAt IS NOT NULL AS stamped`, { id })).records[0].toObject();
+    const credential = (n: number) => ({ id: `token-${n}`, label: `Importer ${n}` });
+
+    // Reporting is itself the first canonical change, so provenance is present
+    // from the start rather than appearing only once something is edited.
+    const asset = await store.reportAsset({ name: 'Provenance bench', identifiers: [sgtin('900')] }, context);
+    assert.deepEqual(Object.keys(asset.provenance!).sort(),
+      ['acceptedAt', 'acceptedBy', 'assertedBy', 'basis']);
+    assert.deepEqual(asset.provenance!.acceptedBy, { ...user, status: 'active' });
+    // A person editing directly is the asserter; null says so without naming them twice.
+    assert.equal(asset.provenance!.assertedBy, null);
+    assert.equal(asset.provenance!.basis, null);
+    assert.ok(Date.parse(asset.provenance!.acceptedAt) > 0);
+
+    // Each write path moves the record forward, in the same statement as the change.
+    const paths: [string, () => Promise<unknown>][] = [
+      ['update', () => store.updateAsset(asset.id, { name: 'Provenance bench 2' }, user.key,
+        { assertedBy: credential(1), basis: 'depot:assets:42' })],
+      ['attach', () => store.attachIdentifier(asset.id, user.key, gtin, { assertedBy: credential(2) })],
+      ['detach', async () => {
+        const current = (await store.getAsset(asset.id, user.key))!;
+        const attached = current.identifiers.find((i) => i.canonical === '(01)00614141123452')!;
+        return store.detachIdentifier(asset.id, user.key, attached.key, { assertedBy: credential(3) });
+      }],
+      ['photo attach', async () => {
+        const photoKey = await store.reservePhoto('image/png', 12);
+        return store.attachPhoto(asset.id, user.key, photoKey, { assertedBy: credential(4) });
+      }],
+      ['photo delete', async () => {
+        const current = (await store.getAsset(asset.id, user.key))!;
+        return store.beginPhotoDeletion(asset.id, user.key, current.photos[0].key, { assertedBy: credential(5) });
+      }],
+    ];
+    let previous = asset.provenance!.acceptedAt;
+    for (const [index, [label, run]] of paths.entries()) {
+      await run();
+      const now = (await store.getAsset(asset.id, user.key))!.provenance!;
+      assert.deepEqual(now.assertedBy, credential(index + 1), label);
+      assert.deepEqual(now.acceptedBy, { ...user, status: 'active' }, label);
+      assert.ok(Date.parse(now.acceptedAt) >= Date.parse(previous), label);
+      // Only the update stated a basis, and it is carried verbatim rather than
+      // parsed; every later change replaces the whole record instead of
+      // inheriting it.
+      assert.equal(now.basis, index === 0 ? 'depot:assets:42' : null, label);
+      // The credential is flattened onto the Asset, so a revoked or renamed
+      // token can never make historical provenance unreadable.
+      const row = await stored(asset.id);
+      assert.equal(row.assertedById, credential(index + 1).id, label);
+      assert.equal(row.assertedByLabel, credential(index + 1).label, label);
+      previous = now.acceptedAt;
+    }
+
+    // Allocation runs the shared attachment path, so it is stamped too, while
+    // the issuance ledger keeps its own independent allocation provenance.
+    const allocGroup = await store.createReportingGroup('Provenance allocation', user.key);
+    const namespace = await store.configureGiaiNamespace(user.key, allocGroup.key, { gcp: '0778899' });
+    const allocatable = await store.reportAsset({ name: 'Allocated under provenance' },
+      { actorKey: user.key, groupKey: allocGroup.key });
+    const allocated = await store.allocateGiai(allocatable.id, user.key, namespace.key, { assertedBy: credential(6) });
+    assert.deepEqual(allocated.provenance!.assertedBy, credential(6));
+    assert.deepEqual(allocated.allocation!.allocatedBy, { ...user, status: 'active' });
+
+    // The asserting credential never nominates the accepting authority.
+    const claimed = await store.updateAsset(asset.id, { name: 'Provenance bench 3' }, user.key,
+      { assertedBy: { id: outsider.key, label: 'Impostor' } });
+    assert.equal(claimed.provenance!.acceptedBy.key, user.key);
+    assert.equal((await stored(asset.id)).acceptedBy, user.key);
+
+    // Origin is validated like any other input and cannot carry structure.
+    for (const origin of [
+      { assertedBy: { id: '', label: 'x' } }, { assertedBy: { id: 'x', label: '   ' } },
+      { assertedBy: { id: 'x\u0000y', label: 'x' } }, { assertedBy: { id: 'x', label: 'a'.repeat(81) } },
+      { assertedBy: 'importer' }, { assertedBy: { id: 'x' } }, { assertedBy: { id: 'x', label: 'y', extra: 1 } },
+      { unsupported: 'x' },
+    ]) {
+      await assert.rejects(store.updateAsset(asset.id, { name: 'Rejected' }, user.key, origin as never),
+        ValidationError, JSON.stringify(origin));
+    }
+
+    // `basis` is a bounded ASCII reference: it identifies the basis and is
+    // never the basis itself, which is what keeps it safe to publish.
+    for (const basis of ['depot:assets:123', 'erp:equipment:4567', 'a', 'A1/b_c.d-e', 'x'.repeat(128)]) {
+      const ok = await store.updateAsset(asset.id, { name: 'Provenance bench 3' }, user.key, { basis });
+      assert.equal(ok.provenance!.basis, basis, basis);
+    }
+    for (const basis of ['has space', 'ends\tcontrol', '日本語', '_leading', '-leading', '.leading',
+      'x'.repeat(129), 'semi;colon', 'query?x', 'at@sign', 7, {}]) {
+      await assert.rejects(store.updateAsset(asset.id, { name: 'Rejected' }, user.key, { basis } as never),
+        ValidationError, JSON.stringify(basis));
+    }
+    assert.equal((await store.getAsset(asset.id, user.key))!.name, 'Provenance bench 3');
+  });
+
+  await t.test('change provenance is evidence and never authority', async () => {
+    const subject = await store.reportAsset({ name: 'Not the outsider’s Asset' }, context);
+    // Name the outsider in every provenance field at once, including as the
+    // accepting authority, which no ordinary write path would ever allow.
+    await query(`MATCH (a:Asset {id: $id})
+      SET a.changeAcceptedBy = $outsider, a.changeAssertedBy = $outsider, a.changeBasis = $outsider`,
+    { id: subject.id, outsider: outsider.key });
+    // Appearing in provenance grants neither readability nor editability.
+    assert.equal(await store.getAsset(subject.id, outsider.key), null);
+    await assert.rejects(store.updateAsset(subject.id, { name: 'Taken over' }, outsider.key), ReferenceError);
+    await assert.rejects(store.attachIdentifier(subject.id, outsider.key, gtin), ReferenceError);
+    await assert.rejects(store.assertCanEdit(subject.id, outsider.key), ReferenceError);
+    // Nor does it widen what the outsider can browse or resolve.
+    const page = await store.findAssets(outsider.key,
+      { q: '', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 30, after: null });
+    assert.equal(page.assets.some((found) => found.id === subject.id), false);
+
+    // A member still reads it, and the recorded acceptor renders as an
+    // attribution rather than as a raw actor key or a live account.
+    const readable = (await store.getAsset(subject.id, user.key))!;
+    assert.deepEqual(readable.provenance!.acceptedBy, { ...outsider, status: 'active' });
+    assert.deepEqual(Object.keys(readable.provenance!.acceptedBy).sort(), ['key', 'name', 'status']);
+
+    // Deleting the accepting account degrades the attribution exactly as
+    // reportedBy does. A dedicated account is tombstoned so the shared outsider
+    // stays usable by later subtests.
+    const leaving = await store.createUser('Departing acceptor');
+    await query('MATCH (a:Asset {id: $id}) SET a.changeAcceptedBy = $key',
+      { id: subject.id, key: leaving.key });
+    await query(`MATCH (u:User {key: $key})
+      SET u.provenanceName = u.name, u.accountDeletedAt = datetime() REMOVE u.name`, { key: leaving.key });
+    const afterDeletion = (await store.getAsset(subject.id, user.key))!;
+    assert.deepEqual(afterDeletion.provenance!.acceptedBy,
+      { key: leaving.key, name: 'Departing acceptor', status: 'deleted' });
+    for (const field of ['email', 'role', 'password', 'accountDeletedAt', 'provenanceName']) {
+      assert.equal(field in afterDeletion.provenance!.acceptedBy, false, field);
+    }
+
+    // An Asset written before Kannabi recorded this has no provenance at all,
+    // rather than provenance attributed to whoever happens to be nearby.
+    const legacyId = newAssetId();
+    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey})
+      CREATE (a:Asset {id: $id, name: 'Unstamped legacy Asset', reportedAt: datetime(), isPublic: false})
+      CREATE (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)`,
+    { id: legacyId, userKey: user.key, groupKey: group.key });
+    assert.equal((await store.getAsset(legacyId, user.key))!.provenance, null);
   });
 
   await t.test('a GIAI namespace belongs to one Group and its prefix is immutable', async () => {

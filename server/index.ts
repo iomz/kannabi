@@ -7,6 +7,7 @@ import neo4j from 'neo4j-driver';
 import { createApp } from './app.js';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { ApiTokenService } from './api-token.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
@@ -49,7 +50,7 @@ app.use('/api/*', async (c, next) => {
   if (address) c.req.raw.headers.set('x-kannabi-client-ip', address);
   await next();
 });
-app.route('/api', createInventoryApi(store, auth, applicationOrigin, media, mail));
+app.route('/api', createInventoryApi(store, auth, applicationOrigin, media, mail, new ApiTokenService(auth, store)));
 
 // Unknown API paths must never fall through to the SPA.
 app.all('/api', (c) => c.json({ error: 'Not found' }, 404));

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { displayDate, displayInstant, validateSettings } from './settings.js';
+import { defaultToastSeconds, displayDate, displayInstant, maxToastSeconds, minToastSeconds,
+  validateSettings } from './settings.js';
 import { maxPhotoBytes, photoBytes } from './media.js';
 import { orderPhotos } from './identity-store.js';
 
@@ -11,7 +12,30 @@ test('display timezone changes presentation without changing the absolute instan
   assert.match(displayInstant('2026-07-01T12:00:00Z', 'America/New_York'), /08:00/);
   assert.equal(instant, '2026-01-01T23:30:00.000Z');
   assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast' }),
-    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast' });
+    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast', apiTokenMaxLifetimeDays: null,
+      toastSeconds: defaultToastSeconds });
+  // The token-lifetime ceiling is optional policy: absent and null both mean
+  // no ceiling, and a ceiling must be a whole number of days.
+  assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+    apiTokenMaxLifetimeDays: 30 }),
+  { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: 30,
+    toastSeconds: defaultToastSeconds });
+  for (const apiTokenMaxLifetimeDays of [0, -1, 1.5, '30', 36501]) {
+    assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', apiTokenMaxLifetimeDays }), String(apiTokenMaxLifetimeDays));
+  }
+  // How long a toast stays is deployment policy with a readable range: too
+  // short to read, or long enough that it has stopped being transient, are
+  // both refused. An absent value is an instance older than the setting and
+  // means the shipped lifetime rather than an error.
+  assert.equal(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+    toastSeconds: 12 }).toastSeconds, 12);
+  assert.equal(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+    toastSeconds: null }).toastSeconds, defaultToastSeconds);
+  for (const toastSeconds of [0, -1, 2.5, '5', minToastSeconds - 1, maxToastSeconds + 1]) {
+    assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', toastSeconds }), String(toastSeconds));
+  }
   assert.throws(() => validateSettings({ requirePhoto: true, displayTimezone: 'not-a-zone', themeId: 'default' }));
   assert.throws(() => validateSettings({ requirePhoto: 'true', displayTimezone: 'UTC', themeId: 'default' }));
   assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }));

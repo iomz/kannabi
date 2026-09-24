@@ -29,7 +29,7 @@ export type AssetDirection = (typeof assetDirections)[number];
  *
  * Deliberately absent, with reasons recorded in the Slice 3 report: owner (the
  * API can neither create nor list Owners, so the filter could not be presented
- * truthfully) and reporter (member listing is administrator-only, and
+ * truthfully) and reporter (User profile reachability is separately bounded, and
  * `scope=mine` already serves the workflow the filter would cover).
  *
  * Visibility is absent for a different reason. The scope tabs — All, Mine,
