@@ -15,7 +15,8 @@ import { MediaService } from './media.js';
 import { S3Storage } from './storage.js';
 import { assetPageRequest } from './asset-page.js';
 import { runDemo } from '../scripts/demo/run.js';
-import { demoAccounts, demoAssets, demoPassword, evaluatorScopes } from '../scripts/demo/fixtures.js';
+import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoPassword,
+  demoScopes } from '../scripts/demo/fixtures.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -72,7 +73,6 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     const media = new MediaService(store, new S3Storage(s3, bucket));
     const app = new Hono().route('/api', createInventoryApi(store, auth, env.APP_URL, media));
     const users: string[] = [];
-    const expected = [evaluatorScopes, { all: 88, mine: 56, group: 72, public: 34 }, { all: 50, mine: 20, group: 20, public: 34 }];
     for (const [index, account] of demoAccounts.entries()) {
       const response = await app.request(env.APP_URL + '/api/auth/sign-in/email', { method: 'POST',
         headers: { Origin: env.APP_URL, 'Content-Type': 'application/json', 'x-kannabi-client-ip': `192.0.2.${index + 1}` },
@@ -81,11 +81,32 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
       const cookie = response.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
       const me = await (await app.request(env.APP_URL + '/api/me', { headers: { Cookie: cookie } })).json();
       users.push(me.user.key);
-      assert.equal(me.isAdmin, index === 0);
+      assert.equal(me.isAdmin, (demoAdministrators as readonly number[]).includes(index));
+      const expected = demoScopes(index);
       for (const scope of ['all', 'mine', 'group', 'public'] as const) {
         const page = await store.findAssets(me.user.key, assetPageRequest({ scope }));
-        assert.deepEqual(page.scopes, expected[index]);
-        assert.equal(page.matching, expected[index][scope]);
+        assert.deepEqual(page.scopes, expected);
+        assert.equal(page.matching, expected[scope]);
+      }
+    }
+
+    // What the directory answers is held against an expectation derived from
+    // the fixture rather than from the query, so the two have to agree about
+    // every account without either being able to explain the other away.
+    for (const [index, account] of demoAccounts.entries()) {
+      const seen = await store.listUsers(users[index]);
+      assert.deepEqual(seen.map((person) => users.indexOf(person.key)).sort((a, b) => a - b),
+        demoDiscoverable(index), account.email);
+      // A page exists for everybody the directory lists, and for nobody else.
+      for (const [other] of demoAccounts.entries()) {
+        const reachable = demoDiscoverable(index).includes(other);
+        assert.equal(await store.userProfile(users[index], users[other]) !== null, reachable,
+          `${account.email} -> ${demoAccounts[other].email}`);
+      }
+      // Discovery never produces an address, however the person was reached.
+      for (const person of seen) {
+        assert.ok(!Object.values(person).some((value) =>
+          typeof value === 'string' && value.includes('@')), 'no address in the directory');
       }
     }
     let cursor: string | null = null;

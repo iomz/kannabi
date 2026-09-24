@@ -24,6 +24,8 @@ export function activeDestination(pathname: string): string | null {
   if (pathname === '/lookup') return '/lookup';
   if (pathname === '/' || pathname.startsWith('/asset/') || pathname.startsWith('/assets/')) return '/';
   if (pathname.startsWith('/groups')) return '/groups';
+  // A person's page belongs to the directory it was opened from.
+  if (pathname === '/users' || pathname.startsWith('/users/')) return '/users';
   if (pathname.startsWith('/admin/members')) return '/admin/members';
   if (pathname.startsWith('/admin/settings')) return '/admin/settings';
   return null;
@@ -49,6 +51,9 @@ const inventory: { label: string; icon: IconName; to: string; items: readonly De
 const workspace: readonly Destination[] = [
   { to: '/lookup', icon: 'search', label: 'Lookup' },
   { to: '/groups', icon: 'groups', label: 'Groups' },
+  // Workspace discovery of people, which is a different thing from
+  // Administration's member management and stays separate from it.
+  { to: '/users', icon: 'user', label: 'Users' },
 ];
 
 const administration: readonly Destination[] = [

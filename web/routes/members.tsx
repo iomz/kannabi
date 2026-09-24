@@ -1,4 +1,4 @@
-import { Form, redirect, useNavigation } from 'react-router';
+import { Form, Link, redirect, useNavigation } from 'react-router';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, unwrap } from '../api';
 import { DestructiveConfirmation } from '../destructive-confirmation';
@@ -121,6 +121,10 @@ function MemberDialog({ member, actorKey, actionData, onDismiss }: { member: Mem
       <DialogTitle>Edit {member.name}</DialogTitle>
       <DialogDescription>Each part of a member account is saved on its own.</DialogDescription>
     </DialogHeader>
+    {/* The workspace page for the same person. It is a link out of member
+        administration rather than part of it: nothing there is administrative,
+        and opening it grants nothing this dialog did not already have. */}
+    <Link to={`/users/${member.key}`} className="text-sm">View workspace profile →</Link>
     <Form method="post"><fieldset disabled={busy}><input type="hidden" name="intent" value="identity" /><input type="hidden" name="key" value={member.key} />
       <Field label="Name"><Input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" autoFocus /></Field>
       <Field label="Email" hint={self ? 'Change your own email from Profile.' : undefined}>

@@ -1,10 +1,51 @@
 export const demoPassword = 'Kannabi-demo-only-2026!';
+
+/** A cast chosen so the User directory's visibility rule can be read off the
+ * screen rather than taken on trust. Every name is invented.
+ *
+ * Between them they cover each way a person becomes discoverable and the ways
+ * they do not: somebody sharing one Group, somebody sharing two, somebody in
+ * no shared Group who is nonetheless known through a public Asset they
+ * reported, somebody in a Group of their own who is known to nobody, members
+ * who have reported nothing, a second administrator, and two accounts that
+ * turned Gravatar on.
+ */
 export const demoAccounts = [
   { name: 'Alex Demo', email: 'evaluator@demo.invalid' },
   { name: 'Morgan Demo', email: 'collaborator@demo.invalid' },
   { name: 'Robin Demo', email: 'outsider@demo.invalid' },
+  { name: 'Devon Demo', email: 'workshop@demo.invalid' },
+  { name: 'Kai Demo', email: 'studio@demo.invalid' },
+  { name: 'Noa Demo', email: 'store@demo.invalid' },
+  { name: 'Sam Demo', email: 'quiet@demo.invalid' },
+  { name: 'Rin Demo', email: 'fieldwork@demo.invalid' },
+  { name: 'Jules Demo', email: 'bench@demo.invalid' },
+  { name: 'Ash Demo', email: 'steward@demo.invalid' },
 ] as const;
-export const demoGroups = ['Demo Workshop', 'Shared Studio', 'Field Kits', 'Private Store'] as const;
+
+/** Administration is a system role and grants no Asset access; a second one
+ * exists so administrator behaviour is not confused with being account zero. */
+export const demoAdministrators = [0, 9] as const;
+
+/** Consent, not a setting somebody else chose for them. */
+export const demoGravatarAccounts = [3, 7] as const;
+
+export const demoGroups = ['Demo Workshop', 'Shared Studio', 'Field Kits', 'Private Store', 'Quiet Room'] as const;
+
+/** Who belongs to each Group, by account index. The first listed creates it.
+ *
+ * Kai is in both of Morgan's Groups, so sharing several is distinguishable
+ * from sharing one. Sam is alone in a Group nobody else joins, which is what
+ * makes them undiscoverable to everybody but an administrator. Devon, Jules
+ * and Ash share a Group and have reported nothing, so membership alone is
+ * visibly enough. */
+export const demoGroupMembers: readonly (readonly number[])[] = [
+  [0, 3, 8, 9],
+  [1, 0, 4],
+  [0, 1, 4, 7],
+  [2, 5],
+  [6],
+];
 export const demoOwners = ['Northstar Demo Cooperative', 'Meadow Demo Rentals', 'Workshop Equipment Pool'] as const;
 /** Each product names the bundled illustration that suits it, so searching a
  * category such as `camera` returns Assets whose photos match their names.
@@ -85,7 +126,15 @@ export function demoAssets() {
                   ? [{ scheme: 'grai', assetType: palletType, serial }]
                   : [{ scheme: 'grai', assetType: crateType }];
     const group = index < 48 ? 0 : index < 88 ? 1 : index < 120 ? 2 : 3;
-    const reporter = group === 0 ? 0 : group === 1 ? 1 : group === 2 ? (index % 2) : 2;
+    // A reporter is always a member of the Group they report into. Kai and Noa
+    // take a share of Shared Studio and Private Store so that reporting, and
+    // therefore being known through one's work, is spread beyond the first
+    // three accounts. Demo Workshop stays entirely Alex's, which keeps the
+    // evaluator's own counts the ones the demo has always printed.
+    const reporter = group === 0 ? 0
+      : group === 1 ? (index % 3 === 0 ? 4 : 1)
+        : group === 2 ? (index % 2)
+          : (index % 2 === 0 ? 5 : 2);
     return {
       name: `${products[index % products.length].name} · ${places[Math.floor(index / products.length) % places.length]} ${serial.slice(-3)}`,
       identifiers, pattern, group, reporter, reportedAt: demoReportedAt(index),
@@ -97,6 +146,39 @@ export function demoAssets() {
   });
 }
 export const evaluatorScopes = { all: 124, mine: 64, group: 120, public: 34 };
+
+/** What one account can see, derived from the same fixture the seed plants, so
+ * a change to memberships or reporters cannot leave an expectation stale. */
+export function demoScopes(account: number) {
+  const groups = demoGroupMembers.flatMap((members, group) => (members.includes(account) ? [group] : []));
+  const assets = demoAssets();
+  const readable = assets.filter((asset) => asset.isPublic || groups.includes(asset.group));
+  return {
+    all: readable.length,
+    mine: readable.filter((asset) => asset.reporter === account).length,
+    group: assets.filter((asset) => groups.includes(asset.group)).length,
+    public: assets.filter((asset) => asset.isPublic).length,
+  };
+}
+
+/** Who each account may know exists, by the one discoverability rule: yourself,
+ * anybody for an administrator, anybody sharing a Group, and anybody whose
+ * reported Asset you can read. Stated here independently of the Cypher that
+ * implements it, so the two can be held against each other. */
+export function demoDiscoverable(viewer: number): number[] {
+  if ((demoAdministrators as readonly number[]).includes(viewer)) {
+    return demoAccounts.map((_, index) => index);
+  }
+  const groups = demoGroupMembers.flatMap((members, group) => (members.includes(viewer) ? [group] : []));
+  const reporters = new Set(demoAssets()
+    .filter((asset) => asset.isPublic || groups.includes(asset.group))
+    .map((asset) => asset.reporter));
+  const shares = new Set(demoGroupMembers
+    .filter((members) => members.includes(viewer))
+    .flatMap((members) => [...members]));
+  return demoAccounts.flatMap((_, index) =>
+    (index === viewer || shares.has(index) || reporters.has(index) ? [index] : []));
+}
 
 /** GIAI namespaces, arranged so every allocation UI state is reachable:
  * Demo Workshop manages two, Shared Studio one, and the rest none. */

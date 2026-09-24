@@ -36,7 +36,7 @@ test('the brand block holds the brand and nothing that competes with it', () => 
 
 test('Inventory is a category that opens its default surface', () => {
   const markup = render({ user, isAdmin: true, avatarHash: null, busy: false });
-  for (const label of ['Inventory', 'Assets', 'Lookup', 'Groups', 'Members', 'Instance settings']) {
+  for (const label of ['Inventory', 'Assets', 'Lookup', 'Groups', 'Users', 'Members', 'Instance settings']) {
     assert.match(markup, new RegExp(`>${label}<`), `${label} is present`);
   }
   // The category is not a destination: there is nothing at Inventory, only
@@ -83,6 +83,10 @@ test('Asset detail and reporting belong to the inventory, not to Lookup', () => 
   assert.equal(activeDestination('/assets/report'), '/');
   assert.equal(activeDestination('/lookup'), '/lookup');
   assert.equal(activeDestination('/groups'), '/groups');
+  // A person's page belongs to the directory it was opened from, and that
+  // directory is workspace discovery rather than member administration.
+  assert.equal(activeDestination('/users'), '/users');
+  assert.equal(activeDestination('/users/u-1'), '/users');
   assert.equal(activeDestination('/admin/members'), '/admin/members');
   assert.equal(activeDestination('/settings'), null);
 });

@@ -11,6 +11,7 @@ export default [
   route('lookup', 'routes/lookup.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),
+  route('users', 'routes/users.tsx'),
   route('users/:key', 'routes/user.tsx'),
   route('settings', 'routes/settings-layout.tsx', [
     index('routes/settings-profile.tsx'),

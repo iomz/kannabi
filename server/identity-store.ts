@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
-import type { Driver, ManagedTransaction, Session } from 'neo4j-driver';
+import type { Driver, ManagedTransaction, Record as Neo4jRecord, Session } from 'neo4j-driver';
 import neo4j, { int } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
@@ -438,6 +438,42 @@ const collaboration = `EXISTS {
  * collaboration branch is simply unsatisfied there.
  */
 const readableAsset = `($systemRead OR a.isPublic = true OR ${collaboration})`;
+
+/** One Asset, as this viewer can read it. The `user` audience of `readableAsset`
+ * written on its own, because User discovery always has a signed-in viewer and
+ * never the system-wide audience. */
+const readableByViewer = `(a.isPublic = true OR ${collaboration})`;
+
+/** Who a viewer may know exists, as Cypher. Requires `u` in scope, `$actorKey`,
+ * and `$actorIsAdministrator`.
+ *
+ * One rule, used by the directory and by a User's own page, so the two can
+ * never answer differently about the same person. Four ways to be reachable:
+ *
+ *  - yourself;
+ *  - somebody you share a Group with, because Kannabi has already put you in a
+ *    room together;
+ *  - somebody whose work you can already read, since their name is on it;
+ *  - anybody, to an administrator, who is already shown every account by the
+ *    member list.
+ *
+ * This is discoverability and nothing else. Knowing that somebody exists
+ * reaches none of their Assets, says nothing about which Groups they are in
+ * beyond the one already shared, and never produces their address. A
+ * tombstoned account is not a person to visit: it keeps only the attribution a
+ * record needs, and is unreachable here.
+ */
+const discoverableUser = `(u.accountDeletedAt IS NULL AND u.id IS NOT NULL AND (
+  u.key = $actorKey
+  OR $actorIsAdministrator
+  OR EXISTS { MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)<-[:MEMBER_OF]-(u) }
+  OR EXISTS { MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer} }
+))`;
+
+/** The shape every User surface returns, counted through the viewer's own
+ * readability rather than the target's. */
+const discoveredUser = `u.key AS key, u.name AS name, coalesce(u.gravatar, false) AS gravatar,
+  u.email AS email, count(a) AS reportedAssets`;
 const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
@@ -993,34 +1029,54 @@ export class IdentityStore {
    *
    * Email and Group membership are deliberately absent.
    */
-  async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
-    const audience = audienceParameters(requiredText(actorKey, 'actorKey'));
-    const result = await this.write((tx) => tx.run(`
-      MATCH (u:User {key: $targetKey}) WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL
-      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableAsset}
-      RETURN u.key AS key, u.name AS name, coalesce(u.gravatar, false) AS gravatar,
-        u.email AS email, count(a) AS reportedAssets`,
-    { targetKey: requiredText(targetKey, 'user key'), ...audience }));
-    // A tombstoned account is not a person to visit. It keeps only the
-    // attribution a record needs, and stays undiscoverable here.
-    if (!result.records.length) return null;
-    const row = result.records[0];
-    const reportedAssets = row.get('reportedAssets').toNumber();
-    // Somebody already reachable: yourself, a person whose work you can
-    // already see, or — for an administrator — anybody, which the member list
-    // already shows them. None of this reaches an Asset.
-    const entitled = actorKey === targetKey || reportedAssets > 0
-      || await this.isAdministrator(actorKey);
-    if (!entitled) return null;
+  /** The parameters `discoverableUser` needs, with the one fact that cannot be
+   * asked of the graph in the same breath. */
+  private async discoveryParameters(actorKey: string) {
+    return {
+      actorKey: requiredText(actorKey, 'actorKey'),
+      actorIsAdministrator: await this.isAdministrator(actorKey),
+    };
+  }
+
+  private static discovered(row: Neo4jRecord, actorKey: string): UserProfile {
     const gravatar = row.get('gravatar') === true;
     const email = row.get('email');
     return {
       key: row.get('key'),
       name: row.get('name'),
+      // Derived per request from consent, never stored and never returned as
+      // an address: the hash is one-way and exists only for a User who asked
+      // for Gravatar.
       avatarHash: gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null,
-      reportedAssets,
-      self: actorKey === targetKey,
+      reportedAssets: row.get('reportedAssets').toNumber(),
+      self: row.get('key') === actorKey,
     };
+  }
+
+  /** Everybody this viewer may know exists, by name.
+   *
+   * Deliberately the same rule and the same projection as a single User's
+   * page, so a person who appears here can always be opened and a person who
+   * cannot be opened never appears.
+   */
+  async listUsers(actorKey: string): Promise<UserProfile[]> {
+    const parameters = await this.discoveryParameters(actorKey);
+    const result = await this.write((tx) => tx.run(`
+      MATCH (u:User) WHERE ${discoverableUser}
+      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      RETURN ${discoveredUser} ORDER BY toLower(u.name), u.key`, parameters));
+    return result.records.map((row) => IdentityStore.discovered(row, parameters.actorKey));
+  }
+
+  async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
+    const parameters = await this.discoveryParameters(actorKey);
+    const result = await this.write((tx) => tx.run(`
+      MATCH (u:User {key: $targetKey}) WHERE ${discoverableUser}
+      OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
+      RETURN ${discoveredUser}`,
+    { ...parameters, targetKey: requiredText(targetKey, 'user key') }));
+    if (!result.records.length) return null;
+    return IdentityStore.discovered(result.records[0], parameters.actorKey);
   }
 
   /** Records whether this User wants Gravatar used for their own avatar.

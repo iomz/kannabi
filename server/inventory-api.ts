@@ -310,6 +310,11 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeOwn(actor(c.get('user')), c.req.param('id'));
       return c.json({ revoked: true });
     })
+    // The people this viewer may know exist. The same rule and the same
+    // projection as a single User's page, so the list and the page can never
+    // disagree about somebody. It grants no Asset access and returns no
+    // address.
+    .get('/users', async (c) => c.json({ users: await store.listUsers(actor(c.get('user'))) }))
     // A User page, for somebody the viewer can already see. It grants no Asset
     // access: the count it shows is counted through the viewer's own
     // readability, and an unreachable person is absent rather than refused.

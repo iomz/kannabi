@@ -141,7 +141,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, settings, auth
       <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
       <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
       <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
-      <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy} /></dd>
+      <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy} link={authenticated} /></dd>
       <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
     </dl><AssetUri uri={assetUri} /></Panel>
     <Panel><h2>External identifiers</h2>
