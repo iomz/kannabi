@@ -139,7 +139,10 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request(path)).status, 404); // administrator is not an Asset ACL
     await assert.rejects(media.add(assetId, user.key, photo()));
     assert.deepEqual((await store.getAsset(assetId, member.key))!.reportedBy, asset.reportedBy);
-    await store.addGroupMember(member.key, group.key, user.key);
+    // Membership alone cannot invite the departed reporter back; the reporter
+    // still controls membership without gaining Asset access by that fact.
+    await assert.rejects(store.addGroupMember(member.key, group.key, user.key));
+    await store.addGroupMember(user.key, group.key, user.key);
   });
 
   await t.test('authorized deletion removes public photo metadata and object while other actors are rejected', async () => {

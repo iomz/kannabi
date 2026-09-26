@@ -695,7 +695,8 @@ export class IdentityStore {
     const group = { key: randomUUID(), name: requiredText(name, 'name') };
     return this.write(async (tx) => {
       const result = await tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.accountDeletedAt IS NULL
-        CREATE (g:Group $group), (u)-[:MEMBER_OF]->(g) RETURN g.key`, { actorKey, group });
+        CREATE (g:Group $group), (u)-[:MEMBER_OF]->(g), (u)-[:CONTROLS]->(g)
+        RETURN g.key`, { actorKey, group });
       if (!result.records.length) throw new ReferenceError('User does not exist');
       return group;
     });
@@ -716,15 +717,65 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
+  /** Membership management is a control-plane operation, not a benefit of
+   * membership. A controller may have left the Group and have no Asset access. */
+  async listControlledGroups(actorKey: string): Promise<Entity[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.executeRead((tx) => tx.run(`
+        MATCH (u:User {key: $actorKey})-[:CONTROLS]->(g:Group)
+        WHERE u.accountDeletedAt IS NULL
+        RETURN g { .key, .name } AS entity ORDER BY entity.name`, { actorKey }));
+      return result.records.map((row) => row.get('entity') as Entity);
+    } finally { await session.close(); }
+  }
+
+  /** Recovery reads Group identity only, never an Asset or namespace ledger.
+   * The operator sees stranded Groups without acquiring membership. */
+  async listUncontrolledGroups(actorKey: string): Promise<Entity[]> {
+    const session = this.driver.session();
+    try {
+      return await session.executeRead(async (tx) => {
+        const allowed = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
+          WHERE admin.id IS NOT NULL AND admin.accountDeletedAt IS NULL
+          RETURN admin.key`, { actorKey });
+        if (!allowed.records.length) throw new AdministrationError('Administrator access required');
+        const result = await tx.run(`MATCH (g:Group)
+          WHERE NOT EXISTS { MATCH (:User)-[:CONTROLS]->(g) }
+          RETURN g { .key, .name } AS group ORDER BY group.name`);
+        return result.records.map((row) => row.get('group') as Entity);
+      });
+    } finally { await session.close(); }
+  }
+
+  /** Restore control of an uncontrolled Group; never add a membership.
+   * Lock the Group before checking its controllers so two recoveries cannot
+   * independently conclude it is stranded and both appoint one. */
+  async recoverGroupControl(actorKey: string, groupKey: string, userKey: string): Promise<void> {
+    await this.write(async (tx) => {
+      const authorized = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
+        WHERE admin.id IS NOT NULL AND admin.accountDeletedAt IS NULL
+        MATCH (g:Group {key: $groupKey}) SET g.lock = true RETURN g.key`,
+      { actorKey, groupKey });
+      if (!authorized.records.length) throw new AdministrationError('Administrator access or Group not found');
+      const recovered = await tx.run(`MATCH (g:Group {key: $groupKey}), (u:User {key: $userKey})
+        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
+          AND NOT EXISTS { MATCH (:User)-[:CONTROLS]->(g) }
+        CREATE (u)-[:CONTROLS]->(g) RETURN g.key`, { groupKey, userKey });
+      if (!recovered.records.length) throw new ReferenceError('Uncontrolled Group or active User not found');
+    });
+  }
+
   async addGroupMember(actorKey: string, groupKey: string, userKey: string): Promise<boolean> {
     return this.write(async (tx) => {
       const result = await tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
-        MATCH (u:User {key: $userKey}) WHERE u.accountDeletedAt IS NULL
+        MATCH (controller:User {key: $actorKey})-[:CONTROLS]->(g:Group {key: $groupKey})
+        MATCH (u:User {key: $userKey})
+        WHERE controller.accountDeletedAt IS NULL AND u.accountDeletedAt IS NULL
         OPTIONAL MATCH (u)-[existing:MEMBER_OF]->(g)
         WITH u, g, existing IS NOT NULL AS alreadyMember
         MERGE (u)-[:MEMBER_OF]->(g) RETURN alreadyMember`, { actorKey, groupKey, userKey });
-      if (!result.records.length) throw new ReferenceError('Group access or target User not found');
+      if (!result.records.length) throw new ReferenceError('Group control or target User not found');
       return result.records[0].get('alreadyMember') !== true;
     });
   }
@@ -1163,6 +1214,7 @@ export class IdentityStore {
         DETACH DELETE s, a`, { targetKey });
       await tx.run(`MATCH (v:AuthVerification) WHERE v.value = $userId DETACH DELETE v`, { userId });
       await tx.run(`MATCH (u:User {key: $targetKey})-[m:MEMBER_OF]->(:Group) DELETE m`, { targetKey });
+      await tx.run(`MATCH (u:User {key: $targetKey})-[control:CONTROLS]->(:Group) DELETE control`, { targetKey });
       await tx.run(`MATCH (u:User {key: $targetKey})
         SET u.provenanceName = u.name, u.accountDeletedAt = $deletedAt
         REMOVE u.id, u.name, u.email, u.emailVerified, u.image, u.createdAt, u.updatedAt, u.appearance, u.role,
