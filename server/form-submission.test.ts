@@ -167,7 +167,8 @@ test('generic identifier form explicitly records existing external identifiers o
     await settle(() => select.dispatchEvent(new Event('change', { bubbles: true })));
     assert.match(view.text(), /Existing GIAI \(complete AI 8004 value\)/);
     assert.match(view.text(), /already assigned by an external authority, including its company prefix/);
-    assert.match(view.text(), /Kannabi does not issue or verify it/);
+    assert.match(view.text(), /Kannabi validates GS1 syntax/);
+    assert.match(view.text(), /does not verify who assigned it or who controls its prefix/);
   } finally { view.stop(); }
 });
 

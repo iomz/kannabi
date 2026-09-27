@@ -77,6 +77,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         // Blank is the unconfigured state: no ceiling, so a token may be
         // created with no expiry. It is not a number Kannabi chose.
         apiTokenMaxLifetimeDays: ceiling === '' ? null : Number(ceiling),
+        toastSeconds: Number(data.get('toastSeconds')),
         showAssetId: data.get('showAssetId') === 'on',
         showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
       } }));

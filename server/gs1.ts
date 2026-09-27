@@ -349,7 +349,7 @@ export const schemeInputs: Readonly<Record<IdentifierScheme, readonly SchemeInpu
       hint: 'Optional. Without a serial the GRAI identifies the asset type, not this Asset.' },
   ],
   giai: [{ name: 'assetReference', label: 'Existing GIAI (complete AI 8004 value)', required: true, maxLength: 30,
-    hint: 'Enter the complete value already assigned by an external authority, including its company prefix. This records it; Kannabi does not issue or verify it.' }],
+    hint: 'Enter the complete value already assigned by an external authority, including its company prefix. Kannabi validates GS1 syntax, but does not verify who assigned it or who controls its prefix.' }],
 };
 export const schemeLabels: Readonly<Record<IdentifierScheme, string>> = {
   gtin: 'GTIN', sgtin: 'SGTIN', grai: 'GRAI', giai: 'GIAI',

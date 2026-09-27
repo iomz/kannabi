@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import Administration from '../web/routes/settings.js';
+import Administration, { clientAction as adminSettingsAction } from '../web/routes/settings.js';
 import { mount, withTheme } from './dom-render.js';
 import { defaultToastSeconds, validateSettings } from './settings.js';
 
@@ -34,4 +34,30 @@ test('instance presentation settings default hidden and render as independent ch
     assert.ok(view.text().includes('The Asset URI remains available independently.'));
     assert.equal(settings.toastSeconds, defaultToastSeconds);
   } finally { view.stop(); router.dispose(); }
+});
+
+test('saving either presentation setting preserves the configured toast lifetime', async () => {
+  const originalFetch = globalThis.fetch;
+  const sent: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    sent.push(body);
+    return new Response(JSON.stringify({ settings: { ...body, toastSeconds: 12 } }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const data = new FormData();
+  for (const [name, value] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
+    apiTokenMaxLifetimeDays: '', toastSeconds: '12', showAssetId: 'on', showIdentifierPolicyVersion: '' })) {
+    data.set(name, value);
+  }
+  try {
+    const result = await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
+      method: 'POST', body: data,
+    }) } as never);
+    assert.equal((result as { saved: boolean }).saved, true);
+    assert.equal(sent[0].toastSeconds, 12);
+    assert.equal(sent[0].showAssetId, true);
+    assert.equal(sent[0].showIdentifierPolicyVersion, false);
+  } finally { globalThis.fetch = originalFetch; }
 });
