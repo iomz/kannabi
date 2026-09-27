@@ -76,8 +76,8 @@ test('Asset Save changes submits both name and public visibility through its fet
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
-    assert.equal([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Asset ID'), false,
-      'native Asset ID hidden by default');
+    assert.equal([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'), false,
+      'Kannabi ID hidden by default');
     assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'),
       'Asset URI remains separately available');
     view.field('input[name="name"]')!.value = 'After';
@@ -110,7 +110,7 @@ test('Asset Save changes submits both name and public visibility through its fet
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
-test('enabling native Asset ID presentation shows UUID while retaining the Asset URI', () => {
+test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI', () => {
   const id = newAssetId();
   const router = createMemoryRouter([{ path: '/assets/:id', element: createElement(AssetPage, { loaderData: {
     asset: { id, name: 'Presentation check', isPublic: false, owner: null, groups: [],
@@ -122,7 +122,7 @@ test('enabling native Asset ID presentation shows UUID while retaining the Asset
   } } as never) }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
-    assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Asset ID'));
+    assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'));
     assert.ok([...document.querySelectorAll('dd code')].some((node) => node.textContent === id));
     assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'));
   } finally { view.stop(); router.dispose(); }

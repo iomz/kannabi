@@ -29,11 +29,21 @@ test('instance presentation settings default hidden and render as independent ch
     assert.ok(policy);
     assert.equal(assetId.checked, false);
     assert.equal(policy.checked, false);
-    assert.ok(view.text().includes('Show native Asset ID on Asset pages'));
+    assert.ok(view.text().includes('Show Kannabi ID on Asset pages'));
     assert.ok(view.text().includes('Show identifier policy version on Asset pages'));
     assert.ok(view.text().includes('The Asset URI remains available independently.'));
-    assert.ok([...document.querySelectorAll('h2')].some((heading) => heading.textContent === 'General'));
-    assert.ok([...document.querySelectorAll('h2')].some((heading) => heading.textContent === 'Theme'));
+    assert.ok(view.text().includes('Shows Kannabi’s stable UUIDv7 reference for the Asset.'));
+    const general = [...document.querySelectorAll('h2')].find((heading) => heading.textContent === 'General')
+      ?.closest('section');
+    assert.ok(general);
+    assert.deepEqual([...general.querySelectorAll('label')].map((label) => label.textContent?.trim()), [
+      'Require photo when reporting an Asset', 'Show Kannabi ID on Asset pages',
+      'Show identifier policy version on Asset pages', 'Display timezone',
+      'Longest API token lifetime (days)', 'How long a message stays on screen (seconds)',
+    ]);
+    const theme = [...document.querySelectorAll('h2')].filter((heading) => heading.textContent === 'Theme');
+    assert.equal(theme.length, 1, 'Theme has one visible card heading');
+    assert.ok(theme[0].closest('section')?.className.includes('max-w-3xl'));
     assert.equal(settings.toastSeconds, defaultToastSeconds);
   } finally { view.stop(); router.dispose(); }
 });

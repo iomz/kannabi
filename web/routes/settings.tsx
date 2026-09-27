@@ -310,16 +310,16 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           onCheckedChange={(requirePhoto) => update({ requirePhoto })}
           label="Require photo when reporting an Asset" />
         <p className={settingHelp}>Applies to new Asset reports.</p>
-        <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
-          onChange={(displayTimezone) => update({ displayTimezone })} />
-        <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
         <Switch name="showAssetId" checked={current.showAssetId} disabled={busy}
-          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show native Asset ID on Asset pages" />
-        <p className={settingHelp}>Controls only the UUIDv7 detail field. The Asset URI remains available independently.</p>
+          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show Kannabi ID on Asset pages" />
+        <p className={settingHelp}>Shows Kannabi’s stable UUIDv7 reference for the Asset. The Asset URI remains available independently.</p>
         <Switch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
           label="Show identifier policy version on Asset pages" />
         <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
+        <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
+          onChange={(displayTimezone) => update({ displayTimezone })} />
+        <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
         <Field label="Longest API token lifetime (days)">
           <Input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
             defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
@@ -343,7 +343,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           on a message holds it, however short this is.</p>
       </fieldset></fetcher.Form>
     </Panel>
-    <Panel><h2>Theme</h2>
+    <Panel className="max-w-3xl"><h2>Theme</h2>
       <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
         onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
     </Panel>

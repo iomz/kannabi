@@ -166,7 +166,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
     <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">
-      {settings.showAssetId && <><dt>Asset ID</dt><dd><code>{asset.id}</code></dd></>}
+      {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
       <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
       <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
       <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
