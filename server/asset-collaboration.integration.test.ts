@@ -204,6 +204,65 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     } finally { await tx.close(); await session.close(); }
   });
 
+  await t.test('duplicate stored edges cannot disguise the final collaborating Group', async () => {
+    const target = await store.reportAsset({ name: 'Duplicate edges' }, { actorKey: bridge.key, groupKey: a.key });
+    // There is no relationship uniqueness constraint. Historical/direct graph
+    // writers must not make deleting every edge from the sole Group possible.
+    await query('MATCH (g:Group {key: $key}), (a:Asset {id: $id}) CREATE (g)-[:CAN_COLLABORATE]->(a)',
+      { key: a.key, id: target.id });
+    await assert.rejects(store.setAssetCollaboration(target.id, bridge.key, a.key, false), LastCollaborationError);
+    assert.ok(await store.getAsset(target.id, bridge.key));
+  });
+
+  await t.test('grant waiting behind membership departure cannot reuse earlier authority', async () => {
+    const departing = await person('departing');
+    const source = await store.createReportingGroup('Departing source', departing.key);
+    const receiver = await store.createReportingGroup('Departing receiver', departing.key);
+    await store.leaveGroup(departing.key, receiver.key);
+    const target = await store.reportAsset({ name: 'Departure race' }, { actorKey: departing.key, groupKey: source.key });
+    const session = driver.session();
+    const tx = session.beginTransaction();
+    try {
+      await tx.run('MATCH (u:User {key: $key}) SET u.lock = true', { key: departing.key });
+      const grant = store.setAssetCollaboration(target.id, departing.key, receiver.key, true)
+        .then(() => null, (error: unknown) => error);
+      const deadline = Date.now() + 10000;
+      for (;;) {
+        const waiting = await query(`SHOW TRANSACTIONS YIELD currentQuery, status
+          WHERE currentQuery CONTAINS 'SET u.lock = true' AND status STARTS WITH 'Blocked'
+          RETURN count(*) AS waiting`);
+        if (waiting.records[0].get('waiting').toNumber() >= 1) break;
+        assert.ok(Date.now() < deadline, 'grant must wait for the User lock');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await tx.run('MATCH (:User {key: $key})-[r:MEMBER_OF]->() DELETE r', { key: departing.key });
+      await tx.commit();
+      assert.ok(await grant instanceof AccessError);
+      const linked = await query('MATCH (:Group {key: $key})-[r:CAN_COLLABORATE]->(:Asset {id: $id}) RETURN r',
+        { key: receiver.key, id: target.id });
+      assert.equal(linked.records.length, 0);
+    } finally { await tx.close(); await session.close(); }
+  });
+
+  await t.test('self-withdrawal succeeds without returning private content; retry loses authority', async () => {
+    const withdrawing = await person('withdrawing');
+    const source = await store.createReportingGroup('Withdrawal source', withdrawing.key);
+    const receiver = await store.createReportingGroup('Withdrawal receiver', withdrawing.key);
+    await store.addGroupMember(withdrawing.key, receiver.key, bOnly.key);
+    await store.leaveGroup(withdrawing.key, receiver.key);
+    const target = await store.reportAsset({ name: 'Self withdrawal' }, { actorKey: withdrawing.key, groupKey: source.key });
+    await store.setAssetCollaboration(target.id, withdrawing.key, receiver.key, true);
+    const endpoint = `/assets/${target.id}/collaboration/${source.key}`;
+    const removed = await withdrawing.call(endpoint, 'DELETE');
+    assert.equal(removed.status, 200);
+    assert.deepEqual(await removed.json(), { changed: true });
+    assert.equal((await withdrawing.call(`/assets/${target.id}`)).status, 404);
+    assert.equal((await withdrawing.call(endpoint, 'DELETE')).status, 404);
+    const retained = await store.getAsset(target.id, bOnly.key);
+    assert.equal(retained?.id, target.id);
+    assert.deepEqual(retained?.groups, [receiver]);
+  });
+
   await t.test('controller-only cannot act; empty Groups persist; initial Group can leave', async () => {
     await store.leaveGroup(bridge.key, a.key);
     await store.leaveGroup(bridge.key, b.key);

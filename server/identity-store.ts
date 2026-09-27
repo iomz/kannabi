@@ -889,11 +889,11 @@ export class IdentityStore {
           ${grant ? `AND EXISTS { MATCH (actor)-[:MEMBER_OF]->(source:Group)-[:CAN_COLLABORATE]->(a)
             MATCH (actor)-[:CONTROLS]->(source) }` : ''}
         RETURN EXISTS { MATCH (target)-[:CAN_COLLABORATE]->(a) } AS linked,
-          count { (:Group)-[:CAN_COLLABORATE]->(a) } AS edges`, params);
+          EXISTS { MATCH (other:Group)-[:CAN_COLLABORATE]->(a) WHERE other <> target } AS hasOther`, params);
       if (!allowed.records.length) throw new ReferenceError('Asset access or Group control not found');
       const row = allowed.records[0];
       if (row.get('linked') === grant) return { changed: false };
-      if (!grant && row.get('edges').toNumber() <= 1) {
+      if (!grant && !row.get('hasOther')) {
         throw new LastCollaborationError('An Asset must retain at least one collaboration Group');
       }
       await tx.run(`${assetMatch} MATCH (g:Group {key: $groupKey})
