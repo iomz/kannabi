@@ -298,6 +298,24 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await assert.rejects(store.detachIdentifier(prototype.id, user.key, 'missing-key'), ReferenceError);
   });
 
+  await t.test('external GIAI attachment is not issuance and does not require Kannabi namespace authority', async () => {
+    const externalAsset = await store.reportAsset({ name: 'External GIAI with no managed namespace' }, context);
+    // The three-character value is within AI 8004's accepted syntax. Kannabi
+    // lacks the GCP Length Table and must neither invent a prefix-boundary
+    // heuristic nor treat storing this assertion as its own issuance.
+    const attached = await store.attachIdentifier(externalAsset.id, user.key,
+      { scheme: 'giai', assetReference: '024' });
+    assert.deepEqual(canonicals(attached), ['(8004)024']);
+    assert.equal(attached.allocation, null);
+    assert.equal((await query('MATCH (l:GiaiAllocation {allocatedForAssetId: $id}) RETURN count(l) AS count',
+      { id: externalAsset.id })).records[0].get('count').toNumber(), 0);
+
+    // Issuance remains a different operation requiring a real namespace plus
+    // membership in that namespace's Group and collaboration on the referent.
+    await assert.rejects(store.allocateGiai(externalAsset.id, user.key, 'missing-namespace'), ReferenceError);
+    assert.equal((await store.getAsset(externalAsset.id, user.key))?.allocation, null);
+  });
+
   await t.test('class identifiers are shared while individual identifiers stay exclusive', async () => {
     const first = await store.reportAsset({ name: 'Laptop A', identifiers: [gtin, sgtin('lap-a')] }, context);
     const second = await store.reportAsset({ name: 'Laptop B', identifiers: [gtin, sgtin('lap-b')] }, context);

@@ -81,6 +81,7 @@ export function IdentifierForm({ busy, error, saved }: {
   const [scheme, setScheme] = useState<IdentifierScheme>('sgtin');
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="attach-identifier" />
+    <Hint>Record an identifier already assigned outside Kannabi. This form stores external identifiers; it never issues them. Use **Allocate GIAI** above to issue a GIAI under an eligible managed prefix.</Hint>
     <Field label="Identifier scheme">
       <NativeSelect name="scheme" value={scheme} onChange={(event) => setScheme(event.target.value as IdentifierScheme)}>
         {identifierSchemes.map((value) =>

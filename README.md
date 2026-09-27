@@ -147,7 +147,7 @@ It accepts GTIN (AI 01), SGTIN (AI 01 with AI 21), GRAI (AI 8003) and GIAI (AI 8
 | GTIN | `gtin` | `(01)00614141123452` | the trade item class |
 | SGTIN | `gtin`, `serial` | `(01)00614141123452(21)A1B2` | this Asset |
 | GRAI | `assetType`, optional `serial` | `(8003)00614141234561…` | the asset type, or this Asset when serialised |
-| GIAI | `assetReference` | `(8004)0614141ASSET001` | this Asset |
+| GIAI | complete existing `assetReference` | `(8004)0614141ASSET001` | this Asset |
 
 The identification level is derived from GS1 semantics and is never supplied or edited by a caller.
 An individual-level identifier identifies exactly one Asset; a class-level identifier describes any number of them.
@@ -163,7 +163,8 @@ They are deliberately not applied across an Asset's identifiers: the Syntax Dict
 An Asset carrying a manufacturer's SGTIN beside an owner-assigned GIAI is therefore valid.
 Across an Asset, Kannabi applies only its own two coherence rules: the same identifier may not appear twice, and every AI (01) an Asset carries must name the same trade item.
 
-A GIAI supplied by a user is stored as syntax only.
+A GIAI supplied through **Add identifier** is an externally assigned value and is stored as syntax only; that operation neither issues the value nor claims its origin.
+Enter the complete existing AI 8004 value, including its company prefix.
 Locating a GS1 Company Prefix requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary, and a stored GIAI is never evidence that Kannabi allocated it.
 
 ## GIAI allocation
@@ -172,7 +173,7 @@ A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GIAIs 
 Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
 
 On an Asset the actor can edit, the External identifiers panel offers **Allocate GIAI** for active namespaces managed by collaborating Groups the actor belongs to, a prefix chooser when several qualify, and a short explanation when none qualify.
-The user never constructs a GIAI, and reporting stays GS1-free.
+The **Allocate GIAI** operation constructs a value only from an eligible active namespace; a caller never supplies the reference for Kannabi issuance. The separate **Add identifier** operation can record a complete externally assigned GIAI. Reporting stays GS1-free.
 
 `server/gs1.ts` builds every issued value as the configured prefix followed by an unpadded decimal reference, and it is the only place that does so.
 Ordering is by the stored sequence, never by comparing GIAI strings.

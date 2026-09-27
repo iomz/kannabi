@@ -8,7 +8,7 @@ import AssetPage, { clientAction as assetAction } from '../web/routes/asset.js';
 import { mount, settle } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
 import { Button } from '../web/components/ui/button.js';
-import { AllocateGiai } from '../web/asset-identifiers.js';
+import { AllocateGiai, IdentifierForm } from '../web/asset-identifiers.js';
 import { InventoryControls, noFilters } from '../web/inventory-controls.js';
 import { assetPageRequest } from './asset-page.js';
 
@@ -90,6 +90,18 @@ test('Asset Save changes submits both name and public visibility through its fet
     await settle(() => view.button('Add identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'sgtin', gtin: '00614141123452', serial: 'fixture-1' } });
+    const scheme = view.field('select[name="scheme"]')!;
+    await settle(() => {
+      scheme.value = 'giai';
+      scheme.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.match(view.text(), /Existing GIAI \(complete AI 8004 value\)/);
+    view.field('input[name="assetReference"]')!.value = '024';
+    await settle(() => view.button('Add identifier')!.click());
+    assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
+      body: { scheme: 'giai', assetReference: '024' } });
+    assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
+      'generic external identifier form must never invoke Kannabi issuance');
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
@@ -119,6 +131,21 @@ test('GIAI empty state describes actor eligibility rather than a single Asset Gr
     assert.match(view.text(), /You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset/);
     assert.match(view.text(), /collaborating Group you belong to/);
     assert.equal(view.button('Allocate GIAI'), null);
+  } finally { view.stop(); }
+});
+
+test('generic identifier form explicitly records existing external identifiers only', async () => {
+  const view = mount(createElement(IdentifierForm, { busy: false, error: null, saved: null }));
+  try {
+    assert.match(view.text(), /Record an identifier already assigned outside Kannabi/);
+    assert.match(view.text(), /never issues them/);
+    assert.equal(view.field('input[name="assetReference"]'), null, 'SGTIN starts selected');
+    const select = view.field('select[name="scheme"]')!;
+    select.value = 'giai';
+    await settle(() => select.dispatchEvent(new Event('change', { bubbles: true })));
+    assert.match(view.text(), /Existing GIAI \(complete AI 8004 value\)/);
+    assert.match(view.text(), /already assigned externally, including its company prefix/);
+    assert.match(view.text(), /does not issue or verify a GIAI/);
   } finally { view.stop(); }
 });
 

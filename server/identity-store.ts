@@ -1382,9 +1382,9 @@ export class IdentityStore {
     });
   }
 
-  /** Attach an external identifier to an existing Asset. Group authorization is
-   * unchanged and identifier knowledge grants nothing: the caller must already
-   * be able to edit the Asset. Phase 3 allocation will attach through here. */
+  /** Attach an externally assigned identifier to an existing Asset. This path
+   * validates GS1 syntax and records no issuance claim; Kannabi issuance uses a
+   * separate namespace-authorized operation. Group authorization is unchanged. */
   async attachIdentifier(id: string, actorKey: string, value: unknown,
     origin: ChangeOrigin = {}): Promise<Asset> {
     const identifier = canonicalIdentifier(value);
@@ -1405,9 +1405,9 @@ export class IdentityStore {
     }
   }
 
-  /** The single attachment implementation: Asset authorization, GS1 set
-   * compatibility, the issuance guard, and persistence. Allocation runs this
-   * inside its own transaction rather than duplicating any of it. */
+  /** Shared attachment implementation: Asset authorization, GS1 set
+   * compatibility, issued-value binding, and persistence. Allocation invokes
+   * it only after creating its ledger record in the same transaction. */
   private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
     actorKey: string, identifier: ExternalIdentifier,
     change: ReturnType<typeof changeParams>): Promise<void> {
