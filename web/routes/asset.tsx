@@ -207,7 +207,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
           <Field label="Add photo" hint="JPEG, PNG, or WebP, up to 10 MiB.">
             <Input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required /></Field>
           {uploadResult?.error && <p role="alert">{uploadResult.error}</p>}
-          <ActionRow><Button>{uploadBusy ? 'Uploading…' : 'Upload photo'}</Button>
+          <ActionRow><Button type="submit">{uploadBusy ? 'Uploading…' : 'Upload photo'}</Button>
             <ActionStatus className="w-26">
               <TransientSuccess trigger={uploadResult?.saved ? uploadResult.photoKey : null} label="Uploaded" />
             </ActionStatus>
@@ -229,7 +229,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
           <Switch name="isPublic" defaultChecked={asset.isPublic} label="Public access" />
           <Hint className="mb-4">Anyone with access to this public page can view the information exposed here. Only Group members can edit.</Hint>
           {editResult?.error && <p role="alert">{editResult.error}</p>}
-          <ActionRow><Button>{editBusy ? 'Saving…' : 'Save changes'}</Button>
+          <ActionRow><Button type="submit">{editBusy ? 'Saving…' : 'Save changes'}</Button>
             <ActionStatus className="w-26">
               <TransientSuccess trigger={editResult?.saved ? editResult : null} label="Saved" />
             </ActionStatus>

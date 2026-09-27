@@ -31,7 +31,7 @@ export function ProfileEditor({ member, feedback }: { member: UserAccount; feedb
   const busy = useNavigation().state !== 'idle';
   return <Form method="post"><fieldset disabled={busy}>
     <Field label="Name"><Input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" /></Field>
-    <ActionRow><Button>Save profile</Button><FormStatus feedback={feedback} savedLabel="Saved" /></ActionRow>
+    <ActionRow><Button type="submit">Save profile</Button><FormStatus feedback={feedback} savedLabel="Saved" /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -43,7 +43,7 @@ export function EmailAddressEditor({ email, feedback }: { email: string; feedbac
     <Hint className="mb-4">Changing email immediately updates your sign-in address and password-recovery destination.</Hint>
     <Field label="Email"><Input name="newEmail" defaultValue={email} required maxLength={254} type="email" autoComplete="email" /></Field>
     <PasswordField label="Current password" name="currentPassword" required autoComplete="current-password" />
-    <ActionRow><Button>Change email</Button>
+    <ActionRow><Button type="submit">Change email</Button>
       <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
   </fieldset></Form>;
 }
@@ -72,7 +72,7 @@ export function PasswordEditor({ feedback }: { feedback?: FormFeedback }) {
       autoComplete="new-password" value={confirmation}
       onChange={(event) => setConfirmation(event.currentTarget.value)} />
     <Hint className="mb-4">Use at least 12 characters.</Hint>
-    <ActionRow><Button>Change password</Button>
+    <ActionRow><Button type="submit">Change password</Button>
       <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
   </fieldset></Form>;
 }

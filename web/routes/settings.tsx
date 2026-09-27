@@ -205,7 +205,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
           <Field label="Sender email"><Input name="senderAddress" type="email" defaultValue={mail.senderAddress ?? ''} maxLength={254} /></Field>
           <Field label="Sender name"><Input name="senderName" defaultValue={mail.senderName ?? ''} maxLength={100} /></Field>
         </div>
-        <ActionRow><Button disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</Button>
+        <ActionRow><Button type="submit" disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</Button>
           <ActionStatus className="w-22 min-w-22">
             <TransientSuccess trigger={result?.saved && !dirty ? result : null} label="Saved" />
           </ActionStatus>
@@ -219,7 +219,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
       <test.Form method="post" className="flex max-w-[35rem] flex-wrap items-end gap-4">
         <input type="hidden" name="intent" value="mail-test" />
         <Field label="Test recipient" className="m-0 flex-1"><Input name="recipient" type="email" required maxLength={254} /></Field>
-        <ActionRow><Button disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
+        <ActionRow><Button type="submit" disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
           {test.state !== 'idle' ? 'Sending…' : 'Send test email'}</Button>
           <ActionStatus className="w-22 min-w-22">
             <TransientSuccess trigger={testResult?.saved ? testResult : null} label="Sent" />
@@ -239,7 +239,7 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
       <reset.Form method="post"><input type="hidden" name="intent" value="secret-reset" />
         <input type="hidden" name="revision" value={mail.revision} />
         <Label className="mb-[1.15rem]"><Checkbox name="confirmed" required />I understand this removes all encrypted credentials.</Label>
-        <Button variant="destructive" disabled={reset.state !== 'idle'}>Reset encrypted credentials</Button>
+        <Button type="submit" variant="destructive" disabled={reset.state !== 'idle'}>Reset encrypted credentials</Button>
       </reset.Form>
     </div> : null}
   </Panel>;
