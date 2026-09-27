@@ -50,6 +50,7 @@ test('every existing Group form submits its intended API mutation on click', asy
       }
       const before = calls.length;
       await settle(() => button.click());
+      await settle();
       assert.equal(calls.length, before + 1, `${label} must reach the API exactly once`);
       assert.deepEqual(calls.at(-1), { path, method, body });
     }
@@ -85,8 +86,8 @@ test('Asset Save changes submits both name and public visibility through its fet
     await settle(() => view.field('input[name="isPublic"]')!.click());
     assert.equal(document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
     await settle(() => view.button('Save changes')!.click());
+    await settle();
     assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After', isPublic: true } }]);
-    assert.match(view.text(), /Saved/);
     await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
     view.field('input[name="gtin"]')!.value = '00614141123452';
@@ -99,7 +100,7 @@ test('Asset Save changes submits both name and public visibility through its fet
       scheme.value = 'giai';
       scheme.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    assert.match(view.text(), /Existing GIAI \(complete AI 8004 value\)/);
+    assert.match(view.text(), /GIAI value \(AI 8004\)/);
     view.field('input[name="assetReference"]')!.value = '024';
     await settle(() => view.button('Record existing identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
@@ -148,7 +149,8 @@ test('explicit submit buttons preserve validation, submitter data, and non-submi
 });
 
 test('GIAI empty state describes actor eligibility rather than a single Asset Group', () => {
-  const view = mount(createElement(AllocateGiai, { namespaces: [], allocation: null, busy: false, error: null, saved: null }));
+  const view = mount(createElement(AllocateGiai, { namespaces: [], allocation: null,
+    allocationAttached: false, busy: false, error: null }));
   try {
     assert.match(view.text(), /You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset/);
     assert.match(view.text(), /collaborating Group you belong to/);
@@ -157,7 +159,7 @@ test('GIAI empty state describes actor eligibility rather than a single Asset Gr
 });
 
 test('generic identifier form explicitly records existing external identifiers only', async () => {
-  const view = mount(createElement(IdentifierForm, { busy: false, error: null, saved: null }));
+  const view = mount(createElement(IdentifierForm, { busy: false, error: null }));
   try {
     assert.match(view.text(), /Record an existing identifier already assigned by an external authority/);
     assert.match(view.text(), /never issues identifiers/);
@@ -165,7 +167,7 @@ test('generic identifier form explicitly records existing external identifiers o
     const select = view.field('select[name="scheme"]')!;
     select.value = 'giai';
     await settle(() => select.dispatchEvent(new Event('change', { bubbles: true })));
-    assert.match(view.text(), /Existing GIAI \(complete AI 8004 value\)/);
+    assert.match(view.text(), /GIAI value \(AI 8004\)/);
     assert.match(view.text(), /already assigned by an external authority, including its company prefix/);
     assert.match(view.text(), /Kannabi validates GS1 syntax/);
     assert.match(view.text(), /does not verify who assigned it or who controls its prefix/);

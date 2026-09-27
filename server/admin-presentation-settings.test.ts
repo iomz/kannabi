@@ -32,6 +32,8 @@ test('instance presentation settings default hidden and render as independent ch
     assert.ok(view.text().includes('Show native Asset ID on Asset pages'));
     assert.ok(view.text().includes('Show identifier policy version on Asset pages'));
     assert.ok(view.text().includes('The Asset URI remains available independently.'));
+    assert.ok([...document.querySelectorAll('h2')].some((heading) => heading.textContent === 'General'));
+    assert.ok([...document.querySelectorAll('h2')].some((heading) => heading.textContent === 'Theme'));
     assert.equal(settings.toastSeconds, defaultToastSeconds);
   } finally { view.stop(); router.dispose(); }
 });

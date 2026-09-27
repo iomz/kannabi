@@ -1,6 +1,7 @@
 import { Form, Link, redirect, useNavigation } from 'react-router';
 import { api, unwrap } from '../api';
 import { assetPath } from '../../shared/asset-uri';
+import { notify } from '../notify';
 import type { Route } from './+types/report';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +22,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     const photo = data.get('photo');
     if (photo instanceof File && photo.size) form.set('photo', photo);
     const { asset } = await unwrap(await fetch('/api/reports', { method: 'POST', body: form }));
+    notify('Asset reported');
     return redirect(assetPath(asset.id));
   } catch (error) { return { error: error instanceof Error ? error.message : 'Report failed' }; }
 }

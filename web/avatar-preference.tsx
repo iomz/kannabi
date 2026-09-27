@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, unwrap } from './api';
 import { Avatar } from './avatar';
+import { notify, notifyFailure } from './notify';
 import { Switch } from './switch';
 import { Hint } from './ui';
 
@@ -18,11 +19,9 @@ export function AvatarPreference({ name, gravatar, avatarHash }: {
   const [enabled, setEnabled] = useState(gravatar);
   const [hash, setHash] = useState(avatarHash);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function change(next: boolean) {
     setBusy(true);
-    setError(null);
     const previous = { enabled, hash };
     setEnabled(next);
     // Turning it off stops Kannabi rendering a remote URL immediately, before
@@ -34,10 +33,11 @@ export function AvatarPreference({ name, gravatar, avatarHash }: {
         const { avatarHash: refreshed } = await unwrap(await api.me.$get());
         setHash(refreshed);
       }
+      notify('Avatar preference saved');
     } catch (failure) {
       setEnabled(previous.enabled);
       setHash(previous.hash);
-      setError(failure instanceof Error ? failure.message : 'The avatar preference could not be saved');
+      notifyFailure(failure instanceof Error ? failure.message : 'The avatar preference could not be saved');
     } finally {
       setBusy(false);
     }
@@ -56,6 +56,5 @@ export function AvatarPreference({ name, gravatar, avatarHash }: {
           Without it, your initial is your avatar.</Hint>
       </div>
     </div>
-    {error && <p role="alert" className="mt-3 text-sm text-destructive">{error.endsWith('.') ? error : error + '.'}</p>}
   </>;
 }

@@ -234,7 +234,7 @@ test('rendering descriptors cover every supported scheme without restating valid
   });
   assert.deepEqual(schemeInputs.grai.map((input) => input.required), [true, false]);
   assert.equal(schemeInputs.giai[0].name, 'assetReference');
-  assert.match(schemeInputs.giai[0].label, /Existing GIAI/);
+  assert.match(schemeInputs.giai[0].label, /GIAI value \(AI 8004\)/);
   assert.match(schemeInputs.giai[0].hint!, /already assigned by an external authority/);
   assert.match(schemeInputs.giai[0].hint!, /validates GS1 syntax/);
   assert.match(schemeInputs.giai[0].hint!, /does not verify who assigned it or who controls its prefix/);

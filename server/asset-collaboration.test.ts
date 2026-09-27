@@ -9,7 +9,7 @@ const show = (props: Parameters<typeof AssetCollaboration>[0]) => mount(createEl
 
 const a = { key: 'a', name: 'Workshop' }, b = { key: 'b', name: 'Studio' };
 const props = { groups: [a], controlled: [a, b], canEdit: true, canGrant: true,
-  busy: false, error: null, saved: null, onChange: (_key: string, _grant: boolean) => {} };
+  busy: false, error: null, onChange: (_key: string, _grant: boolean) => {} };
 
 test('sharing names the receiving Group and passes its unchanged key', () => {
   const changes: unknown[] = [];
