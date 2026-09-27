@@ -29,6 +29,7 @@ export class DuplicateIdentityError extends Error {}
 export class ReferenceError extends Error {}
 export class AdministrationError extends Error {}
 export class LastAdministratorError extends Error {}
+export class LastCollaborationError extends Error {}
 /** A User an external principal resolved to. Deliberately thin: resolution
  * answers who is acting, and every later authorization decision is made from
  * the Group model as usual rather than from anything carried here. */
@@ -790,6 +791,7 @@ export class IdentityStore {
 
   async leaveGroup(actorKey: string, groupKey: string): Promise<void> {
     await this.write(async (tx) => {
+      await tx.run('MATCH (u:User {key: $actorKey}) SET u.lock = true', { actorKey });
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[m:MEMBER_OF]->(g:Group {key: $groupKey})
         DELETE m RETURN g.key`, { actorKey, groupKey });
@@ -868,6 +870,38 @@ export class IdentityStore {
       ));
       return result.records.length ? assetFrom(result.records[0].get('asset')) : null;
     } finally { await session.close(); }
+  }
+
+  /** Control authorizes delegation, membership supplies Asset authority. The
+   * same actor must represent both sides of a grant; no implicit invitations. */
+  async setAssetCollaboration(id: string, actorKey: string, groupKey: string, grant: boolean,
+    origin: ChangeOrigin = {}): Promise<{ changed: boolean }> {
+    const params = { assetId: assetId(id), actorKey,
+      groupKey: requiredText(groupKey, 'groupKey'), ...changeParams(origin) };
+    return this.write(async (tx) => {
+      // User first: membership departure/deletion cannot invalidate a checked
+      // authority while this operation waits for the Asset serialization lock.
+      await tx.run('MATCH (u:User {key: $actorKey}) SET u.lock = true', params);
+      await tx.run(`${assetMatch} SET a.lock = true`, params);
+      const allowed = await tx.run(`${assetMatch}
+        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(target:Group {key: $groupKey})
+        WHERE actor.accountDeletedAt IS NULL AND ${collaboration}
+          ${grant ? `AND EXISTS { MATCH (actor)-[:MEMBER_OF]->(source:Group)-[:CAN_COLLABORATE]->(a)
+            MATCH (actor)-[:CONTROLS]->(source) }` : ''}
+        RETURN EXISTS { MATCH (target)-[:CAN_COLLABORATE]->(a) } AS linked,
+          count { (:Group)-[:CAN_COLLABORATE]->(a) } AS edges`, params);
+      if (!allowed.records.length) throw new ReferenceError('Asset access or Group control not found');
+      const row = allowed.records[0];
+      if (row.get('linked') === grant) return { changed: false };
+      if (!grant && row.get('edges').toNumber() <= 1) {
+        throw new LastCollaborationError('An Asset must retain at least one collaboration Group');
+      }
+      await tx.run(`${assetMatch} MATCH (g:Group {key: $groupKey})
+        ${grant ? 'CREATE (g)-[:CAN_COLLABORATE]->(a)'
+          : 'MATCH (g)-[edge:CAN_COLLABORATE]->(a) DELETE edge'}
+        WITH DISTINCT a ${recordChange} RETURN a.id`, params);
+      return { changed: true };
+    });
   }
 
   /** Resolve a complete identity to the Assets that carry it.
@@ -1208,6 +1242,7 @@ export class IdentityStore {
         if (!actor.records.length) throw new AdministrationError('Administrator access required');
         if (actorKey === targetKey) throw new AdministrationError('Delete your own account from Profile');
       }
+      await tx.run('MATCH (u:User {key: $targetKey}) SET u.lock = true', { targetKey });
       const target = await tx.run(`MATCH (u:User {key: $targetKey}) WHERE u.id IS NOT NULL
         RETURN u.id AS id, u.role = 'admin' AS admin`, { targetKey });
       if (!target.records.length) throw new ReferenceError('User not found');
@@ -1376,6 +1411,7 @@ export class IdentityStore {
   private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
     actorKey: string, identifier: ExternalIdentifier,
     change: ReturnType<typeof changeParams>): Promise<void> {
+    await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
       RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
         + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
@@ -1526,10 +1562,9 @@ export class IdentityStore {
    * observes the committed allocation at step 3, so a double-click returns the
    * same GIAI without consuming a sequence number.
    *
-   * The same Asset allocating from two different namespaces at once locks two
-   * different nodes, so the `allocatedForAssetId` constraint arbitrates
-   * instead: the loser's whole transaction, counter included, rolls back and it
-   * returns the winner's allocation.
+   * After the namespace, lock the Asset before checking authority. This also
+   * serializes issuance through different namespaces with collaboration
+   * revocation; the unique ledger constraint remains the persistence backstop.
    */
   async allocateGiai(id: string, actorKey: string, namespaceKey: string,
     origin: ChangeOrigin = {}): Promise<Asset> {
@@ -1548,6 +1583,7 @@ export class IdentityStore {
           RETURN n.gcp AS gcp, n.active AS active, toFloat(n.nextSequence) AS nextSequence,
             n.exclusionsFrom AS exclusionsFrom, n.exclusionsTo AS exclusionsTo`, { key });
         if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
+        await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
         // 2. Authority comes from the Group that manages the namespace, and
         //    that Group must also collaborate on the Asset.
         const authorized = await tx.run(`
@@ -1603,6 +1639,7 @@ export class IdentityStore {
     const assetKey = assetId(id);
     const identifierKey = requiredText(key, 'identifier key');
     return this.write(async (tx) => {
+      await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
       const detached = await tx.run(`${assetMatch} WHERE ${collaboration}
         OPTIONAL MATCH (a)-[individualLink:IDENTIFIED_BY]->(individual:IndividualIdentifier {key: $key})
         OPTIONAL MATCH (a)-[classLink:CLASSIFIED_AS]->(:ClassIdentifier {key: $key})
@@ -1647,6 +1684,7 @@ export class IdentityStore {
     origin: ChangeOrigin = {}): Promise<Asset> {
     return this.write(async (tx) => {
       await this.consumePhoto(tx, photoKey);
+      await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetId(id) });
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
         MATCH (m:Media {key: $photoKey}) CREATE (a)-[:HAS_PHOTO]->(m)
         ${recordChange}
@@ -1659,16 +1697,19 @@ export class IdentityStore {
 
   async beginPhotoDeletion(id: string, actorKey: string, photoKey: string,
     origin: ChangeOrigin = {}): Promise<void> {
-    const result = await this.write((tx) => tx.run(`${assetMatch} WHERE ${collaboration}
-      MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
-      SET m.state = 'deleting', m.expiresAt = datetime()
-      ${recordChange}
-      DELETE relationship
-      RETURN m.key`, {
-      assetId: assetId(id), actorKey,
-      photoKey: requiredText(photoKey, 'photoKey'),
-      ...changeParams(origin),
-    }));
+    const result = await this.write(async (tx) => {
+      await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetId(id) });
+      return tx.run(`${assetMatch} WHERE ${collaboration}
+        MATCH (a)-[relationship:HAS_PHOTO]->(m:Media {key: $photoKey, state: 'attached'})
+        SET m.state = 'deleting', m.expiresAt = datetime()
+        ${recordChange}
+        DELETE relationship
+        RETURN m.key`, {
+        assetId: assetId(id), actorKey,
+        photoKey: requiredText(photoKey, 'photoKey'),
+        ...changeParams(origin),
+      });
+    });
     if (!result.records.length) throw new ReferenceError('Asset access or photo not found');
   }
 
@@ -1710,6 +1751,8 @@ export class IdentityStore {
       ...changeParams(origin),
     };
     return this.write(async (tx) => {
+      // Re-read collaboration after serializing with access revocation.
+      await tx.run(`${assetMatch} SET a.lock = true`, params);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration}
         OPTIONAL MATCH (owner:Owner {key: $ownerKey})
         WITH a, owner WHERE $ownerKey IS NULL OR owner IS NOT NULL

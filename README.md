@@ -171,7 +171,7 @@ Locating a GS1 Company Prefix requires the GS1 GCP Length Table, which is not op
 A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GIAIs under them.
 Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
 
-On an Asset the actor can edit, the External identifiers panel offers **Allocate GIAI** when the Asset's Group has one active namespace, a prefix chooser when it has several, and a short explanation when it has none.
+On an Asset the actor can edit, the External identifiers panel offers **Allocate GIAI** for active namespaces managed by collaborating Groups the actor belongs to, a prefix chooser when several qualify, and a short explanation when none qualify.
 The user never constructs a GIAI, and reporting stays GS1-free.
 
 `server/gs1.ts` builds every issued value as the configured prefix followed by an unpadded decimal reference, and it is the only place that does so.
@@ -286,7 +286,7 @@ Authentication uses the same `User` nodes as domain provenance, with a server-as
 This avoids a second application database and a custom authentication adapter.
 The adapter and Better Auth versions are pinned; upgrades must pass the real Neo4j integration tests.
 
-Create an account, open Groups from the sidebar to create a Group or ask an existing member to add your member key, then report an Asset from the Assets workspace.
+Create an account, open Groups from the sidebar to create a Group or ask a Group controller to add your member key, then report an Asset from the Assets workspace.
 The persistent header searches accessible Assets by name on Enter; ⌘K or Ctrl+K focuses search and Escape blurs it.
 The account menu provides Profile and sign-out.
 Profile lets signed-in Users update their display name, change their email or password after current-password confirmation, and choose System, Light, or Dark appearance.
@@ -304,6 +304,17 @@ A Group controller (initially its creator) can add an existing User; ordinary Gr
 An administrator can identify Groups with no controller through `GET /api/admin/groups/uncontrolled` and assign control to an existing active User with `POST /api/admin/groups/{key}/recover` (`{ "userKey": "..." }`). This recovery does not add membership or let the administrator read private Assets; the controller can subsequently grant membership, which does grant access.
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
+An Asset can have several collaboration Groups while keeping one Asset ID and one inventory entry.
+On the Asset page, **Manage collaboration** lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
+Control of the receiving Group supplies its consent; belonging to both Groups alone is insufficient.
+This bounded workflow requires one User with both control authorities; there is no invitation/acceptance workflow between separate controllers.
+A controller with current Group-derived Asset access can remove the Group they control, including the Group initially selected when reporting.
+They cannot remove another Group merely by controlling their own, and at least one collaboration Group must remain, even for a public Asset.
+Removing your last source of private access returns you to the inventory; other memberships and public read access still apply.
+Empty or uncontrolled Groups retain collaboration, and account deletion never transfers authority.
+Collaboration does not grant access to another Group's identifier namespaces.
+The API uses `PUT /api/assets/{id}/collaboration/{groupKey}` to grant and `DELETE` at the same path to revoke, returning `{ "changed": true }` for a change or `{ "changed": false }` for an authorized no-op.
+Both operations recheck current authority; a retry after losing access returns 404, and removing the final Group returns 409.
 `reportedBy` grants no access and remains unchanged after the reporter leaves the Group.
 Marking an Asset public permits anyone with its Asset URI to read the full Asset representation, never to edit it.
 `Asset.id` is not a secret and grants no authorization; mutations remain Group-authorized.
@@ -373,7 +384,7 @@ Failure cleanup removes bytes while retaining a retry record through the ten-min
 Expired or failed uploads are retried on startup and every minute; attached photos are excluded.
 If storage is unavailable, cleanup waits for recovery and the pending photo is never exposed as an Asset photo.
 
-To evaluate an empty deployment, sign up, create a Group or join through an existing member, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
+To evaluate an empty deployment, sign up, create a Group or join through a Group controller, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
 ## Tests
@@ -385,6 +396,7 @@ pnpm test:integration
 ```
 
 The integration runner creates a disposable Neo4j container per suite and an Alarik container for media tests with a random password and localhost port, then stops it after testing.
+To run a focused suite, pass its filename, for example `pnpm test:integration asset-collaboration.integration.test.ts`.
 Tests cover canonicalization, conflicting claims, transactional and concurrent duplicate rejection, persisted authentication, password-stepped credential changes and recovery, explicit Group reporting, private/public authorization, immutable provenance after membership removal, encrypted mail configuration and recovery, live local SMTP delivery, signed S3 operations, photo authorization, policy enforcement, timezone presentation, theme persistence, and upload-failure cleanup.
 It never uses the application `.env` or an existing database.
 `NEO4J_TEST_IMAGE` may select a locally cached Neo4j 5 image; the default matches Compose's `neo4j:5-community`.

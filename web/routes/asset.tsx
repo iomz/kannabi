@@ -1,4 +1,4 @@
-import { Link, useFetcher, useLocation } from 'react-router';
+import { Link, redirect, useFetcher, useLocation } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { displayInstant } from '../../server/settings.js';
 import { api, unwrap } from '../api';
@@ -6,6 +6,7 @@ import { assetPath, assetPhotoPath } from '../../shared/asset-uri';
 import { ReporterAttribution } from '../reporter-attribution';
 import { publicShellHandle } from '../anonymous-shell';
 import { AssetUri } from '../asset-uri';
+import { AssetCollaboration } from '../asset-collaboration';
 import { Switch } from '../switch';
 import { Icon } from '../icon';
 import { PhotoDeleteConfirmation } from '../photo-delete-confirmation';
@@ -34,7 +35,12 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
   const { settings } = await unwrap(await api.settings.$get());
   const groupKeys = new Set(result.asset.groups.map((group) => group.key));
+  const [{ groups: memberships }, { groups: controlled }] = account.user
+    ? await Promise.all([api.groups.$get().then(unwrap), api.groups.controlled.$get().then(unwrap)])
+    : [{ groups: [] }, { groups: [] }];
+  const canGrant = memberships.some((g) => groupKeys.has(g.key) && controlled.some((c) => c.key === g.key));
   return { ...result, settings, authenticated: account.user !== null,
+    controlled, canGrant,
     namespaces: namespaces.filter((namespace) =>
       namespace.active && namespace.group && groupKeys.has(namespace.group.key)),
     assetUri: new URL(assetPath(result.asset.id), request.url).toString() };
@@ -42,6 +48,19 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   const data = await request.formData();
   const intent = data.get('intent');
+  if (intent === 'grant-collaboration' || intent === 'revoke-collaboration') {
+    try {
+      const param = { id: params.id, groupKey: String(data.get('groupKey') ?? '') };
+      const endpoint = api.assets[':id'].collaboration[':groupKey'];
+      await unwrap(intent === 'grant-collaboration' ? await endpoint.$put({ param }) : await endpoint.$delete({ param }));
+      const response = await api.assets[':id'].$get({ param: { id: params.id } });
+      if (response.status === 404) return redirect('/');
+      return { kind: 'collaboration' as const, saved: true as const, error: null, photoKey: null };
+    } catch (error) {
+      return { kind: 'collaboration' as const, saved: false as const,
+        error: error instanceof Error ? error.message : 'Collaboration change failed', photoKey: null };
+    }
+  }
   const kind = intent === 'photo' ? 'photo' as const
     : intent === 'delete-photo' ? 'delete-photo' as const
       : intent === 'attach-identifier' ? 'attach-identifier' as const
@@ -96,7 +115,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   }
 }
 export default function AssetPage({ loaderData: { asset, canEdit, canViewReporterProfile, settings, authenticated,
-  assetUri, namespaces } }: Route.ComponentProps) {
+  assetUri, namespaces, controlled, canGrant } }: Route.ComponentProps) {
+  const collaboration = useFetcher<typeof clientAction>();
   const upload = useFetcher<typeof clientAction>();
   const edit = useFetcher<typeof clientAction>();
   const deletePhoto = useFetcher<typeof clientAction>();
@@ -146,6 +166,11 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
         link={canViewReporterProfile} /></dd>
       <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
     </dl><AssetUri uri={assetUri} /></Panel>
+    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
+      busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
+      saved={collaboration.data?.saved ? collaboration.data : null}
+      onChange={(groupKey, grant) => collaboration.submit({ groupKey,
+        intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
     <Panel><h2>External identifiers</h2>
       <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />

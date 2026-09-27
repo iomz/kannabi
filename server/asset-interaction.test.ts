@@ -56,3 +56,39 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     globalThis.fetch = originalFetch;
   }
 });
+
+test('collaboration actions preserve identity and leave the page only when access ends', async () => {
+  const originalFetch = globalThis.fetch;
+  let readable = true;
+  let conflict = false;
+  const requests: { path: string; method: string }[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const method = input instanceof Request ? input.method : init?.method ?? 'GET';
+    requests.push({ path: new URL(url, assetUrl).pathname, method });
+    const status = conflict ? 409 : method === 'GET' && !readable ? 404 : 200;
+    return new Response(JSON.stringify(status === 200 ? { changed: true } : { error: 'Last Group must remain' }),
+      { status, headers: { 'Content-Type': 'application/json' } });
+  };
+  const change = (intent: string) => {
+    const data = new FormData();
+    data.set('intent', intent); data.set('groupKey', 'group-b');
+    return clientAction({ params: { id }, request: new Request(assetUrl, { method: 'POST', body: data }) } as never);
+  };
+  try {
+    assert.deepEqual(await change('grant-collaboration'), { kind: 'collaboration', saved: true, error: null, photoKey: null });
+    assert.deepEqual(requests, [
+      { path: `/api/assets/${id}/collaboration/group-b`, method: 'PUT' },
+      { path: `/api/assets/${id}`, method: 'GET' },
+    ]);
+    assert.equal((await change('revoke-collaboration')) instanceof Response, false, 'another Group or public access keeps page readable');
+    readable = false;
+    const result = await change('revoke-collaboration');
+    assert.ok(result instanceof Response);
+    assert.equal(result.headers.get('Location'), '/');
+    conflict = true;
+    assert.deepEqual(await change('revoke-collaboration'), {
+      kind: 'collaboration', saved: false, error: 'Last Group must remain', photoKey: null,
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});

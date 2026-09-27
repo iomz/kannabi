@@ -7,6 +7,8 @@ Preserve the README naming story at the bottom of README.
 - Use uppercase `KANNABI_*` for environment variables.
 - Reporting requires an explicit Group context; that Group receives collaboration access.
 - A sole Group may be selected automatically in the UI, but remains explicit in the API/domain.
+- An Asset retains at least one collaboration Group; its initial Group has no continuing priority. Empty or uncontrolled Groups retain their collaboration edges.
+- Granting collaboration requires membership and control in an existing collaborating Group plus control of the receiving Group, representing both sides in one operation. Removing a Group requires current Group-derived Asset access and control of that Group; control of another Group is insufficient. Control alone never grants Asset access.
 - `reportedBy` is immutable provenance, never an authorization grant.
 - Every canonical Asset change records, in the same statement as the change, who asserted it and whose authority accepted it. The asserter stays distinguishable from the acceptor even when they are the same person, the accepting authority comes from the authenticated actor and never from caller input, and appearing in provenance grants nothing.
 - Change provenance is bounded current-state provenance describing the latest change only. It never becomes a history log, and it never replaces `reportedBy`.
