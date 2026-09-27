@@ -16,7 +16,7 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
   onDetach: (key: string) => void;
 }) {
   if (!identifiers.length) {
-    return <p>No external identifiers. This Asset is identified by its Asset ID.</p>;
+    return <p>No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>;
   }
   return <ul className="mb-6 grid gap-3">{identifiers.map((identifier) => <li key={identifier.key}
     className="relative rounded-lg border bg-muted py-[.85rem] pr-12 pl-4">
@@ -69,8 +69,8 @@ export function AllocateGiai({ namespaces, allocation, busy, error, saved }: {
           <option key={namespace.key} value={namespace.key}>{namespace.gcp}</option>)}
       </NativeSelect></Field>}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button type="submit">{busy ? 'Allocating…' : 'Allocate GIAI'}</Button>
-      <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Allocated" /></ActionStatus>
+    <ActionRow><Button type="submit">{busy ? 'Issuing…' : 'Issue GIAI'}</Button>
+      <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Issued" /></ActionStatus>
     </ActionRow>
   </fieldset>;
 }
@@ -81,7 +81,7 @@ export function IdentifierForm({ busy, error, saved }: {
   const [scheme, setScheme] = useState<IdentifierScheme>('sgtin');
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="attach-identifier" />
-    <Hint>Record an identifier already assigned outside Kannabi. This form stores external identifiers; it never issues them. Use **Allocate GIAI** above to issue a GIAI under an eligible managed prefix.</Hint>
+    <Hint>Record an existing identifier already assigned by an external authority. This form never issues identifiers. Use **Issue GIAI** above to have Kannabi issue a GIAI under an eligible managed prefix.</Hint>
     <Field label="Identifier scheme">
       <NativeSelect name="scheme" value={scheme} onChange={(event) => setScheme(event.target.value as IdentifierScheme)}>
         {identifierSchemes.map((value) =>
@@ -94,8 +94,8 @@ export function IdentifierForm({ busy, error, saved }: {
         inputMode={input.numeric ? 'numeric' : undefined} />
     </Field>)}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button type="submit">{busy ? 'Adding…' : 'Add identifier'}</Button>
-      <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Added" /></ActionStatus>
+    <ActionRow><Button type="submit">{busy ? 'Recording…' : 'Record existing identifier'}</Button>
+      <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Recorded" /></ActionStatus>
     </ActionRow>
   </fieldset>;
 }

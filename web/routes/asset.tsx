@@ -171,7 +171,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
       saved={collaboration.data?.saved ? collaboration.data : null}
       onChange={(groupKey, grant) => collaboration.submit({ groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
-    <Panel><h2>External identifiers</h2>
+    <Panel><h2>Identifiers</h2>
       <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
       {canEdit && <allocate.Form method="post" className="mb-6">
