@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
-import { IdentityStore } from './identity-store.js';
+import { IdentityStore, ReferenceError as DomainReferenceError } from './identity-store.js';
 import { createInventoryApi } from './inventory-api.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -141,7 +141,7 @@ test('Group control grants membership, never Asset access', { skip: !uri || !pas
     assert.equal((await member(onlyAssetPath)).status, 200, 'membership, not controller status, grants Asset access');
   });
 
-  await t.test('two administrators cannot independently recover the same uncontrolled Group', async () => {
+  await t.test('two competing requests cannot independently recover the same Group', async () => {
     const legacy = await store.createGroup('Group predating control');
     const results = await Promise.all([
       admin(`/admin/groups/${legacy.key}/recover`, 'POST', { userKey: keys[0] }),
@@ -150,5 +150,52 @@ test('Group control grants membership, never Asset access', { skip: !uri || !pas
     assert.deepEqual(results.map((response) => response.status).sort(), [200, 404]);
     const owners = await query('MATCH (g:Group {key: $key})<-[:CONTROLS]-(u:User) RETURN u.key AS key', { key: legacy.key });
     assert.equal(owners.records.length, 1);
+  });
+
+  await t.test('recovery cannot appoint a User deleted while it waits for the User lock', async () => {
+    const targetClient = client();
+    const signup = await targetClient('/auth/sign-up/email', 'POST', {
+      name: 'Departing candidate', email: 'departing-candidate@example.com', password: 'test-password-12345',
+    });
+    assert.equal(signup.status, 200);
+    const targetKey = (await (await targetClient('/me')).json()).user.key as string;
+    const group = await store.createGroup('Recovery versus deletion');
+    const session = driver.session();
+    const tx = await session.beginTransaction();
+    let committed = false;
+    try {
+      // Hold the same User-node lock account deletion must acquire. The
+      // recovery request starts while the account is still active, then the
+      // tombstone commits before recovery can acquire that lock.
+      await tx.run('MATCH (u:User {key: $key}) SET u.lock = true RETURN u.key', { key: targetKey });
+      const recovering = store.recoverGroupControl(keys[3], group.key, targetKey)
+        .then(() => null, (error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await tx.run(`MATCH (u:User {key: $key})
+        SET u.accountDeletedAt = datetime(), u.provenanceName = u.name
+        REMOVE u.id, u.name`, { key: targetKey });
+      await tx.commit();
+      committed = true;
+      assert.ok(await recovering instanceof DomainReferenceError);
+    } finally {
+      if (!committed) await tx.rollback();
+      await session.close();
+    }
+    const linked = await query('MATCH (:User {key: $key})-[:CONTROLS]->(g:Group {key: $groupKey}) RETURN g.key',
+      { key: targetKey, groupKey: group.key });
+    assert.equal(linked.records.length, 0);
+    assert.ok((await store.listUncontrolledGroups(keys[3])).some((entry) => entry.key === group.key));
+  });
+
+  await t.test('orphaned tombstone control does not hide a Group from recovery', async () => {
+    const group = await store.createGroup('Group with stale tombstone control');
+    // A corrupt historical edge cannot become active authority or prevent
+    // recovery, even though normal deletion removes all such edges.
+    await query(`MATCH (u:User {key: $key}), (g:Group {key: $groupKey})
+      CREATE (u)-[:CONTROLS]->(g)`, { key: keys[4], groupKey: group.key });
+    assert.ok((await store.listUncontrolledGroups(keys[3])).some((entry) => entry.key === group.key));
+    assert.equal((await admin(`/admin/groups/${group.key}/recover`, 'POST', { userKey: keys[0] })).status, 200);
+    assert.ok((await store.listControlledGroups(keys[0])).some((entry) => entry.key === group.key));
+    assert.ok(!(await store.listUncontrolledGroups(keys[3])).some((entry) => entry.key === group.key));
   });
 });

@@ -741,7 +741,8 @@ export class IdentityStore {
           RETURN admin.key`, { actorKey });
         if (!allowed.records.length) throw new AdministrationError('Administrator access required');
         const result = await tx.run(`MATCH (g:Group)
-          WHERE NOT EXISTS { MATCH (:User)-[:CONTROLS]->(g) }
+          WHERE NOT EXISTS { MATCH (controller:User)-[:CONTROLS]->(g)
+            WHERE controller.accountDeletedAt IS NULL }
           RETURN g { .key, .name } AS group ORDER BY group.name`);
         return result.records.map((row) => row.get('group') as Entity);
       });
@@ -749,18 +750,25 @@ export class IdentityStore {
   }
 
   /** Restore control of an uncontrolled Group; never add a membership.
-   * Lock the Group before checking its controllers so two recoveries cannot
-   * independently conclude it is stranded and both appoint one. */
+   * Lock the target User before the Group so deletion cannot turn an earlier
+   * active match into a tombstone grant. The Group lock serializes recoveries. */
   async recoverGroupControl(actorKey: string, groupKey: string, userKey: string): Promise<void> {
     await this.write(async (tx) => {
       const authorized = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
         WHERE admin.id IS NOT NULL AND admin.accountDeletedAt IS NULL
-        MATCH (g:Group {key: $groupKey}) SET g.lock = true RETURN g.key`,
-      { actorKey, groupKey });
-      if (!authorized.records.length) throw new AdministrationError('Administrator access or Group not found');
+        RETURN admin.key`, { actorKey });
+      if (!authorized.records.length) throw new AdministrationError('Administrator access required');
+      const target = await tx.run(`MATCH (u:User {key: $userKey})
+        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
+        SET u.lock = true RETURN u.key`, { userKey });
+      if (!target.records.length) throw new ReferenceError('Active User not found');
+      const group = await tx.run(`MATCH (g:Group {key: $groupKey})
+        SET g.lock = true RETURN g.key`, { groupKey });
+      if (!group.records.length) throw new ReferenceError('Group not found');
       const recovered = await tx.run(`MATCH (g:Group {key: $groupKey}), (u:User {key: $userKey})
         WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
-          AND NOT EXISTS { MATCH (:User)-[:CONTROLS]->(g) }
+          AND NOT EXISTS { MATCH (controller:User)-[:CONTROLS]->(g)
+            WHERE controller.accountDeletedAt IS NULL }
         CREATE (u)-[:CONTROLS]->(g) RETURN g.key`, { groupKey, userKey });
       if (!recovered.records.length) throw new ReferenceError('Uncontrolled Group or active User not found');
     });
