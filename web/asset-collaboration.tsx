@@ -1,13 +1,12 @@
 import { Button } from '@/components/ui/button';
 import { Hint, Panel } from './ui';
-import { TransientSuccess } from './transient-success';
 
 type Group = { key: string; name: string };
 
 /** These affordances explain current authority; mutations recheck it in Neo4j. */
-export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy, error, saved, onChange }: {
+export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy, error, onChange }: {
   groups: readonly Group[]; controlled: readonly Group[]; canEdit: boolean; canGrant: boolean;
-  busy: boolean; error: string | null; saved: object | null;
+  busy: boolean; error: string | null;
   onChange: (groupKey: string, grant: boolean) => void;
 }) {
   if (!canEdit) return null;
@@ -24,6 +23,5 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
       <div key={group.key} className="my-3"><Button type="button" disabled={busy}
         onClick={() => onChange(group.key, true)}>Grant {group.name} collaboration</Button></div>)}
     {error && <p role="alert">{error}</p>}
-    <TransientSuccess trigger={saved} label="Collaboration updated" />
   </Panel>;
 }

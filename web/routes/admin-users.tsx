@@ -5,7 +5,7 @@ import { DestructiveConfirmation } from '../destructive-confirmation';
 import { displayInstant } from '../../server/settings';
 import { filterUsers } from '../user-filter';
 import { userAccessLabel } from '../user-access';
-import { TransientSuccess } from '../transient-success';
+import { notify } from '../notify';
 import type { UserAccount } from '../../server/identity-store';
 import type { Route } from './+types/admin-users';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ActionRow, ActionStatus, EmptyState, Field, Hint, PageHeading, StatusPill,
+import { ActionRow, EmptyState, Field, Hint, PageHeading, StatusPill,
   stackedTable, stackedTableFrame } from '../ui';
 
 type UserAction = { intent: string; key: string | null; saved: boolean; message?: string; error: string | null };
@@ -66,10 +66,8 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
 }
 
 function Feedback({ actionData, intent, userKey }: { actionData?: UserAction; intent: string; userKey: string | null }) {
-  if (actionData?.intent !== intent || actionData.key !== userKey) return <ActionStatus />;
-  return <ActionStatus>{actionData.saved
-    ? <TransientSuccess trigger={actionData} label={actionData.message ?? 'Saved'} />
-    : <StatusPill tone="error" role="alert">{actionData.error}</StatusPill>}</ActionStatus>;
+  if (actionData?.intent !== intent || actionData.key !== userKey || actionData.saved) return null;
+  return <StatusPill tone="error" role="alert">{actionData.error}</StatusPill>;
 }
 
 function AccessBadge({ user }: { user: UserAccount }) {
@@ -161,6 +159,9 @@ export default function Users({ loaderData: { users, settings, actorKey }, actio
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const matching = filterUsers(users, query);
+  useEffect(() => {
+    if (actionData?.saved && actionData.message) notify(actionData.message);
+  }, [actionData]);
   const selected = users.find((user) => user.key === selectedKey) ?? null;
   return <>
     <PageHeading eyebrow="Administration" title="Users" description={`${users.length} active users`}>

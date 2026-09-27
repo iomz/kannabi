@@ -61,7 +61,7 @@ export function ActionRow({ className, ...props }: ComponentProps<'div'>) {
   return <div {...props} className={cn('flex flex-wrap items-center gap-3', className)} />;
 }
 
-/** Somewhere for a transient message to appear without moving the row. */
+/** A stable place for action-specific errors or state to appear beside a row. */
 export function ActionStatus({ className, ...props }: ComponentProps<'div'>) {
   return <div {...props} role="status" aria-live="polite" aria-atomic="true"
     className={cn('flex min-h-9 items-center', className)} />;

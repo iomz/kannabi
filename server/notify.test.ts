@@ -97,13 +97,35 @@ test('the instance decides how long a toast lives, within a readable range', () 
   assert.equal(maxToastSeconds, 30);
 });
 
-test('feedback stays beside its control wherever the control is still there', () => {
-  const settings = readFileSync('web/routes/settings.tsx', 'utf8');
-  assert.match(settings, /<TransientSuccess[^>]*label="Saved"/);
-  assert.doesNotMatch(settings, /\bnotify\(/);
+test('transient mutation acknowledgements use Sonner while durable and validation feedback stays in context', () => {
+  for (const path of ['web/routes/asset.tsx', 'web/routes/groups.tsx', 'web/routes/settings.tsx',
+    'web/routes/admin-users.tsx', 'web/routes/settings-profile.tsx', 'web/routes/settings-security.tsx',
+    'web/routes/report.tsx', 'web/routes/signin.tsx', 'web/appearance-selector.tsx',
+    'web/avatar-preference.tsx', 'web/root.tsx']) {
+    const source = readFileSync(path, 'utf8');
+    assert.match(source, /notify\(/, `${path} routes transient confirmation through Sonner`);
+    assert.doesNotMatch(source, /<TransientSuccess/, `${path} has no inline transient success replacement`);
+  }
+  assert.match(readFileSync('web/appearance-selector.tsx', 'utf8'), /notifyFailure\(/,
+    'appearance persistence failure uses Sonner');
+  assert.match(readFileSync('web/avatar-preference.tsx', 'utf8'), /notifyFailure\(/,
+    'avatar preference failure uses Sonner');
 
-  const asset = readFileSync('web/routes/asset.tsx', 'utf8');
-  assert.match(asset, /<TransientSuccess[^>]*label="Uploaded"/);
-  assert.match(asset, /notify\('Photo deleted'\)/);
-  assert.match(asset, /notify\('Identifier detached'\)/);
+  const tokens = readFileSync('web/api-tokens.tsx', 'utf8');
+  assert.match(tokens, /notify\(/, 'token revocation is transient');
+  assert.match(tokens, /IssuedSecretDialog/, 'one-time token secret remains in its durable dialog');
+  assert.match(tokens, /error && <p role="alert"/, 'validation and operation errors remain beside their dialog controls');
+  const report = readFileSync('web/routes/report.tsx', 'utf8');
+  assert.match(report, /actionData\?\.error && <p role="alert"/, 'report errors remain beside the form');
+  const settings = readFileSync('web/routes/settings.tsx', 'utf8');
+  assert.match(settings, /testResult\?\.error && <p role="alert"/, 'mail delivery diagnostics remain revisit-able inline');
+  assert.match(readFileSync('web/root.tsx', 'utf8'), /actionData\?\.error/,
+    'sign-out failure remains visible in the shell');
+  for (const path of ['web/routes/asset.tsx', 'web/routes/groups.tsx', 'web/routes/settings.tsx',
+    'web/routes/admin-users.tsx', 'web/routes/settings-profile.tsx', 'web/routes/settings-security.tsx',
+    'web/routes/report.tsx', 'web/routes/signin.tsx', 'web/appearance-selector.tsx', 'web/avatar-preference.tsx',
+    'web/asset-collaboration.tsx', 'web/asset-identifiers.tsx', 'web/profile-editor.tsx']) {
+    assert.doesNotMatch(readFileSync(path, 'utf8'), /TransientSuccess/,
+      `${path} does not render a parallel timed acknowledgement system`);
+  }
 });

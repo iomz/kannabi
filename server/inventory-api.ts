@@ -388,8 +388,9 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     .delete('/assets/:id/collaboration/:groupKey', async (c) => c.json(
       await store.setAssetCollaboration(assetId(c.req.param('id')), actor(c.get('user')),
         c.req.param('groupKey'), false, changeOrigin(c))))
-    // External identifiers are attached and detached explicitly. Knowing an
-    // identifier grants no access: Group authorization is checked as usual.
+    // Attach an existing external identifier. This validates syntax but does
+    // not claim Kannabi issued it; GIAI issuance has its own namespace-checked
+    // operation below. Knowing an identifier grants no Asset access.
     .post('/assets/:id/identifiers', validator('json', (value) =>
       record(value, identifierInputFields) as Record<string, string>), async (c) => {
       const asset = await store.attachIdentifier(assetId(c.req.param('id')), actor(c.get('user')),

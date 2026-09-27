@@ -4,18 +4,16 @@ import type { UserAccount } from '../server/identity-store';
 import { api, unwrap } from './api';
 import { DestructiveConfirmation } from './destructive-confirmation';
 import { PasswordField } from './password-field';
-import { TransientSuccess } from './transient-success';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, ActionStatus, Field, Hint, StatusPill } from './ui';
 
 type FormFeedback = { saved: boolean; error: string | null } | undefined;
 
-function FormStatus({ feedback, savedLabel }: { feedback: FormFeedback; savedLabel: string }) {
-  return <ActionStatus className="max-[420px]:w-full">
-    {feedback?.saved ? <TransientSuccess trigger={feedback} label={savedLabel} />
-      : feedback?.error ? <StatusPill tone="error" role="alert">{feedback.error}</StatusPill> : null}
-  </ActionStatus>;
+function FormStatus({ feedback }: { feedback: FormFeedback }) {
+  return feedback?.error
+    ? <ActionStatus className="max-[420px]:w-full"><StatusPill tone="error" role="alert">{feedback.error}</StatusPill></ActionStatus>
+    : null;
 }
 
 export async function saveProfile(request: Request) {
@@ -31,7 +29,7 @@ export function ProfileEditor({ member, feedback }: { member: UserAccount; feedb
   const busy = useNavigation().state !== 'idle';
   return <Form method="post"><fieldset disabled={busy}>
     <Field label="Name"><Input name="name" defaultValue={member.name} required maxLength={200} autoComplete="name" /></Field>
-    <ActionRow><Button type="submit">Save profile</Button><FormStatus feedback={feedback} savedLabel="Saved" /></ActionRow>
+    <ActionRow><Button type="submit">Save profile</Button><FormStatus feedback={feedback} /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -44,7 +42,7 @@ export function EmailAddressEditor({ email, feedback }: { email: string; feedbac
     <Field label="Email"><Input name="newEmail" defaultValue={email} required maxLength={254} type="email" autoComplete="email" /></Field>
     <PasswordField label="Current password" name="currentPassword" required autoComplete="current-password" />
     <ActionRow><Button type="submit">Change email</Button>
-      <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
+      <FormStatus feedback={feedback} /></ActionRow>
   </fieldset></Form>;
 }
 
@@ -73,7 +71,7 @@ export function PasswordEditor({ feedback }: { feedback?: FormFeedback }) {
       onChange={(event) => setConfirmation(event.currentTarget.value)} />
     <Hint className="mb-4">Use at least 12 characters.</Hint>
     <ActionRow><Button type="submit">Change password</Button>
-      <FormStatus feedback={feedback} savedLabel="Changed" /></ActionRow>
+      <FormStatus feedback={feedback} /></ActionRow>
   </fieldset></Form>;
 }
 

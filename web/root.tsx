@@ -11,6 +11,7 @@ import { ThemeRuntimeContext } from './theme-runtime';
 import { AnonymousShell, isPublicShellHandle, usesAnonymousShell, usesWorkspaceHeader } from './anonymous-shell';
 import { AppSidebar } from './app-sidebar';
 import { WorkspaceHeader } from './workspace-header';
+import { notify } from './notify';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -23,6 +24,7 @@ export async function clientLoader() {
 export async function clientAction() {
   const result = await authClient.signOut();
   if (result.error) return { error: result.error.message ?? 'Sign-out failed' };
+  notify('Signed out');
   return redirect('/signin');
 }
 export function Layout({ children }: { children: ReactNode }) {

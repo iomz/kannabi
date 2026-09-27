@@ -1,7 +1,9 @@
 import { redirect } from 'react-router';
+import { useEffect } from 'react';
 import { api, unwrap } from '../api';
 import { DeleteAccount, EmailAddressEditor, ProfileEditor, saveProfile } from '../profile-editor';
 import { AvatarPreference } from '../avatar-preference';
+import { notify } from '../notify';
 import type { Route } from './+types/settings-profile';
 import { Panel } from '../ui';
 
@@ -16,6 +18,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   if (data.get('intent') === 'delete') {
     try {
       await unwrap(await api.profile.$delete());
+      notify('Account deleted');
       return redirect('/signin');
     } catch (error) {
       return { saved: false, error: error instanceof Error ? error.message : 'Account could not be deleted',
@@ -38,6 +41,10 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
 }
 export default function SettingsProfile({ loaderData: { member, deletionBlocked, gravatar, avatarHash },
   actionData }: Route.ComponentProps) {
+  useEffect(() => {
+    if (!actionData?.saved || actionData.section === 'delete') return;
+    notify(actionData.section === 'profile' ? 'Profile saved' : 'Email address changed');
+  }, [actionData]);
   const profileFeedback = actionData?.section === 'profile' ? actionData : undefined;
   const emailFeedback = actionData?.section === 'email' ? actionData : undefined;
   const deleteFeedback = actionData?.section === 'delete' ? actionData : undefined;

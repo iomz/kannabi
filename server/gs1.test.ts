@@ -224,5 +224,18 @@ test('rendering descriptors cover every supported scheme without restating valid
     assert.ok(schemeInputs[scheme].length > 0, scheme);
     for (const input of schemeInputs[scheme]) assert.ok(input.label && input.name);
   }
+  assert.deepEqual(Object.fromEntries(identifierSchemes.map((scheme) =>
+    [scheme, schemeInputs[scheme].map((input) => input.name)])), {
+    gtin: ['gtin'], sgtin: ['gtin', 'serial'], grai: ['assetType', 'serial'], giai: ['assetReference'],
+  });
+  assert.deepEqual(Object.fromEntries(identifierSchemes.map((scheme) =>
+    [scheme, schemeInputs[scheme].map((input) => input.required)])), {
+    gtin: [true], sgtin: [true, true], grai: [true, false], giai: [true],
+  });
   assert.deepEqual(schemeInputs.grai.map((input) => input.required), [true, false]);
+  assert.equal(schemeInputs.giai[0].name, 'assetReference');
+  assert.match(schemeInputs.giai[0].label, /GIAI value \(AI 8004\)/);
+  assert.match(schemeInputs.giai[0].hint!, /already assigned by an external authority/);
+  assert.match(schemeInputs.giai[0].hint!, /validates GS1 syntax/);
+  assert.match(schemeInputs.giai[0].hint!, /does not verify who assigned it or who controls its prefix/);
 });

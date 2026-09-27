@@ -1,17 +1,8 @@
 import { toast } from 'sonner';
 
-/** Kannabi's one way to say that something happened.
- *
- * Feedback stays beside the control that caused it wherever that control is
- * still on screen: a `Saved` next to the button that saved is easier to
- * connect than a message somewhere else. A toast is for the other case — when
- * whatever was acted on has gone, or the dialog that asked has closed, so
- * there is nothing left to put the message beside.
- *
- * The abstraction stays this thin on purpose. It names the two kinds Kannabi
- * actually uses and nothing else, so swapping the implementation underneath is
- * a change in one file rather than at every call site.
- */
+/** Kannabi's transient action feedback, through its single Sonner viewport.
+ * Durable state, warnings, one-time secrets, and field-specific errors remain
+ * beside the content or control they explain. */
 export type NotifyOptions = {
   /** Seconds, for the rare caller whose message needs longer than the
    * instance's own policy. Omitted, the instance decides. */

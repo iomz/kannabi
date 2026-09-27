@@ -1,6 +1,7 @@
 import { Form, Link, redirect, useLocation, useNavigation } from 'react-router';
 import { api, authClient, unwrap } from '../api';
 import { PasswordField } from '../password-field';
+import { notify } from '../notify';
 import type { Route } from './+types/signin';
 import { anonymousShellHandle } from '../anonymous-shell';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     const body = { email: text('email'), password: text('password'), name: text('name') };
     const result = text('intent') === 'signup' ? await authClient.signUp.email(body) : await authClient.signIn.email(body);
     if (result.error) throw new Error(result.error.message ?? 'Sign-in failed');
+    if (text('intent') === 'signup') notify('Account created');
     return redirect('/');
   } catch (error) { return { error: error instanceof Error ? error.message : 'Sign-in failed' }; }
 }

@@ -1,8 +1,10 @@
 import { redirect } from 'react-router';
+import { useEffect } from 'react';
 import { api, authClient, unwrap } from '../api';
 import { PasswordEditor } from '../profile-editor';
 import { passwordChangeInput } from '../password-change';
 import { ApiTokens } from '../api-tokens';
+import { notify } from '../notify';
 import type { Route } from './+types/settings-security';
 import { Panel } from '../ui';
 
@@ -34,6 +36,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
 }
 export default function SettingsSecurity({ loaderData: { isAdmin, apiTokens, apiTokenMaxLifetimeDays },
   actionData }: Route.ComponentProps) {
+  useEffect(() => { if (actionData?.section === 'password' && actionData.saved) notify('Password changed'); }, [actionData]);
   const passwordFeedback = actionData?.section === 'password' ? actionData : undefined;
   return <>
     <Panel form><PasswordEditor feedback={passwordFeedback} /></Panel>

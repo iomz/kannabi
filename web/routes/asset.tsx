@@ -10,12 +10,11 @@ import { AssetCollaboration } from '../asset-collaboration';
 import { Switch } from '../switch';
 import { Icon } from '../icon';
 import { PhotoDeleteConfirmation } from '../photo-delete-confirmation';
-import { TransientSuccess } from '../transient-success';
 import { notify } from '../notify';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ActionRow, ActionStatus, Field, Hint, PageHeading, Panel } from '../ui';
+import { ActionRow, Field, Hint, PageHeading, Panel } from '../ui';
 import { AllocateGiai, IdentifierForm, IdentifierList } from '../asset-identifiers';
 import type { Route } from './+types/asset';
 
@@ -140,17 +139,26 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
   const editBusy = edit.state !== 'idle';
   const deleteBusy = deletePhoto.state !== 'idle';
   useEffect(() => {
-    if (uploadResult?.saved) uploadForm.current?.reset();
+    if (uploadResult?.saved) { uploadForm.current?.reset(); notify('Photo uploaded'); }
   }, [uploadResult]);
+  useEffect(() => {
+    if (editResult?.saved) notify('Asset changes saved');
+  }, [editResult]);
   useEffect(() => {
     // The photo has left the grid and the dialog that asked has closed, so
     // there is nothing left on screen to put the confirmation beside.
     if (deleteResult?.saved) { setPhotoToDelete(null); notify('Photo deleted'); }
   }, [deleteResult]);
   useEffect(() => {
-    // Likewise a detached identifier: the row it named is no longer there.
+    if (identifiers.data?.kind === 'attach-identifier' && identifiers.data.saved) notify('Identifier recorded');
     if (identifiers.data?.kind === 'detach-identifier' && identifiers.data.saved) notify('Identifier detached');
   }, [identifiers.data]);
+  useEffect(() => {
+    if (allocateResult?.saved) notify('GIAI issued');
+  }, [allocateResult]);
+  useEffect(() => {
+    if (collaboration.data?.saved) notify('Collaboration updated');
+  }, [collaboration.data]);
   return <>
     {authenticated && <Link to={back} className="mb-6 inline-block text-[.85rem]">{back.startsWith('/lookup') ? '← Lookup' : '← Assets'}</Link>}
     <PageHeading eyebrow="Asset" title={asset.name}>
@@ -158,7 +166,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
     <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">
-      <dt>Asset ID</dt><dd><code>{asset.id}</code></dd>
+      {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
       <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
       <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
       <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
@@ -168,23 +176,21 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
     </dl><AssetUri uri={assetUri} /></Panel>
     <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
       busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
-      saved={collaboration.data?.saved ? collaboration.data : null}
       onChange={(groupKey, grant) => collaboration.submit({ groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
-    <Panel><h2>External identifiers</h2>
-      <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
+    <Panel><h2>Identifiers</h2>
+      <IdentifierList identifiers={asset.identifiers} allocation={asset.allocation}
+        showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
       {canEdit && <allocate.Form method="post" className="mb-6">
-        <AllocateGiai namespaces={namespaces} allocation={asset.allocation} busy={allocateBusy}
-          error={allocateResult?.error ?? null}
-          saved={allocateResult?.saved ? 'allocated' : null} />
+        <AllocateGiai namespaces={namespaces} allocation={asset.allocation}
+          allocationAttached={asset.identifiers.some((identifier) => identifier.scheme === 'giai'
+            && identifier.components.assetReference === asset.allocation?.value)}
+          busy={allocateBusy} error={allocateResult?.error ?? null} />
       </allocate.Form>}
-      {!canEdit && asset.allocation && <p className="mt-0 mb-6 text-[.85rem] text-muted-foreground">Kannabi issued
-        <code> {asset.allocation.value} </code>for this Asset.</p>}
       {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
         <IdentifierForm busy={identifierBusy}
-          error={identifierResult?.error ?? null}
-          saved={identifierResult?.kind === 'attach-identifier' && identifierResult.saved ? 'added' : null} />
+          error={identifierResult?.error ?? null} />
       </identifiers.Form>}
     </Panel>
     <Panel><h2>Photos</h2>
@@ -207,11 +213,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
           <Field label="Add photo" hint="JPEG, PNG, or WebP, up to 10 MiB.">
             <Input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required /></Field>
           {uploadResult?.error && <p role="alert">{uploadResult.error}</p>}
-          <ActionRow><Button type="submit">{uploadBusy ? 'Uploading…' : 'Upload photo'}</Button>
-            <ActionStatus className="w-26">
-              <TransientSuccess trigger={uploadResult?.saved ? uploadResult.photoKey : null} label="Uploaded" />
-            </ActionStatus>
-          </ActionRow>
+          <ActionRow><Button type="submit">{uploadBusy ? 'Uploading…' : 'Upload photo'}</Button></ActionRow>
         </fieldset>
       </upload.Form>
       </>}
@@ -229,11 +231,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
           <Switch name="isPublic" defaultChecked={asset.isPublic} label="Public access" />
           <Hint className="mb-4">Anyone with access to this public page can view the information exposed here. Only Group members can edit.</Hint>
           {editResult?.error && <p role="alert">{editResult.error}</p>}
-          <ActionRow><Button type="submit">{editBusy ? 'Saving…' : 'Save changes'}</Button>
-            <ActionStatus className="w-26">
-              <TransientSuccess trigger={editResult?.saved ? editResult : null} label="Saved" />
-            </ActionStatus>
-          </ActionRow>
+          <ActionRow><Button type="submit">{editBusy ? 'Saving…' : 'Save changes'}</Button></ActionRow>
         </fieldset>
       </edit.Form>
     </Panel>}

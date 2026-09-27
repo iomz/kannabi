@@ -19,7 +19,7 @@ export function ThemeSelector({ name, value, previewMode, disabled = false, onCh
 }) {
   const id = useId();
   return <fieldset className="mb-6">
-    <legend className="mb-3 text-[.9rem] font-[550]">Theme</legend>
+    <legend className="sr-only">Theme</legend>
     <Hint className="mb-3 text-[.78rem]">Choose an instance-wide theme. Preview its Light and Dark
       variants without changing your Profile appearance.</Hint>
     <fieldset className="mb-[.8rem]"><legend className="sr-only">Preview mode</legend>

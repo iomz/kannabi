@@ -5,6 +5,7 @@ import { ThemePreview } from './theme-preview';
 import type { ThemeDefinition } from './themes/types';
 import { useResolvedAppearance } from './appearance';
 import { useThemeRuntime } from './theme-runtime';
+import { notify, notifyFailure } from './notify';
 import { Hint } from './ui';
 
 /** Same card as the theme grid: the radio inside carries the selected state,
@@ -38,11 +39,13 @@ export function AppearanceSelector({ value, theme }: { value: AppearancePreferen
     if (fetcher.data.saved && fetcher.data.appearance) {
       persisted.current = fetcher.data.appearance;
       setSelected(fetcher.data.appearance);
+      notify('Appearance saved');
     }
     if (!fetcher.data.saved) {
       persisted.current = previous.current;
       setSelected(previous.current);
       setAppearance(previous.current);
+      notifyFailure(fetcher.data.error ?? 'Appearance could not be saved');
     }
   }, [fetcher.data, fetcher.state, setAppearance]);
 
@@ -61,7 +64,6 @@ export function AppearanceSelector({ value, theme }: { value: AppearancePreferen
     <input type="hidden" name="intent" value="appearance" />
     <legend className="mb-[.45rem] text-[1.05rem] font-[650]">Appearance</legend>
     <Hint className="mb-4">Choose how {theme.label} appears for your account.</Hint>
-    {fetcher.data?.error && <p role="alert">{fetcher.data.error}</p>}
     <div className="mb-4 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
       {appearancePreferences.map((preference) => {
         const scheme = preference === 'system' ? systemScheme : preference;

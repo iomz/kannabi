@@ -10,7 +10,7 @@ import { mailPasswordAction } from '../mail-form';
 import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
 import { Switch } from '../switch';
-import { TransientSuccess } from '../transient-success';
+import { notify } from '../notify';
 import type { Route } from './+types/settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -77,6 +77,9 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         // Blank is the unconfigured state: no ceiling, so a token may be
         // created with no expiry. It is not a number Kannabi chose.
         apiTokenMaxLifetimeDays: ceiling === '' ? null : Number(ceiling),
+        toastSeconds: Number(data.get('toastSeconds')),
+        showAssetId: data.get('showAssetId') === 'on',
+        showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
       } }));
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
@@ -135,8 +138,15 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
       setDirty(false);
       setSmtpPassword('');
       setRemovePassword(false);
+      notify('Mail configuration saved');
     }
   }, [save.data]);
+  useEffect(() => {
+    if (test.data?.kind === 'mail-test' && test.data.saved) notify('Test email sent');
+  }, [test.data]);
+  useEffect(() => {
+    if (reset.data?.kind === 'secret-reset' && reset.data.saved) notify('Encrypted credentials reset');
+  }, [reset.data]);
   const result = save.data?.kind === 'mail' ? save.data : null;
   const testResult = test.data?.kind === 'mail-test' ? test.data : null;
   const resetResult = reset.data?.kind === 'secret-reset' ? reset.data : null;
@@ -206,9 +216,6 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
           <Field label="Sender name"><Input name="senderName" defaultValue={mail.senderName ?? ''} maxLength={100} /></Field>
         </div>
         <ActionRow><Button type="submit" disabled={saveBusy}>{saveBusy ? 'Saving…' : 'Save mail configuration'}</Button>
-          <ActionStatus className="w-22 min-w-22">
-            <TransientSuccess trigger={result?.saved && !dirty ? result : null} label="Saved" />
-          </ActionStatus>
         </ActionRow>
       </fieldset>
     </save.Form>
@@ -221,9 +228,6 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
         <Field label="Test recipient" className="m-0 flex-1"><Input name="recipient" type="email" required maxLength={254} /></Field>
         <ActionRow><Button type="submit" disabled={dirty || mail.operationalState !== 'configured' || test.state !== 'idle'}>
           {test.state !== 'idle' ? 'Sending…' : 'Send test email'}</Button>
-          <ActionStatus className="w-22 min-w-22">
-            <TransientSuccess trigger={testResult?.saved ? testResult : null} label="Sent" />
-          </ActionStatus>
         </ActionRow>
       </test.Form>
       {dirty && <Hint className="mt-3">Save mail changes before testing.</Hint>}
@@ -233,9 +237,6 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
       <h3 className={subHeading}>Instance master-key recovery</h3>
       <p className="text-[.82rem] text-muted-foreground">Restore the instance master key and restart Kannabi, or explicitly reset all encrypted credentials. Reset disables mail and cannot be undone.</p>
       {resetResult?.error && <p role="alert">{resetResult.error}</p>}
-      <ActionStatus className="mb-2 min-h-8">
-        <TransientSuccess trigger={resetResult?.saved ? resetResult : null} label="Encrypted credentials reset" />
-      </ActionStatus>
       <reset.Form method="post"><input type="hidden" name="intent" value="secret-reset" />
         <input type="hidden" name="revision" value={mail.revision} />
         <Label className="mb-[1.15rem]"><Checkbox name="confirmed" required />I understand this removes all encrypted credentials.</Label>
@@ -264,6 +265,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     if (fetcher.data.saved && fetcher.data.settings) {
       persisted.current = fetcher.data.settings;
       setCurrent(fetcher.data.settings);
+      notify('Instance settings saved');
     } else if (!fetcher.data.saved) {
       persisted.current = previous.current;
       setCurrent(previous.current);
@@ -278,7 +280,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     if (change.themeId) setThemeId(next.themeId);
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
-      toastSeconds: String(next.toastSeconds) },
+      toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
+      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '' },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -295,24 +298,28 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           {busy ? <StatusPill>Saving…</StatusPill>
             : fetcher.data?.kind === 'settings' && fetcher.data.error
               ? <StatusPill tone="error" role="alert" title={fetcher.data.error}>Error: {fetcher.data.error}</StatusPill>
-              : fetcher.data?.kind === 'settings' && fetcher.data.saved
-                ? <TransientSuccess trigger={fetcher.data} label="Saved" /> : null}
+              : null}
         </ActionStatus>
       </div>
       <p className="mt-[.65rem] text-[.9rem] text-muted-foreground">Reporting policy, time presentation, theme, and mail delivery for this deployment.</p>
     </div>
-    <Panel form><h2>Reporting, display, and appearance</h2>
+    <Panel form><h2>General</h2>
       <fetcher.Form method="post"><fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="settings" />
         <Switch name="requirePhoto" checked={current.requirePhoto}
           onCheckedChange={(requirePhoto) => update({ requirePhoto })}
           label="Require photo when reporting an Asset" />
         <p className={settingHelp}>Applies to new Asset reports.</p>
+        <Switch name="showAssetId" checked={current.showAssetId} disabled={busy}
+          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show Kannabi ID on Asset pages" />
+        <p className={settingHelp}>Shows Kannabi’s stable UUIDv7 reference for the Asset. The Asset URI remains available independently.</p>
+        <Switch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
+          onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
+          label="Show identifier policy version on Asset pages" />
+        <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />
         <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
-        <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
-          onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
         <Field label="Longest API token lifetime (days)">
           <Input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
             defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
@@ -335,6 +342,10 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         <p className={settingHelp}>Between {minToastSeconds} and {maxToastSeconds}. Resting the pointer
           on a message holds it, however short this is.</p>
       </fieldset></fetcher.Form>
+    </Panel>
+    <Panel className="max-w-3xl"><h2>Theme</h2>
+      <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
+        onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
     </Panel>
     <MailSettings mail={mail} />
   </>;

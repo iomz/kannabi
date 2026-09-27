@@ -8,7 +8,7 @@ import AssetPage, { clientAction as assetAction } from '../web/routes/asset.js';
 import { mount, settle } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
 import { Button } from '../web/components/ui/button.js';
-import { AllocateGiai } from '../web/asset-identifiers.js';
+import { AllocateGiai, IdentifierForm } from '../web/asset-identifiers.js';
 import { InventoryControls, noFilters } from '../web/inventory-controls.js';
 import { assetPageRequest } from './asset-page.js';
 
@@ -50,6 +50,7 @@ test('every existing Group form submits its intended API mutation on click', asy
       }
       const before = calls.length;
       await settle(() => button.click());
+      await settle();
       assert.equal(calls.length, before + 1, `${label} must reach the API exactly once`);
       assert.deepEqual(calls.at(-1), { path, method, body });
     }
@@ -75,22 +76,56 @@ test('Asset Save changes submits both name and public visibility through its fet
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
+    assert.equal([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'), false,
+      'Kannabi ID hidden by default');
+    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'),
+      'Asset URI remains separately available');
     view.field('input[name="name"]')!.value = 'After';
     // Use the switch's native checkbox: happy-dom does not implement checkbox
     // activation for the constructed PointerEvent Base UI forwards to it.
     await settle(() => view.field('input[name="isPublic"]')!.click());
     assert.equal(document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
     await settle(() => view.button('Save changes')!.click());
+    await settle();
     assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After', isPublic: true } }]);
-    assert.match(view.text(), /Saved/);
-    await settle(() => view.button('Allocate GIAI')!.click());
+    await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
     view.field('input[name="gtin"]')!.value = '00614141123452';
     view.field('input[name="serial"]')!.value = 'fixture-1';
-    await settle(() => view.button('Add identifier')!.click());
+    await settle(() => view.button('Record existing identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'sgtin', gtin: '00614141123452', serial: 'fixture-1' } });
+    const scheme = view.field('select[name="scheme"]')!;
+    await settle(() => {
+      scheme.value = 'giai';
+      scheme.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.match(view.text(), /GIAI value \(AI 8004\)/);
+    view.field('input[name="assetReference"]')!.value = '024';
+    await settle(() => view.button('Record existing identifier')!.click());
+    assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
+      body: { scheme: 'giai', assetReference: '024' } });
+    assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
+      'generic external identifier form must never invoke Kannabi issuance');
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
+});
+
+test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI', () => {
+  const id = newAssetId();
+  const router = createMemoryRouter([{ path: '/assets/:id', element: createElement(AssetPage, { loaderData: {
+    asset: { id, name: 'Presentation check', isPublic: false, owner: null, groups: [],
+      reportedBy: { key: 'reporter', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
+      identifiers: [], photos: [], allocation: null },
+    settings: { displayTimezone: 'UTC', showAssetId: true, showIdentifierPolicyVersion: false },
+    canEdit: false, authenticated: true, canViewReporterProfile: false, assetUri: `https://kannabi.test/assets/${id}`,
+    namespaces: [], controlled: [], canGrant: false,
+  } } as never) }], { initialEntries: [`/assets/${id}`] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'));
+    assert.ok([...document.querySelectorAll('dd code')].some((node) => node.textContent === id));
+    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'));
+  } finally { view.stop(); router.dispose(); }
 });
 
 test('explicit submit buttons preserve validation, submitter data, and non-submit actions', () => {
@@ -114,11 +149,28 @@ test('explicit submit buttons preserve validation, submitter data, and non-submi
 });
 
 test('GIAI empty state describes actor eligibility rather than a single Asset Group', () => {
-  const view = mount(createElement(AllocateGiai, { namespaces: [], allocation: null, busy: false, error: null, saved: null }));
+  const view = mount(createElement(AllocateGiai, { namespaces: [], allocation: null,
+    allocationAttached: false, busy: false, error: null }));
   try {
     assert.match(view.text(), /You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset/);
     assert.match(view.text(), /collaborating Group you belong to/);
-    assert.equal(view.button('Allocate GIAI'), null);
+    assert.equal(view.button('Issue GIAI'), null);
+  } finally { view.stop(); }
+});
+
+test('generic identifier form explicitly records existing external identifiers only', async () => {
+  const view = mount(createElement(IdentifierForm, { busy: false, error: null }));
+  try {
+    assert.match(view.text(), /Record an existing identifier already assigned by an external authority/);
+    assert.match(view.text(), /never issues identifiers/);
+    assert.equal(view.field('input[name="assetReference"]'), null, 'SGTIN starts selected');
+    const select = view.field('select[name="scheme"]')!;
+    select.value = 'giai';
+    await settle(() => select.dispatchEvent(new Event('change', { bubbles: true })));
+    assert.match(view.text(), /GIAI value \(AI 8004\)/);
+    assert.match(view.text(), /already assigned by an external authority, including its company prefix/);
+    assert.match(view.text(), /Kannabi validates GS1 syntax/);
+    assert.match(view.text(), /does not verify who assigned it or who controls its prefix/);
   } finally { view.stop(); }
 });
 

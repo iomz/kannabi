@@ -1,7 +1,7 @@
 import { Form, redirect, useNavigation } from 'react-router';
 import { useEffect, useRef } from 'react';
 import { api, unwrap } from '../api';
-import { TransientSuccess } from '../transient-success';
+import { notify } from '../notify';
 import { formatExclusionRanges, parseExclusionRanges } from '../../server/giai-allocation.js';
 import type { GiaiNamespace } from '../../server/identity-store.js';
 import type { Route } from './+types/groups';
@@ -33,24 +33,29 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
     switch (intent) {
       case 'group':
         await unwrap(await api.groups.$post({ json: { name: text('name') } }));
+        notify('Group created');
         break;
       case 'member':
         if (!groupKey) throw new Error('Group is required');
         const result = await unwrap(await api.groups[':key'].members.$post({ param: { key: groupKey }, json: { userKey: text('userKey') } }));
+        if (result.added) notify('Member added');
         return result.added
           ? { intent, groupKey, status: 'added', message: 'Member added' }
           : { intent, groupKey, status: 'already-member', message: 'Member is already in this Group' };
       case 'leave':
         await unwrap(await api.groups[':key'].membership.$delete({ param: { key: text('groupKey') } }));
+        notify('Left Group');
         break;
       case 'namespace':
         if (!groupKey) throw new Error('Group is required');
         await unwrap(await api.groups[':key']['giai-namespaces'].$post({ param: { key: groupKey },
           json: { gcp: text('gcp'), exclusions: parseExclusionRanges(text('exclusions')) } }));
+        notify('GS1 Company Prefix configured');
         break;
       case 'namespace-active':
         await unwrap(await api['giai-namespaces'][':key'].$patch({ param: { key: text('namespaceKey') },
           json: { active: text('active') === 'true' } }));
+        notify(text('active') === 'true' ? 'GS1 Company Prefix reactivated' : 'GS1 Company Prefix deactivated');
         break;
 
       default: throw new Error('Unknown action');
@@ -110,9 +115,8 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
       <Input name="userKey" required /></Field>
     <Button type="submit" disabled={busy}>Add member</Button>
     <div className="flex min-h-8 basis-full items-center" aria-live="polite" aria-atomic="true">
-      {result?.status === 'added' ? <TransientSuccess trigger={result} label={result.message} />
-        : result?.status === 'already-member' ? <StatusPill className="whitespace-normal">{result.message}</StatusPill>
-          : result?.status === 'error' ? <StatusPill tone="error" className="whitespace-normal" role="alert">{result.message}</StatusPill> : null}
+      {result?.status === 'already-member' ? <StatusPill className="whitespace-normal">{result.message}</StatusPill>
+        : result?.status === 'error' ? <StatusPill tone="error" className="whitespace-normal" role="alert">{result.message}</StatusPill> : null}
     </div>
   </Form>;
 }
