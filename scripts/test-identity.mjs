@@ -6,7 +6,10 @@ import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { readdirSync } from 'node:fs';
 
 const exec = promisify(execFile);
-for (const testFile of readdirSync('server').filter((file) => file.endsWith('.integration.test.ts')).sort()) {
+const suites = readdirSync('server').filter((file) => file.endsWith('.integration.test.ts')).sort();
+const selected = process.argv.slice(2);
+if (selected.some((file) => !suites.includes(file))) throw new Error('Pass integration test filenames from server/');
+for (const testFile of selected.length ? selected : suites) {
   const name = `kannabi-identity-test-${randomUUID()}`;
   const password = randomUUID();
   const image = process.env.NEO4J_TEST_IMAGE ?? 'neo4j:5-community';

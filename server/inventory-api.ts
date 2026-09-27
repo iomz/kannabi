@@ -12,7 +12,7 @@ import { basisReference, type ChangeOrigin } from './change-provenance.js';
 import { validateCreateApiToken, type ApiTokenService, type TokenCredential } from './api-token.js';
 import { assetId } from './asset-id.js';
 import { identifierInputFields } from './gs1.js';
-import { AdministrationError, LastAdministratorError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
+import { AdministrationError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
 
@@ -382,6 +382,12 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         actor(c.get('user')), changeOrigin(c));
       return c.json({ asset });
     })
+    .put('/assets/:id/collaboration/:groupKey', async (c) => c.json(
+      await store.setAssetCollaboration(assetId(c.req.param('id')), actor(c.get('user')),
+        c.req.param('groupKey'), true, changeOrigin(c))))
+    .delete('/assets/:id/collaboration/:groupKey', async (c) => c.json(
+      await store.setAssetCollaboration(assetId(c.req.param('id')), actor(c.get('user')),
+        c.req.param('groupKey'), false, changeOrigin(c))))
     // External identifiers are attached and detached explicitly. Knowing an
     // identifier grants no access: Group authorization is checked as usual.
     .post('/assets/:id/identifiers', validator('json', (value) =>
@@ -420,6 +426,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     .onError((error, c) => {
       if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
       if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);
+      if (error instanceof LastCollaborationError) return c.json({ error: error.message }, 409);
       if (error instanceof MailRevisionConflictError) return c.json({ error: error.message }, 409);
       if (error instanceof SecretUnavailableError) return c.json({ error: 'Instance master key recovery is required before SMTP credentials can be changed' }, 409);
       if (error instanceof MailDeliveryError) return c.json({ error: error.message, category: error.category },
