@@ -77,6 +77,8 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         // Blank is the unconfigured state: no ceiling, so a token may be
         // created with no expiry. It is not a number Kannabi chose.
         apiTokenMaxLifetimeDays: ceiling === '' ? null : Number(ceiling),
+        showAssetId: data.get('showAssetId') === 'on',
+        showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
       } }));
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
@@ -278,7 +280,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     if (change.themeId) setThemeId(next.themeId);
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
-      toastSeconds: String(next.toastSeconds) },
+      toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
+      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '' },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -313,6 +316,13 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
         <ThemeSelector name="themeId" value={current.themeId} previewMode={previewMode ?? colorScheme} disabled={busy}
           onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
+        <Switch name="showAssetId" checked={current.showAssetId} disabled={busy}
+          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show native Asset ID on Asset pages" />
+        <p className={settingHelp}>Controls only the UUIDv7 detail field. The Asset URI remains available independently.</p>
+        <Switch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
+          onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
+          label="Show identifier policy version on Asset pages" />
+        <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
         <Field label="Longest API token lifetime (days)">
           <Input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
             defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}

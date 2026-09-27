@@ -24,13 +24,14 @@ Preserve the README naming story at the bottom of README.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
 - Every Asset has an immutable application-owned `Asset.id`, assigned at reporting time and never changed; startup verifies this and fails closed on data that violates it.
-- `Asset.id` is a canonical lowercase UUIDv7 and is the only Kannabi Asset identity; it addresses the Asset everywhere, including the canonical public Asset URI.
+- `Asset.id` is a canonical lowercase UUIDv7, immutable and persistence-independent; it anchors internal Asset references and the canonical Asset URI without outranking domain identifier schemes.
+- Identifier presentation must not imply a hierarchy between Kannabi's native Asset ID and domain identifier schemes. `Asset.id` is a stable implementation anchor, not a claim that UUID is the Asset's primary domain identity. GS1 and other identifiers are first-class identifiers associated with the Asset. Distinguish identifiers by scheme, semantics, provenance and authority, not by a user-facing “internal vs external” hierarchy. Whether the native Asset ID appears in ordinary UI is a presentation/deployment concern and never changes identity semantics.
 - Migration assigns a native identity only where one is missing, under a lock that makes concurrent startup safe; an unrecognized identity is never repaired or replaced.
 - The UUIDv7 timestamp has no domain meaning; Asset chronology uses explicit fields such as `reportedAt`.
 - Internal database keys, including Neo4j node identity, remain implementation details.
 - A Kannabi Asset exists independently of GS1. Registering and managing one must never require GS1 knowledge or a GS1 identifier.
 - External identifiers are optional and multiple: zero is a normal Asset state, and identifiers are attached and detached after creation without touching `Asset.id`.
-- External identifiers are external identities, never Kannabi's native Asset identity, and never a basis for authorization; Asset access stays Group-derived.
+- Domain identifiers retain their scheme and semantics whether Kannabi issues them or records an externally assigned value; neither possession nor issuance makes them authorization grants. Asset access stays Group-derived.
 - GS1 syntax rules are enforced strictly at one boundary, and the internal domain model must not become the GS1 ontology.
 - GS1 `req=`/`ex=` association rules belong to a single AI element string; never apply them across the independent identifiers of one Asset. Asset-level cardinality is permissive, GS1 validity within an identifier is strict.
 - Persistence labels that carry a derived GS1 level are persistence vocabulary; never promote them into domain concepts or expose them as identifier schemes.

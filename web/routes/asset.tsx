@@ -158,7 +158,7 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
     <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">
-      <dt>Asset ID</dt><dd><code>{asset.id}</code></dd>
+      {settings.showAssetId && <><dt>Asset ID</dt><dd><code>{asset.id}</code></dd></>}
       <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
       <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
       <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
@@ -172,7 +172,8 @@ export default function AssetPage({ loaderData: { asset, canEdit, canViewReporte
       onChange={(groupKey, grant) => collaboration.submit({ groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
     <Panel><h2>Identifiers</h2>
-      <IdentifierList identifiers={asset.identifiers} canEdit={canEdit} busy={identifierBusy}
+      <IdentifierList identifiers={asset.identifiers} allocation={asset.allocation}
+        showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
       {canEdit && <allocate.Form method="post" className="mb-6">
         <AllocateGiai namespaces={namespaces} allocation={asset.allocation} busy={allocateBusy}

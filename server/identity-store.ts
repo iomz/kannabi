@@ -515,7 +515,8 @@ export class IdentityStore {
       // The pre-Phase-2 identifier schema has no remaining nodes to guard.
       await session.run('DROP CONSTRAINT identifier_claim IF EXISTS');
       await session.run(`MERGE (s:Settings {key: 'instance'})
-        ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0
+        ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0,
+          s.showAssetId = false, s.showIdentifierPolicyVersion = false
         SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
       await session.run(`MERGE (m:MailConfiguration {key: 'instance'})
         ON CREATE SET m.enabled = false, m.transport = 'smtp', m.revision = 0
@@ -1292,7 +1293,9 @@ export class IdentityStore {
     const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'})
       RETURN s { .requirePhoto, .displayTimezone, .themeId,
         apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays),
-        toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)) } AS settings`,
+        toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)),
+        showAssetId: coalesce(s.showAssetId, false),
+        showIdentifierPolicyVersion: coalesce(s.showIdentifierPolicyVersion, false) } AS settings`,
     { defaultToastSeconds }));
     return result.records[0].get('settings');
   }
@@ -1304,7 +1307,8 @@ export class IdentityStore {
         SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
           s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
           s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
-          s.toastSeconds = $settings.toastSeconds
+          s.toastSeconds = $settings.toastSeconds, s.showAssetId = $settings.showAssetId,
+          s.showIdentifierPolicyVersion = $settings.showIdentifierPolicyVersion
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;

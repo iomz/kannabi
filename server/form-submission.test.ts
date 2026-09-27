@@ -75,6 +75,10 @@ test('Asset Save changes submits both name and public visibility through its fet
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
+    assert.equal([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Asset ID'), false,
+      'native Asset ID hidden by default');
+    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'),
+      'Asset URI remains separately available');
     view.field('input[name="name"]')!.value = 'After';
     // Use the switch's native checkbox: happy-dom does not implement checkbox
     // activation for the constructed PointerEvent Base UI forwards to it.
@@ -103,6 +107,24 @@ test('Asset Save changes submits both name and public visibility through its fet
     assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
       'generic external identifier form must never invoke Kannabi issuance');
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
+});
+
+test('enabling native Asset ID presentation shows UUID while retaining the Asset URI', () => {
+  const id = newAssetId();
+  const router = createMemoryRouter([{ path: '/assets/:id', element: createElement(AssetPage, { loaderData: {
+    asset: { id, name: 'Presentation check', isPublic: false, owner: null, groups: [],
+      reportedBy: { key: 'reporter', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
+      identifiers: [], photos: [], allocation: null },
+    settings: { displayTimezone: 'UTC', showAssetId: true, showIdentifierPolicyVersion: false },
+    canEdit: false, authenticated: true, canViewReporterProfile: false, assetUri: `https://kannabi.test/assets/${id}`,
+    namespaces: [], controlled: [], canGrant: false,
+  } } as never) }], { initialEntries: [`/assets/${id}`] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Asset ID'));
+    assert.ok([...document.querySelectorAll('dd code')].some((node) => node.textContent === id));
+    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'));
+  } finally { view.stop(); router.dispose(); }
 });
 
 test('explicit submit buttons preserve validation, submitter data, and non-submit actions', () => {

@@ -24,6 +24,10 @@ export type Settings = {
    * pointer resting on it.
    */
   toastSeconds: number;
+  /** Show Kannabi's native Asset locator on ordinary Asset pages. */
+  showAssetId: boolean;
+  /** Show the accepting GS1 policy stamp beside recorded identifiers. */
+  showIdentifierPolicyVersion: boolean;
 };
 
 /** The shipped lifetime, and the one every existing deployment keeps. */
@@ -59,9 +63,11 @@ export function apiTokenLifetimeDays(value: unknown, field: string): number {
 
 export function validateSettings(value: unknown): Settings {
   const input = record(value, ['requirePhoto', 'displayTimezone', 'themeId', 'apiTokenMaxLifetimeDays',
-    'toastSeconds']);
+    'toastSeconds', 'showAssetId', 'showIdentifierPolicyVersion']);
   if (typeof input.requirePhoto !== 'boolean' || typeof input.displayTimezone !== 'string'
-      || !isThemeId(input.themeId)) {
+      || !isThemeId(input.themeId)
+      || (input.showAssetId !== undefined && typeof input.showAssetId !== 'boolean')
+      || (input.showIdentifierPolicyVersion !== undefined && typeof input.showIdentifierPolicyVersion !== 'boolean')) {
     throw new ValidationError('Photo requirement, display timezone, and supported theme are required');
   }
   try { new Intl.DateTimeFormat('en', { timeZone: input.displayTimezone }); }
@@ -75,6 +81,8 @@ export function validateSettings(value: unknown): Settings {
     // lifetime rather than an error.
     toastSeconds: input.toastSeconds === undefined || input.toastSeconds === null
       ? defaultToastSeconds : toastSeconds(input.toastSeconds, 'toastSeconds'),
+    showAssetId: input.showAssetId === true,
+    showIdentifierPolicyVersion: input.showIdentifierPolicyVersion === true,
   };
 }
 /** Kannabi's own date-only presentation.

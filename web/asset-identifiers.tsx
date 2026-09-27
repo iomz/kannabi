@@ -11,8 +11,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, ActionStatus, Field, Hint, NativeSelect } from './ui';
 
-export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
-  identifiers: readonly AttachedIdentifier[]; canEdit: boolean; busy: boolean;
+export function IdentifierList({ identifiers, allocation, showPolicyVersion, canEdit, busy, onDetach }: {
+  identifiers: readonly AttachedIdentifier[]; allocation: GiaiAllocation | null; showPolicyVersion: boolean;
+  canEdit: boolean; busy: boolean;
   onDetach: (key: string) => void;
 }) {
   if (!identifiers.length) {
@@ -26,6 +27,8 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
         <Badge variant={identifier.level === 'individual' ? 'brand' : 'secondary'}>
           {levelLabels[identifier.level]}
         </Badge>
+        <Badge variant="outline">{identifier.scheme === 'giai'
+          && identifier.components.assetReference === allocation?.value ? 'Issued by Kannabi' : 'Recorded existing'}</Badge>
       </div>
       <code className="mt-[.35rem] block break-all">{identifier.canonical}</code>
       <dl className="mt-2 mb-0 flex flex-wrap gap-x-5 gap-y-1 [&_dd]:m-0 [&_dd]:break-all [&_dt]:text-[.75rem] [&_dt]:text-muted-foreground">
@@ -35,7 +38,7 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
             <dt>{input.label}</dt><dd>{identifier.components[input.name]}</dd>
           </div>)}
       </dl>
-      <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>
+      {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>}
     </div>
     {canEdit && <Button type="button" variant="outline" size="icon-sm" disabled={busy}
       className="absolute top-[.6rem] right-[.6rem] bg-card text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive [&_.icon]:size-4"
