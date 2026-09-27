@@ -104,7 +104,7 @@ function CreateUserDialog({ actionData, onDismiss }: { actionData?: UserAction; 
         <Field label="Name"><Input name="name" required maxLength={200} autoComplete="name" autoFocus /></Field>
         <Field label="Email"><Input name="email" required maxLength={254} type="email" autoComplete="email" /></Field>
         <Label className="mb-[1.15rem]"><Checkbox name="isAdmin" />System administrator</Label>
-        <ActionRow><Button>Create user</Button><Feedback actionData={actionData} intent="create" userKey={null} /></ActionRow>
+        <ActionRow><Button type="submit">Create user</Button><Feedback actionData={actionData} intent="create" userKey={null} /></ActionRow>
       </fieldset></Form>
     </DialogContent>
   </Dialog>;
@@ -128,13 +128,13 @@ function UserDialog({ user, actorKey, actionData, onDismiss }: { user: UserAccou
       <Field label="Name"><Input name="name" defaultValue={user.name} required maxLength={200} autoComplete="name" autoFocus /></Field>
       <Field label="Email" hint={self ? 'Change your own email from Profile.' : undefined}>
         <Input name="email" defaultValue={user.email} readOnly={self} required maxLength={254} type="email" autoComplete="email" /></Field>
-      <ActionRow><Button>Save user</Button><Feedback actionData={actionData} intent="identity" userKey={user.key} /></ActionRow>
+      <ActionRow><Button type="submit">Save user</Button><Feedback actionData={actionData} intent="identity" userKey={user.key} /></ActionRow>
     </fieldset></Form>
     <AccountSection heading="System role" headingId="member-role-heading">
       <Hint className="mb-3">Role changes are saved separately from name and email.</Hint>
       <Form method="post"><fieldset disabled={busy}><input type="hidden" name="intent" value="role" /><input type="hidden" name="key" value={user.key} />
         <Label className="mb-[1.15rem]"><Checkbox name="isAdmin" defaultChecked={user.isAdmin} />System administrator</Label>
-        <ActionRow><Button>Save role</Button><Feedback actionData={actionData} intent="role" userKey={user.key} /></ActionRow>
+        <ActionRow><Button type="submit">Save role</Button><Feedback actionData={actionData} intent="role" userKey={user.key} /></ActionRow>
       </fieldset></Form></AccountSection>
     <AccountSection heading="Account access" headingId="member-credential-heading">
       <p><AccessBadge user={user} /></p>
@@ -142,7 +142,7 @@ function UserDialog({ user, actorKey, actionData, onDismiss }: { user: UserAccou
         ? 'Send a single-use link so this user can reset their own password.'
         : 'Resend the single-use link so this user can finish account setup.'}</Hint>
       <Form method="post"><input type="hidden" name="intent" value="recovery" /><input type="hidden" name="key" value={user.key} />
-        <ActionRow><Button disabled={busy}>{user.credentialState === 'established'
+        <ActionRow><Button type="submit" disabled={busy}>{user.credentialState === 'established'
           ? 'Send password reset email' : 'Resend setup email'}</Button><Feedback actionData={actionData} intent="recovery" userKey={user.key} /></ActionRow></Form></AccountSection>
     <AccountSection heading="Delete user" headingId="user-delete-heading" danger>
       <Hint className="mb-3">Disables sign-in, removes personal account data and Group memberships, and preserves Asset provenance.</Hint>

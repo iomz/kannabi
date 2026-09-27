@@ -48,7 +48,7 @@ export default function Report({ loaderData: { groups, settings }, actionData }:
           <Field label={'Photo' + (settings.requirePhoto ? ' (required)' : ' (optional)')}
             hint="JPEG, PNG, or WebP, up to 10 MiB.">
             <Input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required={settings.requirePhoto} /></Field>
-          <Button>Report Asset</Button>
+          <Button type="submit">Report Asset</Button>
         </fieldset></Form>
       </Panel>}
   </>;

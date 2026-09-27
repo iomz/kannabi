@@ -74,7 +74,7 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
         <Hint className="mb-4">Your member key: <code>{user.key}</code>. Share it with a Group controller to be added.</Hint>
         <Form method="post" className={inlineForm}><input type="hidden" name="intent" value="group" />
           <Field label="New Group name"><Input name="name" required /></Field>
-          <Button disabled={busy}>Create Group</Button>
+          <Button type="submit" disabled={busy}>Create Group</Button>
         </Form>
         {!groups.length && <p>Create a Group, or ask a Group controller to add you.</p>}
         {groups.map((group) => <details key={group.key}
@@ -85,7 +85,7 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
             namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
           <Form method="post"><input type="hidden" name="groupKey" value={group.key} />
             <Hint className="mb-3">Leaving removes your access to this Group’s private Assets, including those you reported.</Hint>
-            <Button name="intent" value="leave" disabled={busy} variant="outline">Leave Group</Button>
+            <Button type="submit" name="intent" value="leave" disabled={busy} variant="outline">Leave Group</Button>
           </Form>
         </details>)}
         {controlledOnly.length > 0 && <section className="mt-6 border-t pt-5">
@@ -108,7 +108,7 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
     <Field label="Member key" hint="Adding a member lets them view and edit this Group’s private Assets and currently grants namespace access.">
       <Input name="userKey" required /></Field>
-    <Button disabled={busy}>Add member</Button>
+    <Button type="submit" disabled={busy}>Add member</Button>
     <div className="flex min-h-8 basis-full items-center" aria-live="polite" aria-atomic="true">
       {result?.status === 'added' ? <TransientSuccess trigger={result} label={result.message} />
         : result?.status === 'already-member' ? <StatusPill className="whitespace-normal">{result.message}</StatusPill>
@@ -139,7 +139,7 @@ function GiaiNamespaces({ groupKey, namespaces, busy }: {
           <input type="hidden" name="intent" value="namespace-active" />
           <input type="hidden" name="namespaceKey" value={namespace.key} />
           <input type="hidden" name="active" value={namespace.active ? 'false' : 'true'} />
-          <Button variant="outline" size="sm" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</Button>
+          <Button type="submit" variant="outline" size="sm" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</Button>
         </Form>
       </li>)}</ul>}
     <Form method="post" className={inlineForm}>
@@ -150,7 +150,7 @@ function GiaiNamespaces({ groupKey, namespaces, busy }: {
         hint="Optional. References issued before Kannabi, which it must never allocate.">
         <Input name="exclusions" placeholder="1-4,9-11,200-300" />
       </Field>
-      <Button disabled={busy}>Configure prefix</Button>
+      <Button type="submit" disabled={busy}>Configure prefix</Button>
     </Form>
   </div>;
 }

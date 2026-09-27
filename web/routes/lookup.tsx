@@ -66,7 +66,7 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
           <Input name={input.name} required={!('required' in input) || input.required} />
         </Field>)}
         {error && <p role="alert">{error}</p>}
-        <Button>{busy ? 'Looking up…' : 'Look up'}</Button>
+        <Button type="submit">{busy ? 'Looking up…' : 'Look up'}</Button>
       </fieldset></Form>
     </Panel>
     {result && <Panel><h2>Result</h2>

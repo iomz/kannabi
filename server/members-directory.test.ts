@@ -18,7 +18,7 @@ test('one User card shows every shared Group supplied for that viewer', () => {
 
   const colleague = document.querySelector<HTMLAnchorElement>('a[href="/users/colleague"]');
   assert.ok(colleague);
-  assert.match(colleague.textContent ?? '', /3 Assets you can read/);
+  assert.match(colleague.textContent ?? '', /3 Assets reported by this member that you can read/);
   assert.match(colleague.textContent ?? '', /Shared Groups: WorkshopStudio/);
   assert.equal(document.querySelectorAll('a[href="/users/colleague"]').length, 1,
     'multiple shared Groups stay in one User card');

@@ -44,8 +44,8 @@ export function IdentifierList({ identifiers, canEdit, busy, onDetach }: {
   </li>)}</ul>;
 }
 
-/** Allocation is offered only when the Asset's Group actually manages an active
- * namespace. Once Kannabi has issued one, provenance replaces the control:
+/** Allocation is offered only with an active namespace managed by a
+ * collaborating Group the actor belongs to. Once issued, provenance replaces the control:
  * there is no second allocation to offer. */
 export function AllocateGiai({ namespaces, allocation, busy, error, saved }: {
   namespaces: readonly { key: string; gcp: string }[];
@@ -57,8 +57,8 @@ export function AllocateGiai({ namespaces, allocation, busy, error, saved }: {
       this Asset from prefix <code>{allocation.gcp}</code> as reference {allocation.sequence}.</p>;
   }
   if (!namespaces.length) {
-    return <Hint>This Asset’s Group has no active GS1 Company Prefix, so Kannabi cannot
-      allocate a GIAI for it. Configure one from Groups.</Hint>;
+    return <Hint>You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset.
+      The prefix must be managed by a collaborating Group you belong to. Manage prefixes from Groups.</Hint>;
   }
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="allocate-giai" />
@@ -69,7 +69,7 @@ export function AllocateGiai({ namespaces, allocation, busy, error, saved }: {
           <option key={namespace.key} value={namespace.key}>{namespace.gcp}</option>)}
       </NativeSelect></Field>}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button>{busy ? 'Allocating…' : 'Allocate GIAI'}</Button>
+    <ActionRow><Button type="submit">{busy ? 'Allocating…' : 'Allocate GIAI'}</Button>
       <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Allocated" /></ActionStatus>
     </ActionRow>
   </fieldset>;
@@ -93,7 +93,7 @@ export function IdentifierForm({ busy, error, saved }: {
         inputMode={input.numeric ? 'numeric' : undefined} />
     </Field>)}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button>{busy ? 'Adding…' : 'Add identifier'}</Button>
+    <ActionRow><Button type="submit">{busy ? 'Adding…' : 'Add identifier'}</Button>
       <ActionStatus className="w-26"><TransientSuccess trigger={saved} label="Added" /></ActionStatus>
     </ActionRow>
   </fieldset>;

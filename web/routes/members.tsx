@@ -36,8 +36,8 @@ export default function Members({ loaderData: { members } }: Route.ComponentProp
                 {person.self && <Badge variant="secondary">You</Badge>}
               </span>
               <Hint>{person.reportedAssets === 1
-                ? '1 Asset you can read'
-                : `${person.reportedAssets} Assets you can read`}</Hint>
+                ? '1 Asset reported by this member that you can read'
+                : `${person.reportedAssets} Assets reported by this member that you can read`}</Hint>
               {person.sharedGroups.length > 0 && <span className="flex flex-wrap gap-1">
                 <span className="sr-only">Shared Groups: </span>
                 {person.sharedGroups.map((group) =>
