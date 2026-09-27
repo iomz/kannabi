@@ -300,7 +300,8 @@ The Assets workspace shows compact photo rows and loads more inventory as you sc
 All, Mine, Group access, and Public filter readable Assets; their overlapping counts reflect the current search.
 Mine means originally reported by you and never grants access.
 Identifiers, ownership, and photos remain within each Asset workflow.
-Any current Group member can add an existing User; Users can leave their own Groups.
+A Group controller (initially its creator) can add an existing User; ordinary Group members cannot add others. Group control remains after its controller leaves membership and does not itself grant Asset or namespace access. Users can leave their own Groups.
+An administrator can identify Groups with no controller through `GET /api/admin/groups/uncontrolled` and assign control to an existing active User with `POST /api/admin/groups/{key}/recover` (`{ "userKey": "..." }`). This recovery does not add membership or let the administrator read private Assets; the controller can subsequently grant membership, which does grant access.
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
 `reportedBy` grants no access and remains unchanged after the reporter leaves the Group.

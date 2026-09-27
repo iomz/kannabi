@@ -238,6 +238,15 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await store.deactivateUser(actor(c.get('user')), c.req.param('key'));
       return c.json({ deleted: true });
     })
+    .get('/admin/groups/uncontrolled', async (c) =>
+      c.json({ groups: await store.listUncontrolledGroups(actor(c.get('user'))) }))
+    .post('/admin/groups/:key/recover', validator('json', (value) => {
+      const input = record(value, ['userKey']);
+      return { userKey: requiredText(input.userKey, 'userKey') };
+    }), async (c) => {
+      await store.recoverGroupControl(actor(c.get('user')), c.req.param('key'), c.req.valid('json').userKey);
+      return c.json({ ok: true });
+    })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
     .patch('/settings', async (c) => c.json({ settings: await store.updateSettings(actor(c.get('user')), await c.req.json()) }))
     .get('/admin/mail', async (c) => {
@@ -320,6 +329,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       return c.json({ profile });
     })
     .get('/groups', async (c) => c.json({ groups: await store.listGroups(actor(c.get('user'))) }))
+    .get('/groups/controlled', async (c) =>
+      c.json({ groups: await store.listControlledGroups(actor(c.get('user'))) }))
     .post('/groups', validator('json', (value) => {
       const input = record(value, ['name']);
       return { name: requiredText(input.name, 'name') };

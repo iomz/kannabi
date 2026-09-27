@@ -139,7 +139,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       try {
         const result = await session.run(`MATCH (a:Asset {name: 'Self-deleted provenance'})-[:REPORTED_BY]->(u:User {key: $key}),
           (g:Group {key: $groupKey})
-          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF]->(state)
+          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF|CONTROLS]->(state)
           RETURN u.id IS NULL AS deleted, u.name IS NULL AS activeNameRemoved, u.email IS NULL AS anonymized,
             u.accountDeletedAt IS NOT NULL AS marked, u.key AS reporterKey, u.provenanceName AS provenanceName,
             count(state) AS stateCount,
@@ -238,7 +238,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       try {
         const result = await session.run(`MATCH (a:Asset {name: 'Retained provenance'})-[:REPORTED_BY]->(u:User {key: $key}),
           (g:Group {key: $groupKey})
-          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF]->(state)
+          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF|CONTROLS]->(state)
           RETURN u.id IS NULL AS deleted, u.name IS NULL AS activeNameRemoved, u.email IS NULL AS anonymized,
             u.accountDeletedAt IS NOT NULL AS marked, u.key AS reporterKey, u.provenanceName AS provenanceName,
             count(state) AS stateCount,

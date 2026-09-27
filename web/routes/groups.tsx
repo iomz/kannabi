@@ -16,9 +16,10 @@ const inlineForm = 'flex flex-wrap items-center gap-4 [&_label]:m-0 [&_label]:fl
 export async function clientLoader() {
   const { user } = await unwrap(await api.me.$get());
   if (!user) throw redirect('/signin');
-  const [{ groups }, { namespaces }] = await Promise.all([
-    api.groups.$get().then(unwrap), api['giai-namespaces'].$get().then(unwrap)]);
-  return { user, groups, namespaces };
+  const [{ groups }, { groups: controlledGroups }, { namespaces }] = await Promise.all([
+    api.groups.$get().then(unwrap), api.groups.controlled.$get().then(unwrap),
+    api['giai-namespaces'].$get().then(unwrap)]);
+  return { user, groups, controlledGroups, namespaces };
 }
 type GroupAction = { intent: string; groupKey: string | null;
   status: 'added' | 'already-member' | 'error'; message: string };
@@ -60,24 +61,26 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
       message: error instanceof Error ? error.message : 'Group update failed' };
   }
 }
-export default function Groups({ loaderData: { user, groups, namespaces }, actionData }: Route.ComponentProps) {
+export default function Groups({ loaderData: { user, groups, controlledGroups, namespaces }, actionData }: Route.ComponentProps) {
   const busy = useNavigation().state !== 'idle';
+  const controlledKeys = new Set(controlledGroups.map((group) => group.key));
+  const controlledOnly = controlledGroups.filter((group) => !groups.some((memberGroup) => memberGroup.key === group.key));
   return <>
     <PageHeading eyebrow="Collaboration" title="Groups"
       description="Manage the people you share Asset access with." />
     {actionData?.status === 'error' && actionData.intent !== 'member' && <p role="alert">{actionData.message}</p>}
       <Panel>
         <h2>Your Groups</h2>
-        <Hint className="mb-4">Your member key: <code>{user.key}</code>. Share it with a Group member to be added.</Hint>
+        <Hint className="mb-4">Your member key: <code>{user.key}</code>. Share it with a Group controller to be added.</Hint>
         <Form method="post" className={inlineForm}><input type="hidden" name="intent" value="group" />
           <Field label="New Group name"><Input name="name" required /></Field>
           <Button disabled={busy}>Create Group</Button>
         </Form>
-        {!groups.length && <p>Create a Group, or ask an existing member to add you.</p>}
+        {!groups.length && <p>Create a Group, or ask a Group controller to add you.</p>}
         {groups.map((group) => <details key={group.key}
           className="mt-5 border-t pt-5 [&>summary]:mb-4 [&>summary]:cursor-pointer [&>summary]:font-semibold">
           <summary>{group.name}</summary>
-          <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />
+          {controlledKeys.has(group.key) && <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />}
           <GiaiNamespaces groupKey={group.key} busy={busy}
             namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
           <Form method="post"><input type="hidden" name="groupKey" value={group.key} />
@@ -85,6 +88,14 @@ export default function Groups({ loaderData: { user, groups, namespaces }, actio
             <Button name="intent" value="leave" disabled={busy} variant="outline">Leave Group</Button>
           </Form>
         </details>)}
+        {controlledOnly.length > 0 && <section className="mt-6 border-t pt-5">
+          <h2>Groups you control</h2>
+          <Hint>Controlling a Group does not give you access to its private Assets or identifier namespaces.</Hint>
+          {controlledOnly.map((group) => <details key={group.key} className="mt-5 border-t pt-5 [&>summary]:mb-4 [&>summary]:cursor-pointer [&>summary]:font-semibold">
+            <summary>{group.name}</summary>
+            <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />
+          </details>)}
+        </section>}
       </Panel>
   </>;
 }
@@ -95,7 +106,8 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   useEffect(() => { if (result?.status === 'added') form.current?.reset(); }, [result]);
   return <Form ref={form} method="post" className={inlineForm}>
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
-    <Field label="Member key"><Input name="userKey" required /></Field>
+    <Field label="Member key" hint="Adding a member lets them view and edit this Group’s private Assets and currently grants namespace access.">
+      <Input name="userKey" required /></Field>
     <Button disabled={busy}>Add member</Button>
     <div className="flex min-h-8 basis-full items-center" aria-live="polite" aria-atomic="true">
       {result?.status === 'added' ? <TransientSuccess trigger={result} label={result.message} />

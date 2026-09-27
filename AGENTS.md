@@ -16,6 +16,9 @@ Preserve the README naming story at the bottom of README.
 - An admin-enabled token is a ceiling on the credential, never a grant. Administrator authority is re-read from the owning User on every request, and no token ever reaches an Asset outside its owner's Groups.
 - The browser Origin requirement guards cookie-authenticated writes, which a browser sends automatically. A bearer credential is authenticated on its own and never falls back to a cookie, so presenting one can never opt a cookie-authenticated request out of that check.
 - Do not introduce direct User-to-Asset ACLs.
+- Group creation explicitly grants its creator membership and membership-management control. Membership alone cannot add members; Group control alone never grants membership, Asset access, or namespace authority.
+- Account deletion removes Group-control grants without deleting Groups or requiring an automatic successor. Empty or uncontrolled Groups remain valid.
+- A system administrator can appoint an active controller only for a Group with no controller. Recovery never adds Group membership or grants Asset access.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
 - Every Asset has an immutable application-owned `Asset.id`, assigned at reporting time and never changed; startup verifies this and fails closed on data that violates it.
