@@ -320,6 +320,8 @@ Rendering an Asset and redirecting to its surfaced URI are separate operations, 
 Resolution grants nothing.
 A Digital Link naming an Asset the reader may not see returns exactly what one naming nothing returns, because a GTIN and serial are printed on the object and a distinguishable answer would let a label tell an outsider that this instance is held here.
 For the same reason `/asset/{id}` does not redirect for an Asset the reader cannot see.
+Concretely, an unauthenticated request for a **private** Asset's Digital Link answers `404` even though the address is correct and the Asset exists — the same answer an unknown identifier gets, which is the point.
+Signing in as a reader entitled to that Asset makes the same address resolve.
 
 Class-level addresses such as `/01/{gtin}` return `404`.
 Whether a GTIN becomes a Kannabi referent in its own right is an open architectural question, and answering with a list of Assets now would settle it by accident.
