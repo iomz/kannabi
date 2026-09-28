@@ -10,8 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, Field, Hint, NativeSelect } from './ui';
 
-export function IdentifierList({ identifiers, allocation, showPolicyVersion, canEdit, busy, onDetach }: {
-  identifiers: readonly AttachedIdentifier[]; allocation: GiaiAllocation | null; showPolicyVersion: boolean;
+export function IdentifierList({ identifiers, allocation, digitalLinks, showPolicyVersion, canEdit, busy, onDetach }: {
+  identifiers: readonly AttachedIdentifier[]; allocation: GiaiAllocation | null;
+  /** The Digital Link URI for each identifier Kannabi also dereferences,
+   * keyed by attachment. A class-level identifier has none: its URI is
+   * constructible, and Kannabi does not answer it. */
+  digitalLinks: Readonly<Record<string, string>>;
+  showPolicyVersion: boolean;
   canEdit: boolean; busy: boolean;
   onDetach: (key: string) => void;
 }) {
@@ -37,6 +42,10 @@ export function IdentifierList({ identifiers, allocation, showPolicyVersion, can
           .map((input) => <div key={input.name}>
             <dt>{input.label}</dt><dd>{identifier.components[input.name]}</dd>
           </div>)}
+        {digitalLinks[identifier.key] && <div>
+          <dt>GS1 Digital Link</dt>
+          <dd><a href={digitalLinks[identifier.key]}>{digitalLinks[identifier.key]}</a></dd>
+        </div>}
       </dl>
       {identifier.scheme === 'giai' && identifier.components.assetReference === allocation?.value &&
         <p className="mt-2 text-[.82rem] text-muted-foreground">Issued from managed prefix <code>{allocation.gcp}</code>

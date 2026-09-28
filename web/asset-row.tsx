@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router';
 import { useState } from 'react';
-import { assetPath, assetPhotoPath } from '../shared/asset-uri';
+import { assetPhotoPath } from '../shared/asset-uri';
+import { surfacedAssetPath } from '../server/surfaced-uri.js';
 import { schemeLabels } from '../server/gs1.js';
 import type { Asset } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
@@ -13,9 +14,12 @@ import { Badge } from '@/components/ui/badge';
 export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt' }) {
   const location = useLocation();
   return <li className="border-t first:border-t-0">
-    {/* Carrying the complete location lets the Asset page return to the view it
+    {/* The surfaced URI, so the inventory links where the Asset is published
+        rather than to an address that immediately redirects there.
+        Carrying the complete location lets the Asset page return to the view it
         was opened from — the inventory query, or the lookup that resolved it. */}
-    <Link to={assetPath(asset.id)} state={{ from: location.pathname + location.search }}
+    <Link to={surfacedAssetPath(asset.id, asset.identifiers)}
+      state={{ from: location.pathname + location.search }}
       className="grid min-h-24 grid-cols-[94px_minmax(0,1fr)_auto] items-center gap-[1.4rem] py-[.6rem] pr-[1.4rem] pl-[.65rem] text-inherit hover:bg-accent focus-visible:[outline-offset:-3px] [&:hover_strong]:underline [&:hover_strong]:[text-underline-offset:.2em] max-sm:grid-cols-[66px_minmax(0,1fr)] max-sm:gap-x-[.8rem] max-sm:gap-y-[.4rem] max-sm:p-[.7rem]">
       <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
       <div className="min-w-0 [overflow-wrap:anywhere]">

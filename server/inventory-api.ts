@@ -5,6 +5,7 @@ import { validator } from 'hono/validator';
 import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
+import { publicAudience } from './asset-audience.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
 import { record, requiredText, ValidationError } from './identity.js';
@@ -353,9 +354,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an
     // identity that is unreadable answers exactly as one that does not exist.
+    //
+    // Anonymous callers are answered as the public audience, exactly as
+    // /assets/:id already is. A public Asset is readable through its public
+    // URI, and its GS1 Digital Link URI is now one of those, so requiring a
+    // session here would make a public Asset unreachable by the very address
+    // Kannabi prints for it. Lookup still runs over the reader-visible set,
+    // so this widens who may ask and never what any reader may see.
     .get('/assets/lookup', validator('query', (value) =>
       assetLookupQuery(value as Record<string, unknown>)), async (c) =>
-      c.json(await store.lookupAssets(actor(c.get('user')), c.req.valid('query'))))
+      c.json(await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'))))
     .post('/assets', validator('json', (value) => {
       const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey']);
       return { ...input, groupKey: requiredText(input.groupKey, 'groupKey') } as ReportAsset & { groupKey: string };

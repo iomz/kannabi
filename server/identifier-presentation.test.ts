@@ -15,7 +15,7 @@ test('identifier cards show issuance provenance only for ledger-matched GIAI and
   ], allocation: { value: '061414112', gcp: '0614141', sequence: 12,
     allocatedAt: '2026-01-01T00:00:00Z', allocatedForAssetId: 'asset-id',
     allocatedBy: { key: 'user', name: 'User', status: 'active' } },
-  showPolicyVersion: false, canEdit: false, busy: false, onDetach: () => {} }));
+  digitalLinks: {}, showPolicyVersion: false, canEdit: false, busy: false, onDetach: () => {} }));
   try {
     const cards = [...document.querySelectorAll('li')];
     assert.equal(cards.length, 2);
@@ -27,9 +27,34 @@ test('identifier cards show issuance provenance only for ledger-matched GIAI and
 
 test('policy provenance appears only when instance presentation setting enables it', () => {
   const view = mount(createElement(IdentifierList, { identifiers: [{ ...recorded, key: 'recorded' }],
-    allocation: null, showPolicyVersion: true, canEdit: false, busy: false, onDetach: () => {} }));
+    allocation: null, digitalLinks: {}, showPolicyVersion: true, canEdit: false, busy: false, onDetach: () => {} }));
   try {
     assert.match(view.text(), /Recorded existing/);
     assert.ok(view.text().includes('GS1 policy ' + recorded.policyVersion));
+  } finally { view.stop(); }
+});
+
+test('a Digital Link appears only on identifiers Kannabi also dereferences', () => {
+  const gtin = canonicalIdentifier({ scheme: 'gtin', gtin: '0614141123452' });
+  const sgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '0614141123452', serial: 'aB/c%D' });
+  const view = mount(createElement(IdentifierList, { identifiers: [
+    { ...gtin, key: 'class' }, { ...sgtin, key: 'individual' },
+  ], allocation: null,
+  // The class-level GTIN deliberately has none: its URI is constructible and
+  // Kannabi answers it with 404, so offering the link would be a dead end.
+  digitalLinks: { individual: 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D' },
+  showPolicyVersion: false, canEdit: false, busy: false, onDetach: () => {} }));
+  try {
+    const links = [...document.querySelectorAll('a')];
+    assert.equal(links.length, 1);
+    // The accessible name is the URI itself, which distinguishes the cards.
+    assert.equal(links[0].textContent, 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D');
+    assert.equal(links[0].getAttribute('href'), 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D');
+    // The serial's slash stayed encoded, so following the link resolves the
+    // identifier rather than a truncated one.
+    assert.doesNotMatch(links[0].getAttribute('href') ?? '', /21\/aB\/c/);
+    const cards = [...document.querySelectorAll('li')];
+    assert.doesNotMatch(cards[0].textContent ?? '', /Digital Link/);
+    assert.match(cards[1].textContent ?? '', /GS1 Digital Link/);
   } finally { view.stop(); }
 });
