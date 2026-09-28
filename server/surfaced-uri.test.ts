@@ -3,9 +3,7 @@ import { test } from 'node:test';
 import { canonicalIdentifier } from './gs1.js';
 import { newAssetId } from './asset-id.js';
 import { assetPath } from '../shared/asset-uri.js';
-import {
-  preferredDigitalLinkIdentifier, surfacedAssetPath, surfacedElsewhere,
-} from './surfaced-uri.js';
+import { preferredDigitalLinkIdentifier, surfacedAssetPath } from './surfaced-uri.js';
 
 const gtin = canonicalIdentifier({ scheme: 'gtin', gtin: '0614141123452' });
 const sgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '0614141123452', serial: 'A1B2' });
@@ -17,7 +15,6 @@ const id = newAssetId();
 test('an Asset with no identifier surfaces its native URI', () => {
   assert.equal(preferredDigitalLinkIdentifier([]), null);
   assert.equal(surfacedAssetPath(id, []), assetPath(id));
-  assert.equal(surfacedElsewhere(id, []), false);
 });
 
 test('only an individual-level identifier may be surfaced for an Asset', () => {
@@ -77,11 +74,4 @@ test('detaching the preferred identifier changes only what is surfaced', () => {
   assert.equal(surfacedAssetPath(id, []), assetPath(id));
   // The native address is unaffected throughout.
   assert.equal(assetPath(id), '/asset/' + id);
-});
-
-test('surfacedElsewhere reports exactly when the native URI would redirect', () => {
-  assert.equal(surfacedElsewhere(id, []), false);
-  assert.equal(surfacedElsewhere(id, [gtin]), false);
-  assert.equal(surfacedElsewhere(id, [sgtin]), true);
-  assert.equal(surfacedElsewhere(id, [giai]), true);
 });

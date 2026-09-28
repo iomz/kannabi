@@ -1,5 +1,6 @@
 import { ValidationError } from './identity.js';
 import { isAssetId } from './asset-id.js';
+import { assetPath } from '../shared/asset-uri.js';
 import { parseDigitalLinkPath } from './gs1-digital-link.js';
 import { surfacedAssetPath, type SurfaceableIdentifier } from './surfaced-uri.js';
 import type { AssetAudience } from './asset-audience.js';
@@ -96,13 +97,9 @@ export async function resolveNativeAddress(resolver: AssetResolver, audience: As
   // the Asset exists and carries a Digital Link identity.
   if (!asset) return render;
   const surfaced = surfacedAssetPath(asset.id, asset.identifiers);
-  return surfaced === nativePath(asset.id)
+  return surfaced === assetPath(asset.id)
     ? render
     : Object.freeze({ kind: 'redirect' as const, location: surfaced });
-}
-
-function nativePath(id: string): string {
-  return surfacedAssetPath(id, []);
 }
 
 const render: AddressResolution = Object.freeze({ kind: 'render' as const });

@@ -74,9 +74,3 @@ export function surfacedAssetPath(id: string,
   const preferred = preferredDigitalLinkIdentifier(identifiers);
   return preferred ? digitalLinkPath(preferred) : assetPath(id);
 }
-
-/** Whether the native Asset URI would redirect to something else. */
-export function surfacedElsewhere(id: string,
-  identifiers: readonly SurfaceableIdentifier[]): boolean {
-  return surfacedAssetPath(id, identifiers) !== assetPath(id);
-}

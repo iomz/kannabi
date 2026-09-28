@@ -150,3 +150,26 @@ test('a failing session check narrows to the anonymous audience rather than wide
   // Falls back to public, which can only see less.
   assert.equal((await app.request('http://kannabi.example/8004/0614141ASSET-001')).status, 404);
 });
+
+test('the client router and the server agree on where a segment ends', async () => {
+  // The server reads the raw path, so resolution never depends on this. The
+  // application still has to match the address to a route, and that match
+  // must not treat an encoded separator inside a GIAI or serial as one. This
+  // pins the behaviour so a router upgrade that changed it is a test failure.
+  const { matchRoutes } = await import('react-router');
+  const routes = [{ path: 'asset/:id' }, { path: '01/:gtin/21/:serial' },
+    { path: '8003/:grai' }, { path: '8004/:giai' }];
+  const matched = (path: string) => {
+    const match = matchRoutes(routes, path)?.at(-1);
+    return match ? { path: match.route.path, params: match.params } : null;
+  };
+  assert.deepEqual(matched('/8004/a%2Fb'), { path: '8004/:giai', params: { giai: 'a/b' } });
+  assert.deepEqual(matched('/01/00614141123452/21/aB%2Fc%25D'),
+    { path: '01/:gtin/21/:serial', params: { gtin: '00614141123452', serial: 'aB/c%D' } });
+  // Decoded exactly once: a literal percent survives as a literal percent.
+  assert.equal(matched('/8004/a%2525b')?.params.giai, 'a%25b');
+  // A class-level address has no application route, so it reaches the
+  // application's own unavailable page behind the server's 404.
+  assert.equal(matched('/01/00614141123452'), null);
+  assert.equal(matched('/00/195201234567891232'), null);
+});
