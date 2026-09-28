@@ -33,9 +33,26 @@ export type AiEntry = Readonly<{
   requires?: readonly (readonly string[])[];
   /** `ex=`: AIs that must not appear alongside this one. */
   excludes?: readonly string[];
+  /** `dlpkey`: this AI may serve as a GS1 Digital Link primary key. */
+  digitalLinkPrimaryKey?: true;
+  /** `dlpkey=`: the alternative ordered sequences of key qualifier AIs this
+   * primary key accepts, `|` separating the alternatives.
+   *
+   * Qualifiers are optional but their order is fixed, so a conformant URI uses
+   * an ordered subsequence of one group — `(01)` with `(21)` alone is valid
+   * because it skips `(22)` and `(10)` without reordering them. Transcribed in
+   * full, including qualifiers Kannabi does not model, so the standard's data
+   * stays complete and Kannabi's coverage stays a separate statement.
+   */
+  digitalLinkQualifiers?: readonly (readonly string[])[];
 }>;
 
-/** The supported subset. Transcribed lines from release 2026-01-27:
+/** The supported subset. `dlpkey` is transcribed in full for every AI below,
+ * including qualifier AIs Kannabi does not itself accept as identifier input:
+ * which AIs are Digital Link primary keys, and which qualifiers each takes in
+ * which order, is the dictionary's statement rather than Kannabi's.
+ *
+ * Transcribed lines from release 2026-01-27:
  *
  *   01         *?  N14,csum,gcppos2                  ex=255,37 dlpkey=22,10,21|235   # GTIN
  *   21             X..20                             req=01,03,8006 ex=235          # SERIAL
@@ -48,6 +65,8 @@ export const entries: Readonly<Record<string, AiEntry>> = {
     spec: 'N14,csum,gcppos2',
     components: [{ type: 'N', length: 14, linters: ['csum', 'gcppos2'] }],
     excludes: ['255', '37'],
+    digitalLinkPrimaryKey: true,
+    digitalLinkQualifiers: [['22', '10', '21'], ['235']],
   },
   '21': {
     title: 'SERIAL',
@@ -64,11 +83,14 @@ export const entries: Readonly<Record<string, AiEntry>> = {
       { type: 'N', length: 13, linters: ['csum', 'gcppos1'] },
       { type: 'X', maxLength: 16, linters: [], optional: true },
     ],
+    digitalLinkPrimaryKey: true,
   },
   '8004': {
     title: 'GIAI',
     spec: 'X..30,gcppos1',
     components: [{ type: 'X', maxLength: 30, linters: ['gcppos1'] }],
+    digitalLinkPrimaryKey: true,
+    digitalLinkQualifiers: [['7040']],
   },
 };
 

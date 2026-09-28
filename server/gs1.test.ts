@@ -14,7 +14,9 @@ const giai = { scheme: 'giai', assetReference: '0614141ASSET-001' } as const;
 
 test('GS1 policy is versioned independently and never misattributes its GenSpec mapping', () => {
   assert.equal(gs1Policy.syntaxDictionaryRelease, syntaxDictionaryRelease);
-  assert.equal(gs1Policy.version, `${syntaxDictionaryRelease}+kannabi.1`);
+  // The overlay gained Digital Link derivation while the pinned release did
+  // not change, which is exactly the case the suffix exists to record.
+  assert.equal(gs1Policy.version, `${syntaxDictionaryRelease}+kannabi.2`);
   // GS1 does not publish this mapping, so Kannabi must own it explicitly.
   assert.equal(gs1Policy.assertedBy, 'kannabi');
   assert.match(gs1Policy.generalSpecificationsRelease, /^\d+\.\d+$/);

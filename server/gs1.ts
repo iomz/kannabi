@@ -12,6 +12,25 @@ export type IdentifierScheme = 'gtin' | 'sgtin' | 'grai' | 'giai';
 export type IdentifierLevel = 'individual' | 'class';
 export type IdentifierComponents = Readonly<Record<string, string>>;
 
+/** One AI and its value as a GS1 Digital Link expresses it. */
+export type DigitalLinkSegment = Readonly<{ ai: string; value: string }>;
+
+/** What a scheme contributes to a GS1 Digital Link URI, structurally rather
+ * than as a formatted string.
+ *
+ * `attributes` is the query-string position. It is always empty today because
+ * Kannabi constructs one URI per identifier and never unions values across an
+ * Asset's identifiers, which would assert a relationship `assertCompatible`
+ * deliberately does not establish. It exists because the standard does define
+ * compound forms — section 5.11 expresses a GIAI and a GTIN in one URI — so a
+ * later justified compound form is an addition here rather than a rewrite.
+ */
+export type DigitalLinkKey = Readonly<{
+  primary: DigitalLinkSegment;
+  qualifiers: readonly DigitalLinkSegment[];
+  attributes: readonly DigitalLinkSegment[];
+}>;
+
 export type ExternalIdentifier = Readonly<{
   scheme: IdentifierScheme;
   /** Stable GS1 element-string rendering. The persistence key and the only
@@ -49,7 +68,7 @@ export type ExternalIdentifier = Readonly<{
  * migration, not a policy bump.
  */
 export const gs1Policy = {
-  version: `${syntaxDictionaryRelease}+kannabi.1`,
+  version: `${syntaxDictionaryRelease}+kannabi.2`,
   syntaxDictionaryRelease,
   generalSpecificationsRelease: '26.0',
   assertedBy: 'kannabi',
@@ -93,12 +112,25 @@ function assetType(value: unknown): string {
 }
 
 type SchemeDefinition = {
-  /** Application Identifiers this scheme contributes to an Asset. */
+  /** Application Identifiers this scheme contributes to an Asset. The first is
+   * the GS1 Digital Link primary key; any that follow are its key qualifiers,
+   * in the order the Syntax Dictionary declares. */
   ais: readonly string[];
   fields: readonly string[];
   build(input: Record<string, unknown>): { components: IdentifierComponents; canonical: string };
   parse(canonical: string): IdentifierComponents;
   level(components: IdentifierComponents): IdentifierLevel;
+  /** This identifier as GS1 Digital Link path data. */
+  digitalLink(components: IdentifierComponents): DigitalLinkKey;
+  /** The inverse: the identifier input a Digital Link path's primary value and
+   * qualifiers represent, or `undefined` when that shape is not this scheme's.
+   *
+   * Only shape is decided here. Every value is handed to `canonicalIdentifier`
+   * afterwards, so a Digital Link address is validated by exactly the rules an
+   * attached identifier is, and the two can never diverge.
+   */
+  digitalLinkInput(ai: string, value: string,
+    qualifiers: readonly DigitalLinkSegment[]): Record<string, unknown> | undefined;
 };
 
 // AI 8003 begins with a zero filler that the standard fixes; Kannabi stores the
@@ -116,6 +148,9 @@ const schemes: Readonly<Record<IdentifierScheme, SchemeDefinition>> = {
     parse: (canonical) => ({ gtin: canonical.slice(4, 18) }),
     // A GTIN identifies a trade item, never an individual instance of one.
     level: () => 'class',
+    digitalLink: (components) => digitalLinkKey('01', components.gtin),
+    digitalLinkInput: (ai, value, qualifiers) =>
+      ai === '01' && !qualifiers.length ? { scheme: 'gtin', gtin: value } : undefined,
   },
   sgtin: {
     ais: ['01', '21'],
@@ -127,6 +162,13 @@ const schemes: Readonly<Record<IdentifierScheme, SchemeDefinition>> = {
     },
     parse: (canonical) => ({ gtin: canonical.slice(4, 18), serial: canonical.slice(22) }),
     level: () => 'individual',
+    // AI 01 is the primary key and AI 21 its qualifier: an SGTIN's Digital
+    // Link path is rooted in a trade-item key, not in a key of its own.
+    digitalLink: (components) =>
+      digitalLinkKey('01', components.gtin, [{ ai: '21', value: components.serial }]),
+    digitalLinkInput: (ai, value, qualifiers) =>
+      ai === '01' && qualifiers.length === 1 && qualifiers[0].ai === '21'
+        ? { scheme: 'sgtin', gtin: value, serial: qualifiers[0].value } : undefined,
   },
   grai: {
     ais: ['8003'],
@@ -149,6 +191,19 @@ const schemes: Readonly<Record<IdentifierScheme, SchemeDefinition>> = {
     // GS1 makes the GRAI serial optional: without it the key identifies the
     // returnable asset type, with it an individual asset within that type.
     level: (components) => (components.serial === undefined ? 'class' : 'individual'),
+    // The Digital Link path carries the whole AI 8003 value, zero filler
+    // included, which is exactly what the canonical form holds after `(8003)`.
+    digitalLink: (components) =>
+      digitalLinkKey('8003', graiFiller + components.assetType + (components.serial ?? '')),
+    digitalLinkInput(ai, value, qualifiers) {
+      if (ai !== '8003' || qualifiers.length) return undefined;
+      // `canonicalIdentifier` never sees the filler, so the `zero` linter has
+      // to be applied to it here or a path could smuggle a non-zero filler in
+      // and be silently accepted as the GRAI it is not.
+      if (!zero(value.slice(0, 1))) throw new ValidationError('A GRAI begins with a zero filler digit');
+      const serial = value.slice(14);
+      return { scheme: 'grai', assetType: value.slice(1, 14), serial: serial || undefined };
+    },
   },
   giai: {
     ais: ['8004'],
@@ -159,8 +214,43 @@ const schemes: Readonly<Record<IdentifierScheme, SchemeDefinition>> = {
     },
     parse: (canonical) => ({ assetReference: canonical.slice(6) }),
     level: () => 'individual',
+    digitalLink: (components) => digitalLinkKey('8004', components.assetReference),
+    digitalLinkInput: (ai, value, qualifiers) =>
+      ai === '8004' && !qualifiers.length ? { scheme: 'giai', assetReference: value } : undefined,
   },
 };
+
+function digitalLinkKey(ai: string, value: string,
+  qualifiers: readonly DigitalLinkSegment[] = []): DigitalLinkKey {
+  return Object.freeze({
+    primary: Object.freeze({ ai, value }),
+    qualifiers: Object.freeze(qualifiers.map((segment) => Object.freeze(segment))),
+    attributes: Object.freeze([]),
+  });
+}
+
+/** This identifier as GS1 Digital Link path data. Assembling a URI from it is
+ * `gs1-digital-link.ts`; deciding what it contains is policy and stays here. */
+export function digitalLinkKeyFor(identifier: ExternalIdentifier): DigitalLinkKey {
+  return schemes[identifier.scheme].digitalLink(identifier.components);
+}
+
+/** Resolve a Digital Link path's primary key and qualifiers back to an
+ * identifier, or `null` when no supported scheme has that shape.
+ *
+ * A shape no scheme claims is `null` — the caller decides whether that is a
+ * 404 for an address Kannabi does not serve. A shape a scheme claims but whose
+ * values do not validate throws, because that is a malformed identifier rather
+ * than an unknown one.
+ */
+export function identifierFromDigitalLink(primary: DigitalLinkSegment,
+  qualifiers: readonly DigitalLinkSegment[]): ExternalIdentifier | null {
+  for (const scheme of identifierSchemes) {
+    const input = schemes[scheme].digitalLinkInput(primary.ai, primary.value, qualifiers);
+    if (input) return canonicalIdentifier(input);
+  }
+  return null;
+}
 
 function definition(scheme: unknown): SchemeDefinition {
   if (typeof scheme !== 'string' || !(scheme in schemes)) {
@@ -256,6 +346,43 @@ export function assertReversibleSchemes(): void {
         }
       });
     });
+  }
+}
+
+/** Every supported scheme must be expressible as a GS1 Digital Link primary
+ * key followed by an ordered subsequence of one of that key's declared
+ * qualifier groups.
+ *
+ * Qualifiers are optional but their order is fixed, so skipping is conformant
+ * and reordering is not: AI 01 declares `22,10,21`, and Kannabi's SGTIN uses
+ * `21` alone, which is a valid subsequence of it. A scheme that reordered
+ * qualifiers, or used one the dictionary does not list for its primary key,
+ * would still produce a plausible-looking URI, so this is a test failure
+ * rather than a comment.
+ */
+export function assertDigitalLinkSchemes(): void {
+  for (const scheme of identifierSchemes) {
+    const [primary, ...qualifiers] = schemes[scheme].ais;
+    const entry = entries[primary];
+    if (!entry?.digitalLinkPrimaryKey) {
+      throw new Error(`Scheme ${scheme} leads with AI (${primary}), which the policy does not `
+        + 'declare as a GS1 Digital Link primary key');
+    }
+    if (!qualifiers.length) continue;
+    const groups = entry.digitalLinkQualifiers ?? [];
+    const ordered = groups.some((group) => {
+      let position = 0;
+      return qualifiers.every((ai) => {
+        const found = group.indexOf(ai, position);
+        if (found < 0) return false;
+        position = found + 1;
+        return true;
+      });
+    });
+    if (!ordered) {
+      throw new Error(`Scheme ${scheme} qualifies AI (${primary}) with ${qualifiers.map((ai) => `(${ai})`).join('')}, `
+        + 'which is not an ordered subsequence of any qualifier group the policy declares for it');
+    }
   }
 }
 
