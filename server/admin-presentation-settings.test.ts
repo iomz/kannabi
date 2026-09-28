@@ -31,8 +31,8 @@ test('instance presentation settings default hidden and render as independent ch
     assert.equal(policy.checked, false);
     assert.ok(view.text().includes('Show Kannabi ID on Asset pages'));
     assert.ok(view.text().includes('Show identifier policy version on Asset pages'));
-    assert.ok(view.text().includes('The Asset URI remains available independently.'));
-    assert.ok(view.text().includes('Shows Kannabi’s stable UUIDv7 reference for the Asset.'));
+    assert.ok(view.text().includes('A surfaced GS1 Digital Link URI is unaffected'));
+    assert.ok(view.text().includes('Shows Kannabi’s stable UUIDv7 reference for the Asset, and the native Asset URI that spells it.'));
     const general = [...document.querySelectorAll('h2')].find((heading) => heading.textContent === 'General')
       ?.closest('section');
     assert.ok(general);

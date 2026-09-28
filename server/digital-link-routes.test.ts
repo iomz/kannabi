@@ -173,3 +173,19 @@ test('the client router and the server agree on where a segment ends', async () 
   assert.equal(matched('/01/00614141123452'), null);
   assert.equal(matched('/00/195201234567891232'), null);
 });
+
+test('a detached Digital Link stays unresolvable even though the Asset moved elsewhere', async () => {
+  // The Asset kept its SGTIN and lost its GIAI. Post-mutation navigation is
+  // a client concern; resolution is unchanged, so the retired address is
+  // simply unknown and is never quietly forwarded to the surviving one.
+  const app = appWith(storeFor([sgtin], null), authFor(null));
+  const retired = await app.request('http://kannabi.example/8004/0614141ASSET-001');
+  assert.equal(retired.status, 404);
+  assert.equal(retired.headers.get('location'), null);
+  // The surviving address serves the Asset directly, as it always did.
+  assert.equal((await app.request('http://kannabi.example/01/00614141123452/21/aB%2Fc%25D')).status, 200);
+  // And the native URI surfaces it, now via the SGTIN.
+  const native = await app.request('http://kannabi.example/asset/' + assetId);
+  assert.equal(native.status, 307);
+  assert.equal(native.headers.get('location'), '/01/00614141123452/21/aB%2Fc%25D');
+});

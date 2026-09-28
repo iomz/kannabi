@@ -4,7 +4,7 @@ import { displayInstant } from '../server/settings.js';
 import { api, unwrap } from './api';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri';
 import { digitalLinkPath } from '../server/gs1-digital-link.js';
-import { surfacedAssetPath } from '../server/surfaced-uri.js';
+import { surfacedAssetPath, surfacedTransition, type SurfaceableIdentifier } from '../server/surfaced-uri.js';
 import { ReporterAttribution } from './reporter-attribution';
 import { publicShellHandle } from './anonymous-shell';
 import { AssetUri } from './asset-uri';
@@ -55,6 +55,31 @@ export async function loadAsset(id: string, request: Request) {
     nativeUri: absolute(assetPath(result.asset.id)),
     surfacedUri: absolute(surfacedAssetPath(result.asset.id, result.asset.identifiers)) };
 }
+/** An Asset as a mutation response returns it, which is all a transition needs. */
+type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[] };
+
+/** Leave an address that no longer serves this Asset.
+ *
+ * An identifier mutation can retire the very address the viewer is standing
+ * on — detaching the GIAI whose Digital Link they navigated to — and can give
+ * an Asset viewed at its native URI a Digital Link the server would now
+ * redirect that URI to. Either way the page they are on is no longer where
+ * the Asset is served, so it is recomputed and navigated to.
+ *
+ * A viewer at a valid non-preferred Digital Link stays. That address still
+ * serves the Asset, and moving them to the preferred one would do by
+ * navigation what resolution is deliberately forbidden to do by redirect.
+ *
+ * The acknowledgement is raised here rather than by the component's effect,
+ * because an action that redirects returns the fetcher no data to react to.
+ */
+function transition(asset: MutatedAsset, message: string, request: Request) {
+  const target = surfacedTransition(new URL(request.url).pathname, asset.id, asset.identifiers);
+  if (!target) return null;
+  notify(message);
+  return redirect(target);
+}
+
 export async function submitAsset(id: string, request: Request) {
   const data = await request.formData();
   const intent = data.get('intent');
@@ -95,18 +120,24 @@ export async function submitAsset(id: string, request: Request) {
       const identifier = Object.fromEntries([...data.entries()]
         .filter(([field, value]) => field !== 'intent' && typeof value === 'string' && value !== '')
         .map(([field, value]) => [field, String(value)]));
-      await unwrap(await api.assets[':id'].identifiers.$post({ param: { id }, json: identifier }));
-      return { kind, saved: true as const, error: null, photoKey: null };
+      const { asset } = await unwrap<{ asset: MutatedAsset }>(
+        await api.assets[':id'].identifiers.$post({ param: { id }, json: identifier }));
+      return transition(asset, 'Identifier recorded', request)
+        ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     if (kind === 'detach-identifier') {
-      await unwrap(await api.assets[':id'].identifiers[':key'].$delete({
-        param: { id, key: String(data.get('identifierKey') ?? '') } }));
-      return { kind, saved: true as const, error: null, photoKey: null };
+      const { asset } = await unwrap<{ asset: MutatedAsset }>(
+        await api.assets[':id'].identifiers[':key'].$delete({
+          param: { id, key: String(data.get('identifierKey') ?? '') } }));
+      return transition(asset, 'Identifier detached', request)
+        ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     if (kind === 'allocate-giai') {
-      await unwrap(await api.assets[':id'].giai.$post({ param: { id },
-        json: { namespaceKey: String(data.get('namespaceKey') ?? '') } }));
-      return { kind, saved: true as const, error: null, photoKey: null };
+      const { asset } = await unwrap<{ asset: MutatedAsset }>(
+        await api.assets[':id'].giai.$post({ param: { id },
+          json: { namespaceKey: String(data.get('namespaceKey') ?? '') } }));
+      return transition(asset, 'GIAI issued', request)
+        ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
@@ -185,7 +216,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy}
         link={canViewReporterProfile} /></dd>
       <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
-    </dl><AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri} /></Panel>
+    </dl><AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
+      showNativeUri={settings.showAssetId} /></Panel>
     <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
       busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
       onChange={(groupKey, grant) => collaboration.submit({ groupKey,

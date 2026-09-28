@@ -290,6 +290,23 @@ Selection is Kannabi presentation policy rather than GS1 policy: the standard ex
 
 Detaching the surfaced identifier changes the surfaced URI and nothing else.
 
+The native Asset URI is shown on the Asset page only when **Show Kannabi ID** is enabled in `/admin/settings`, because it is the UUIDv7 spelled as a URL and one setting governs both.
+Hiding it is presentation alone: the address still resolves, still redirects, and remains what internal references and the API use.
+A surfaced Digital Link URI is unaffected by the setting.
+
+### Moving with the Asset
+
+An identifier mutation can retire the address the viewer is standing on — detaching the GIAI whose Digital Link they navigated to — so after a successful attach, detach or issuance Kannabi recomputes where the Asset is served and navigates there if the current address is no longer one of them.
+Losing the last eligible identity navigates back to the native Asset URI.
+
+This is post-mutation client navigation, not canonicalization, and the distinction is load-bearing:
+
+- a viewer at a **valid non-preferred** Digital Link stays there, because that address still serves the Asset;
+- a retired Digital Link requested directly still resolves exactly as before, which is `404` once it no longer identifies the Asset;
+- no Digital Link is ever redirected to another.
+
+The rule is the same for every mutation rather than special-cased per scheme: leave an address that no longer serves this Asset, stay otherwise.
+
 ### Resolution
 
 Every supported Digital Link form renders the Asset directly with `200`. No Digital Link form ever redirects to another, including to the Asset's preferred one: preference governs presentation, and each supported form is an independent entry point to the same referent.

@@ -53,6 +53,7 @@ Preserve the README naming story at the bottom of README.
 - The native Asset URI is stable and always valid; the surfaced URI is presentation policy and never identity.
 - A Digital Link URI is derived from identifier data on read and never stored.
 - Each supported Digital Link form independently resolves to the Asset; Kannabi never redirects one Digital Link form to another.
+- After a mutation, a client may navigate away from an address that no longer serves the Asset. This is navigation, never canonicalization: a viewer at a valid non-preferred Digital Link stays, and resolution of every address is unchanged.
 - Kannabi dereferences the Digital Link forms it supports and makes no GS1-Conformant Resolver claim. "Canonical GS1 Digital Link URI" is the standard's term for the `id.gs1.org` form, which Kannabi never emits.
 - Resolving through a Digital Link grants no access; an Asset the reader may not see is indistinguishable from an unknown identifier.
 - Company-prefix inference and GS1-Conformant Resolver behaviour remain deferred.

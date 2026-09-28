@@ -71,15 +71,18 @@ test('Asset Save changes submits both name and public visibility through its fet
         reportedBy: { key: 'actor', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
         identifiers: [], photos: [], allocation: null },
       settings: { displayTimezone: 'UTC' }, canEdit: true, authenticated: true, canViewReporterProfile: false,
-      assetUri: `https://kannabi.test/assets/${id}`, namespaces: [{ key: 'eligible', gcp: '0614141' }], controlled: [], canGrant: false,
+      nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
+      digitalLinks: {}, namespaces: [{ key: 'eligible', gcp: '0614141' }], controlled: [], canGrant: false,
     } } as never), action: (args) => assetAction(args as never),
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
     assert.equal([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'), false,
       'Kannabi ID hidden by default');
-    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'),
-      'Asset URI remains separately available');
+    // The native Asset URI spells the same reference, so the one setting
+    // governs both and this Asset has no Digital Link to surface instead.
+    assert.equal([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'), false,
+      'native Asset URI follows the Kannabi ID setting');
     view.field('input[name="name"]')!.value = 'After';
     // Use the switch's native checkbox: happy-dom does not implement checkbox
     // activation for the constructed PointerEvent Base UI forwards to it.
@@ -117,8 +120,9 @@ test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI'
       reportedBy: { key: 'reporter', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
       identifiers: [], photos: [], allocation: null },
     settings: { displayTimezone: 'UTC', showAssetId: true, showIdentifierPolicyVersion: false },
-    canEdit: false, authenticated: true, canViewReporterProfile: false, assetUri: `https://kannabi.test/assets/${id}`,
-    namespaces: [], controlled: [], canGrant: false,
+    canEdit: false, authenticated: true, canViewReporterProfile: false,
+    nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
+    digitalLinks: {}, namespaces: [], controlled: [], canGrant: false,
   } } as never) }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {

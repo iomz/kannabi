@@ -20,7 +20,7 @@ test('the native Asset URI is the native ID path and is copied complete', () => 
 
 test('an Asset with no Digital Link identity shows one URI, labelled plainly', () => {
   const uri = `${origin}/asset/${newAssetId()}`;
-  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri }));
+  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: true }));
   try {
     const fields = [...document.querySelectorAll('input')];
     assert.equal(fields.length, 1);
@@ -34,7 +34,7 @@ test('an Asset with no Digital Link identity shows one URI, labelled plainly', (
 test('a surfaced Digital Link is offered first and the native URI stays reachable', () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
   const surfacedUri = `${origin}/8004/0614141ASSET-001`;
-  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri }));
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true }));
   try {
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri, nativeUri]);
@@ -55,4 +55,30 @@ test('the copy control hands over the exact value it displays', async () => {
   let copied = '';
   await copyAssetUri(uri, { writeText: async (value) => { copied = value; } });
   assert.equal(copied, uri);
+});
+
+test('the native Asset URI follows the instance Kannabi ID setting', () => {
+  const nativeUri = `${origin}/asset/${newAssetId()}`;
+  const surfacedUri = `${origin}/8004/0614141ASSET-001`;
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: false }));
+  try {
+    // The Digital Link is surfaced exactly as before.
+    const fields = [...document.querySelectorAll('input')];
+    assert.deepEqual(fields.map((field) => field.value), [surfacedUri]);
+    assert.match(view.text(), /GS1 Digital Link URI/);
+    // The UUIDv7 does not appear anywhere, which is the point of the setting.
+    assert.doesNotMatch(view.text(), /Kannabi Asset URI/);
+    assert.equal(view.text().includes(nativeUri), false);
+  } finally { view.stop(); }
+});
+
+test('with the setting off and no Digital Link, no address is put in front of a person', () => {
+  const uri = `${origin}/asset/${newAssetId()}`;
+  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: false }));
+  try {
+    // The address is unchanged and still resolves; it is simply not shown,
+    // which is what the deployment asked for by turning the setting off.
+    assert.equal(document.querySelectorAll('input').length, 0);
+    assert.equal(view.text().includes(uri), false);
+  } finally { view.stop(); }
 });
