@@ -128,7 +128,7 @@ A stored SGTIN already kept its components apart; a stored GRAI is decomposed in
 Legacy shape is migrated, and anything else is corruption: startup fails closed rather than repairing or discarding it.
 No class-level GTIN is materialised from an SGTIN, because that fact stays derivable.
 
-`Asset.id` addresses the Asset everywhere: lookup, editing, photos, links, and the canonical Asset URI.
+`Asset.id` addresses the Asset everywhere: lookup, editing, photos, links, and the native Asset URI.
 Neo4j node identity is an implementation detail and is never exposed.
 Kannabi owns its internal truth, and standards define its external contracts.
 
@@ -198,8 +198,8 @@ One managed GCP belongs to one Group, because Group membership is currently the 
 Any current Group member may configure a namespace and allocate from it, which is deliberately broader than the eventual model and will be narrowed by Group-scoped privileges without changing allocation semantics or ledger data.
 
 Asset links use `/asset/{id}`, and Asset-scoped photo requests use `/api/assets/{id}/photos/{key}`.
-There is one canonical Asset URI, and it carries no external identifier.
-GS1 Digital Link, company-prefix inference, resolver semantics, and identifier allocation remain deferred and will be designed as explicit external interfaces.
+The native Asset URI carries no external identifier and never changes; what Kannabi surfaces beside it is described under GS1 Digital Link below.
+Company-prefix inference and GS1-Conformant Resolver behaviour remain deferred and will be designed as explicit external interfaces.
 
 ### GS1 policy version
 
@@ -238,6 +238,78 @@ Owners remain independent from Users, and new Assets are private.
 The API obtains the actor from the authenticated session; store reads and mutations check current Group membership in Neo4j.
 Store actor arguments are trusted internal inputs, never accepted from request bodies.
 Direct database access is trusted; application validation and Neo4j uniqueness constraints jointly enforce integrity.
+
+## GS1 Digital Link
+
+An Asset carrying a supported GS1 identity also has a standards-defined Web address, and Kannabi both constructs it and answers it.
+
+Three levels are kept apart, and Kannabi implements the first two:
+
+| Level | Status |
+| --- | --- |
+| Constructing standards-correct GS1 Digital Link URIs | implemented |
+| Dereferencing the Digital Link forms Kannabi supports | implemented |
+| GS1-Conformant Resolver behaviour | not implemented |
+
+Kannabi is **not** a GS1-Conformant Resolver and must never be described as one.
+It publishes no resolver description file at `/.well-known/gs1resolver`, declares no supported primary keys, answers no linkset, and handles no `linkType` or `context`.
+Two status behaviours are taken from that standard because they are simply correct HTTP: a malformed Digital Link address is `400`, a well-formed one naming nothing Kannabi holds is `404`, and neither is ever `200`.
+
+### Addresses
+
+`Asset.id` is the identity. `/asset/{id}` is the native Asset URI: always valid, present for every Asset, and unchanged by any identifier the Asset gains or loses.
+A Digital Link URI is derived from one identifier on every read and is never stored, so it cannot drift from the identifier it comes from or become a second source of truth.
+
+| Kannabi scheme | AIs | Digital Link primary key | Path |
+| --- | --- | --- | --- |
+| GTIN | 01 | AI 01 | `/01/{gtin14}` |
+| SGTIN | 01, 21 | AI 01 with the AI 21 qualifier | `/01/{gtin14}/21/{serial}` |
+| GRAI | 8003 | AI 8003 | `/8003/0{assetType}{serial}` |
+| GIAI | 8004 | AI 8004 | `/8004/{assetReference}` |
+
+An SGTIN is not itself a Digital Link primary key: AI 01 is, and AI 21 qualifies it, so an SGTIN's path is rooted in a trade-item key.
+The GRAI path carries the whole AI 8003 value, zero filler included, which is exactly what Kannabi stores after `(8003)`.
+Which AI is a primary key and which qualifiers it takes in which order is the pinned Syntax Dictionary's `dlpkey` attribute, transcribed in full — including qualifiers Kannabi does not model, so the standard's data stays complete and Kannabi's narrower coverage stays a separate statement.
+A guard holds every scheme to a declared primary key followed by an ordered subsequence of one declared qualifier group, so a reordered or undeclared qualifier is a test failure rather than a plausible-looking URI.
+
+Six GS1 CSET 82 characters are not legal in a path segment and are percent-encoded: `"` `%` `/` `<` `>` `?`.
+Encoding happens in one pass and decoding exactly once, and resolution matches against the raw path, because a path decoded before it is split cannot tell a separator from a `%2F` inside a GIAI or a serial.
+
+Nothing Kannabi emits is a *canonical GS1 Digital Link URI*: the standard reserves that term for HTTPS on `id.gs1.org`.
+Kannabi's own URIs are valid and non-canonical, and the word is not used for the native Asset URI either.
+
+### Which URI is surfaced
+
+An Asset with an eligible GS1 identity surfaces its Digital Link URI; every other Asset surfaces its native Asset URI, unqualified and not as a lesser case.
+Selection is Kannabi presentation policy rather than GS1 policy: the standard expresses a GIAI and a GTIN in either order and states the two are not equivalent, so it defines what each form means without choosing between them.
+
+- Only an individual-level identifier is eligible. A GTIN-only Digital Link denotes a trade item, not this Asset.
+- GIAI, then a serialised GRAI, then SGTIN, because the first two are primary keys whose referent is the individual asset.
+- A tie within one scheme breaks on the canonical form, so the same Asset surfaces the same URI on every read.
+- Issuance decides nothing. A GIAI Kannabi issued does not outrank a recorded existing one; provenance grants no precedence.
+
+Detaching the surfaced identifier changes the surfaced URI and nothing else.
+
+### Resolution
+
+Every supported Digital Link form renders the Asset directly with `200`. No Digital Link form ever redirects to another, including to the Asset's preferred one: preference governs presentation, and each supported form is an independent entry point to the same referent.
+
+`/asset/{id}` answers with `307 Temporary Redirect` to the surfaced URI when one exists.
+The redirect is temporary and uncacheable because the preferred identifier can be detached at any moment; `301` and `308` would invite a client to rewrite a link that is not permanent, and `303` would claim the target is a different resource when it is the same Asset.
+`/api/assets/{id}/...`, internal references and persistence keys never redirect.
+
+Rendering an Asset and redirecting to its surfaced URI are separate operations, which is what makes a loop impossible rather than merely unlikely: the only redirect target is a Digital Link address, and a Digital Link address never redirects.
+
+Resolution grants nothing.
+A Digital Link naming an Asset the reader may not see returns exactly what one naming nothing returns, because a GTIN and serial are printed on the object and a distinguishable answer would let a label tell an outsider that this instance is held here.
+For the same reason `/asset/{id}` does not redirect for an Asset the reader cannot see.
+
+Class-level addresses such as `/01/{gtin}` return `404`.
+Whether a GTIN becomes a Kannabi referent in its own right is an open architectural question, and answering with a list of Assets now would settle it by accident.
+
+The numeric path space at the deployment's origin is reserved for Digital Link.
+Digital Link URIs are constructed at the application origin; a separate Digital Link origin belongs with resolver work.
+The status and redirect are decided in the server, which the single-page build cannot do for itself, so they apply to production builds rather than to the Vite dev server.
 
 ## Agent access over MCP
 
@@ -330,7 +402,7 @@ Ordering is name followed by `Asset.id` as a deterministic tiebreaker, independe
 Unsafe API requests require an Origin matching `APP_URL`.
 Better Auth rate limiting uses the TCP peer address set by the Node server; forwarded client IP headers are not trusted, so clients behind one reverse proxy share its rate-limit bucket.
 Authentication routes are limited to sign-up, sign-in, sign-out, session lookup, password change, and password recovery.
-External identity providers and identifier issuance remain deferred.
+External identity providers remain deferred. GIAI issuance is described under GIAI allocation above.
 
 ## Photos and administration
 

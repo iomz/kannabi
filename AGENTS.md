@@ -24,7 +24,7 @@ Preserve the README naming story at the bottom of README.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
 - Every Asset has an immutable application-owned `Asset.id`, assigned at reporting time and never changed; startup verifies this and fails closed on data that violates it.
-- `Asset.id` is a canonical lowercase UUIDv7, immutable and persistence-independent; it anchors internal Asset references and the canonical Asset URI without outranking domain identifier schemes.
+- `Asset.id` is a canonical lowercase UUIDv7, immutable and persistence-independent; it anchors internal Asset references and the native Asset URI without outranking domain identifier schemes.
 - Identifier presentation must not imply a hierarchy between Kannabi's native Asset ID and domain identifier schemes. `Asset.id` is a stable implementation anchor, not a claim that UUID is the Asset's primary domain identity. GS1 and other identifiers are first-class identifiers associated with the Asset. Distinguish identifiers by scheme, semantics, provenance and authority, not by a user-facing “internal vs external” hierarchy. Whether the native Asset ID appears in ordinary UI is a presentation/deployment concern and never changes identity semantics.
 - Migration assigns a native identity only where one is missing, under a lock that makes concurrent startup safe; an unrecognized identity is never repaired or replaced.
 - The UUIDv7 timestamp has no domain meaning; Asset chronology uses explicit fields such as `reportedAt`.
@@ -50,7 +50,12 @@ Preserve the README naming story at the bottom of README.
 - Identification level is derived from GS1 semantics and is never user-supplied or independently editable.
 - A class-level identifier may describe many Assets; an individual-level identifier identifies exactly one, enforced by schema constraints rather than application sequencing.
 - Allocation authority is never inferred from possession of an identifier; a stored identifier is not evidence that Kannabi allocated it.
-- GS1 Digital Link, resolver semantics, and identifier allocation remain deferred.
+- The native Asset URI is stable and always valid; the surfaced URI is presentation policy and never identity.
+- A Digital Link URI is derived from identifier data on read and never stored.
+- Each supported Digital Link form independently resolves to the Asset; Kannabi never redirects one Digital Link form to another.
+- Kannabi dereferences the Digital Link forms it supports and makes no GS1-Conformant Resolver claim. "Canonical GS1 Digital Link URI" is the standard's term for the `id.gs1.org` form, which Kannabi never emits.
+- Resolving through a Digital Link grants no access; an Asset the reader may not see is indistinguishable from an unknown identifier.
+- Company-prefix inference and GS1-Conformant Resolver behaviour remain deferred.
 - Account deletion removes the active personal account but preserves immutable Asset provenance by default.
 - Deleted reporters become non-active tombstones that retain only the deletion-time display name required for human-readable provenance; they must not behave as discoverable Users.
 - Tombstones do not retain email, credentials, sessions, preferences, administrator roles, or Group memberships.
