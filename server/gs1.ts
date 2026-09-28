@@ -231,7 +231,8 @@ function digitalLinkKey(ai: string, value: string,
 
 /** This identifier as GS1 Digital Link path data. Assembling a URI from it is
  * `gs1-digital-link.ts`; deciding what it contains is policy and stays here. */
-export function digitalLinkKeyFor(identifier: ExternalIdentifier): DigitalLinkKey {
+export function digitalLinkKeyFor(
+  identifier: Pick<ExternalIdentifier, 'scheme' | 'components'>): DigitalLinkKey {
   return schemes[identifier.scheme].digitalLink(identifier.components);
 }
 

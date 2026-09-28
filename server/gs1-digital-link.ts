@@ -4,6 +4,11 @@ import {
   type DigitalLinkSegment, type ExternalIdentifier,
 } from './gs1.js';
 
+/** Everything a Digital Link URI needs from an identifier. Narrower than
+ * `ExternalIdentifier` so a projection carrying only what it renders — an
+ * Asset's identifier summary, say — needs no cast to be rendered. */
+type RenderableIdentifier = Pick<ExternalIdentifier, 'scheme' | 'components'>;
+
 /** GS1 Digital Link URI syntax: rendering an identifier as a Web address, and
  * reading one back.
  *
@@ -47,7 +52,7 @@ function segments(key: { primary: DigitalLinkSegment; qualifiers: readonly Digit
 }
 
 /** The path of this identifier's GS1 Digital Link URI, origin excluded. */
-export function digitalLinkPath(identifier: ExternalIdentifier): string {
+export function digitalLinkPath(identifier: RenderableIdentifier): string {
   const key = digitalLinkKeyFor(identifier);
   const path = segments(key)
     .map((segment) => `/${segment.ai}/${encodeDigitalLinkValue(segment.value)}`).join('');
@@ -60,7 +65,7 @@ export function digitalLinkPath(identifier: ExternalIdentifier): string {
   return `${path}?${query}`;
 }
 
-export function digitalLinkUri(identifier: ExternalIdentifier, origin: string): string {
+export function digitalLinkUri(identifier: RenderableIdentifier, origin: string): string {
   return origin.replace(/\/$/, '') + digitalLinkPath(identifier);
 }
 
