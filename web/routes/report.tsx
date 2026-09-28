@@ -1,6 +1,6 @@
 import { Form, Link, redirect, useNavigation } from 'react-router';
 import { api, unwrap } from '../api';
-import { assetPath } from '../../shared/asset-uri';
+import { surfacedAssetPath } from '../../server/surfaced-uri.js';
 import { notify } from '../notify';
 import type { Route } from './+types/report';
 import { Button } from '@/components/ui/button';
@@ -23,7 +23,9 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     if (photo instanceof File && photo.size) form.set('photo', photo);
     const { asset } = await unwrap(await fetch('/api/reports', { method: 'POST', body: form }));
     notify('Asset reported');
-    return redirect(assetPath(asset.id));
+    // The surfaced URI, so reporting lands where the Asset is published
+    // rather than on an address that redirects straight there.
+    return redirect(surfacedAssetPath(asset.id, asset.identifiers));
   } catch (error) { return { error: error instanceof Error ? error.message : 'Report failed' }; }
 }
 export default function Report({ loaderData: { groups, settings }, actionData }: Route.ComponentProps) {

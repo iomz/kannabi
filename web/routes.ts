@@ -8,6 +8,13 @@ export default [
   route('reset-password', 'routes/reset-password.tsx'),
   route('assets/report', 'routes/report.tsx'),
   route('asset/:id', 'routes/asset.tsx'),
+  // GS1 Digital Link addresses. One module answers every supported form: it
+  // reads the raw path rather than these parameters, so the shapes below only
+  // have to reserve the right corner of the numeric path space. Adding a
+  // qualifier combination later adds a line here and nothing else.
+  route('01/:gtin/21/:serial', 'routes/digital-link.tsx', { id: 'digital-link-sgtin' }),
+  route('8003/:grai', 'routes/digital-link.tsx', { id: 'digital-link-grai' }),
+  route('8004/:giai', 'routes/digital-link.tsx', { id: 'digital-link-giai' }),
   route('lookup', 'routes/lookup.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),

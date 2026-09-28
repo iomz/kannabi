@@ -5,6 +5,9 @@ import { validator } from 'hono/validator';
 import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
+import { publicAudience } from './asset-audience.js';
+import { digitalLinkUri } from './gs1-digital-link.js';
+import { surfacedAssetPath } from './surfaced-uri.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
 import { record, requiredText, ValidationError } from './identity.js';
@@ -353,9 +356,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an
     // identity that is unreadable answers exactly as one that does not exist.
+    //
+    // Anonymous callers are answered as the public audience, exactly as
+    // /assets/:id already is. A public Asset is readable through its public
+    // URI, and its GS1 Digital Link URI is now one of those, so requiring a
+    // session here would make a public Asset unreachable by the very address
+    // Kannabi prints for it. Lookup still runs over the reader-visible set,
+    // so this widens who may ask and never what any reader may see.
     .get('/assets/lookup', validator('query', (value) =>
       assetLookupQuery(value as Record<string, unknown>)), async (c) =>
-      c.json(await store.lookupAssets(actor(c.get('user')), c.req.valid('query'))))
+      c.json(await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'))))
     .post('/assets', validator('json', (value) => {
       const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey']);
       return { ...input, groupKey: requiredText(input.groupKey, 'groupKey') } as ReportAsset & { groupKey: string };
@@ -374,7 +384,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         ? await store.userProfile(user.key, asset.reportedBy.key) !== null
         : false;
       return c.json({ asset, canEdit: groups.some((g) => asset.groups.some((access) => access.key === g.key)),
-        canViewReporterProfile });
+        canViewReporterProfile,
+        // Derived on every read, never stored, and added beside `asset.id`
+        // rather than in place of it: `asset.id` is the stable address, and
+        // these follow whichever identifiers the Asset currently carries.
+        // A class-level identifier gets none, because Kannabi does not
+        // dereference that address.
+        digitalLinks: asset.identifiers.filter((identifier) => identifier.level === 'individual')
+          .map((identifier) => ({ identifierKey: identifier.key, canonical: identifier.canonical,
+            uri: digitalLinkUri(identifier, origin) })),
+        surfacedUri: new URL(surfacedAssetPath(asset.id, asset.identifiers), origin).toString() });
     })
     .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {

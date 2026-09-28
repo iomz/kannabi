@@ -98,7 +98,9 @@ test('the instance decides how long a toast lives, within a readable range', () 
 });
 
 test('transient mutation acknowledgements use Sonner while durable and validation feedback stays in context', () => {
-  for (const path of ['web/routes/asset.tsx', 'web/routes/groups.tsx', 'web/routes/settings.tsx',
+  // The Asset view is shared by the native and Digital Link routes, so the
+  // acknowledgements it owns live beside it rather than in either route.
+  for (const path of ['web/asset-view.tsx', 'web/routes/groups.tsx', 'web/routes/settings.tsx',
     'web/routes/admin-users.tsx', 'web/routes/settings-profile.tsx', 'web/routes/settings-security.tsx',
     'web/routes/report.tsx', 'web/routes/signin.tsx', 'web/appearance-selector.tsx',
     'web/avatar-preference.tsx', 'web/root.tsx']) {
@@ -121,7 +123,8 @@ test('transient mutation acknowledgements use Sonner while durable and validatio
   assert.match(settings, /testResult\?\.error && <p role="alert"/, 'mail delivery diagnostics remain revisit-able inline');
   assert.match(readFileSync('web/root.tsx', 'utf8'), /actionData\?\.error/,
     'sign-out failure remains visible in the shell');
-  for (const path of ['web/routes/asset.tsx', 'web/routes/groups.tsx', 'web/routes/settings.tsx',
+  for (const path of ['web/asset-view.tsx', 'web/routes/asset.tsx', 'web/routes/digital-link.tsx',
+    'web/routes/groups.tsx', 'web/routes/settings.tsx',
     'web/routes/admin-users.tsx', 'web/routes/settings-profile.tsx', 'web/routes/settings-security.tsx',
     'web/routes/report.tsx', 'web/routes/signin.tsx', 'web/appearance-selector.tsx', 'web/avatar-preference.tsx',
     'web/asset-collaboration.tsx', 'web/asset-identifiers.tsx', 'web/profile-editor.tsx']) {

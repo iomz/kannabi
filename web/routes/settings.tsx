@@ -312,7 +312,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         <p className={settingHelp}>Applies to new Asset reports.</p>
         <Switch name="showAssetId" checked={current.showAssetId} disabled={busy}
           onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show Kannabi ID on Asset pages" />
-        <p className={settingHelp}>Shows Kannabi’s stable UUIDv7 reference for the Asset. The Asset URI remains available independently.</p>
+        <p className={settingHelp}>Shows Kannabi’s stable UUIDv7 reference for the Asset, and the native Asset URI that spells it. A surfaced GS1 Digital Link URI is unaffected, and the native address keeps resolving either way.</p>
         <Switch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
           label="Show identifier policy version on Asset pages" />
