@@ -4,7 +4,9 @@ import { assetPageRequest, assetSorts, assetDirections } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { giaiLedgerQuery } from './giai-ledger.js';
 import { isAssetId } from './asset-id.js';
-import { identifierSchemes } from './gs1.js';
+import { identifierSchemes, type ExternalIdentifier } from './gs1.js';
+import { digitalLinkPath } from './gs1-digital-link.js';
+import { surfacedAssetPath } from './surfaced-uri.js';
 import { ValidationError } from './identity.js';
 import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
 import {
@@ -35,6 +37,17 @@ const identifierLevels = {
   class: 'describes a class of Assets, so it may address several',
 } as const;
 
+/** The Digital Link path for an identifier Kannabi also answers, or null.
+ *
+ * A path rather than an absolute URI: this process has no configured public
+ * origin, and inventing one would assert a URI Kannabi cannot guarantee. A
+ * class-level identifier gets null because Kannabi does not dereference that
+ * address, so returning one would advertise a link that answers 404.
+ */
+function digitalLinkFor(identifier: ExternalIdentifier): string | null {
+  return identifier.level === 'individual' ? digitalLinkPath(identifier) : null;
+}
+
 /** A candidate, small enough to return many of. The native Asset ID is always
  * present, so any result can be carried into `get_asset` unambiguously. */
 function summarise(asset: Asset) {
@@ -54,7 +67,9 @@ function summarise(asset: Asset) {
       // holding a search result cannot ask "what else carries this identity"
       // without a round trip whose only purpose is to reformat a value.
       components: identifier.components,
+      digitalLink: digitalLinkFor(identifier),
     })),
+    surfacedPath: surfacedAssetPath(asset.id, asset.identifiers),
     // Present only when Kannabi's issuance ledger records the allocation.
     kannabiAllocatedGiai: asset.allocation ? asset.allocation.value : null,
     photoCount: asset.photos.length,
@@ -69,6 +84,8 @@ const identifierSummarySchema = z.object({
     .describe('"individual": this value identifies this one Asset. "class": it describes a kind of thing and other Assets may carry it too.'),
   components: z.record(z.string(), z.string())
     .describe('The identifier\'s parts, named exactly as resolve_external_identifier\'s arguments, so this identity can be resolved again without reformatting.'),
+  digitalLink: z.string().nullable()
+    .describe('This identity as a GS1 Digital Link path, which Kannabi dereferences to this Asset when prefixed with the deployment\'s origin. Null for a class-level identity, which Kannabi does not dereference. Kannabi is not a GS1-Conformant Resolver, and this is not a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org.'),
 });
 
 const summarySchema = z.object({
@@ -82,6 +99,8 @@ const summarySchema = z.object({
     .describe('The recorded Owner, if any. Useful for telling candidates apart; search_assets cannot filter by it, so narrow on the returned results.'),
   identifiers: z.array(identifierSummarySchema)
     .describe('Every external identity Kannabi holds for this Asset. Zero identifiers is an ordinary state, not missing data.'),
+  surfacedPath: z.string()
+    .describe('The path Kannabi puts in front of a person for this Asset: its preferred Digital Link when it has an eligible individual-level GS1 identity, and its native /asset/{assetId} path otherwise. Presentation only — assetId remains the stable identity, and this path changes if the identifier it derives from is detached.'),
   kannabiAllocatedGiai: z.string().nullable()
     .describe('The GIAI Kannabi itself issued for this Asset, taken from its issuance ledger, as a bare AI 8004 asset reference. Null means Kannabi issued none — including when the Asset stores a GIAI that merely begins with a managed company prefix.'),
   photoCount: z.number().int()
@@ -113,6 +132,7 @@ function detail(asset: Asset) {
       canonical: identifier.canonical,
       level: identifier.level,
       components: identifier.components,
+      digitalLink: digitalLinkFor(identifier),
       gs1PolicyVersion: identifier.policyVersion,
     })),
     allocation: asset.allocation,
@@ -228,6 +248,7 @@ Kannabi owns these facts, and this server can answer them:
 - the Asset itself: its name, when and by whom it was reported, its owner, the Groups that collaborate on it, and whether it is public;
 - the native Kannabi Asset ID, which addresses an Asset inside Kannabi and carries no meaning in any other system;
 - the external GS1 identifiers attached to an Asset (GTIN, SGTIN, GRAI, GIAI), at individual or class level;
+- the GS1 Digital Link path each individual-level identity corresponds to, which a Kannabi deployment dereferences to that Asset;
 - Groups, the unit that collaborates on Assets;
 - the GS1 Company Prefix namespaces Kannabi Groups manage, and the ledger of GIAIs Kannabi itself issued from them.
 
@@ -246,9 +267,12 @@ Choosing a tool:
 - list_groups and list_giai_namespaces supply the keys the other tools accept.
 Every Asset a tool returns carries its assetId, which is the stable handle get_asset takes.
 
-Two distinctions matter here and must not be collapsed:
+Three distinctions matter here and must not be collapsed:
+- Kannabi dereferences the Digital Link forms it supports; it is not a GS1-Conformant Resolver. It publishes no resolver description file, declares no supported primary keys, and answers no linkset, so do not describe a Kannabi address as conformant resolution or as a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org. A path here is also not a claim that anyone else resolves that identifier to this Asset.
 - individual identity is not class identity. A class-level identifier such as a GTIN describes a kind of thing, so several Assets are a correct answer rather than an ambiguity. An individual-level identifier resolves to at most one.
 - storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored GIAI merely begins with a managed company prefix was not issued by Kannabi, and list_giai_issuances is the only evidence of issuance.
+
+surfacedPath is presentation, not identity. assetId is what addresses an Asset and never changes; surfacedPath follows whichever identifier Kannabi currently prefers and changes if that identifier is detached. Carry assetId between tools.
 
 Every tool here is read-only. This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
 

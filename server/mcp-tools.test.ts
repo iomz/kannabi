@@ -173,7 +173,14 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.deepEqual(assets[1].kannabiAllocatedGiai, null);
     // A candidate stays small: no reporter, components, policy version or photo keys.
     assert.deepEqual(Object.keys(assets[0]).sort(), ['assetId', 'groups', 'identifiers', 'isPublic',
-      'kannabiAllocatedGiai', 'name', 'owner', 'photoCount', 'reportedAt'].sort());
+      'kannabiAllocatedGiai', 'name', 'owner', 'photoCount', 'reportedAt', 'surfacedPath'].sort());
+    // Presentation travels with a candidate; identity is still the assetId.
+    // Both surface their GIAI, and the microscope's was never issued by
+    // Kannabi — issuance is provenance and decides nothing about what is
+    // surfaced, which is exactly why these two agree here.
+    assert.equal(assets[0].surfacedPath, '/8004/' + camera.identifiers[1].components.assetReference);
+    assert.equal(assets[1].surfacedPath, '/8004/' + microscope.identifiers[1].components.assetReference);
+    assert.equal(assets[1].kannabiAllocatedGiai, null);
   });
 
   await t.test('search reuses the shared request parser', async () => {
