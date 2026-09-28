@@ -421,28 +421,59 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         c.req.param('key'), changeOrigin(c));
       return c.json({ asset });
     })
-    // Allocation is idempotent: a repeat call returns the existing issuance.
-    // Knowing a namespace key grants nothing; the Group join is re-checked here.
-    .post('/assets/:id/giai', validator('json', (value) => {
-      const input = record(value, ['namespaceKey']);
-      return { namespaceKey: requiredText(input.namespaceKey, 'namespaceKey') };
-    }), async (c) => {
-      const asset = await store.allocateGiai(assetId(c.req.param('id')), actor(c.get('user')),
-        c.req.valid('json').namespaceKey, changeOrigin(c));
-      return c.json({ asset });
-    })
-    .get('/giai-namespaces', async (c) =>
-      c.json({ namespaces: await store.listGiaiNamespaces(actor(c.get('user'))) }))
-    .post('/groups/:key/giai-namespaces', validator('json', (value) =>
-      record(value, ['gcp', 'exclusions'])), async (c) =>
-      c.json({ namespace: await store.configureGiaiNamespace(actor(c.get('user')),
+    // Issuance is idempotent per scheme: a repeat call returns the existing
+    // issuance of that scheme and leaves any other scheme's alone. Knowing a
+    // namespace or class key grants nothing; the Group joins are re-checked
+    // here. A GIAI takes a namespace alone; a serialised GRAI and an SGTIN
+    // each name the managed class key they are serialised under, which is
+    // exactly what a merely recorded identifier can never supply.
+    .post('/assets/:id/giai', validator('json', (value) =>
+      record(value, ['namespaceKey'])), async (c) =>
+      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
+        'giai', c.req.valid('json'), changeOrigin(c)) }))
+    .post('/assets/:id/grai', validator('json', (value) =>
+      record(value, ['namespaceKey', 'classKeyKey'])), async (c) =>
+      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
+        'grai', c.req.valid('json'), changeOrigin(c)) }))
+    .post('/assets/:id/sgtin', validator('json', (value) =>
+      record(value, ['namespaceKey', 'classKeyKey'])), async (c) =>
+      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
+        'sgtin', c.req.valid('json'), changeOrigin(c)) }))
+    .get('/gs1-namespaces', async (c) =>
+      c.json({ namespaces: await store.listGs1Namespaces(actor(c.get('user'))) }))
+    .post('/groups/:key/gs1-namespaces', validator('json', (value) =>
+      record(value, ['gcp', 'giaiExclusions', 'graiTypeExclusions', 'gtinItemExclusions'])), async (c) =>
+      c.json({ namespace: await store.configureGs1Namespace(actor(c.get('user')),
         c.req.param('key'), c.req.valid('json')) }, 201))
-    .patch('/giai-namespaces/:key', validator('json', (value) => {
+    .patch('/gs1-namespaces/:key', validator('json', (value) => {
       const input = record(value, ['active']);
       if (typeof input.active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
       return { active: input.active };
-    }), async (c) => c.json({ namespace: await store.setGiaiNamespaceActive(actor(c.get('user')),
+    }), async (c) => c.json({ namespace: await store.setGs1NamespaceActive(actor(c.get('user')),
       c.req.param('key'), c.req.valid('json').active) }))
+    // Class keys are namespace configuration rather than Asset work: managing
+    // one touches no Asset and grants no Asset access.
+    .get('/gs1-namespaces/:key/class-keys', validator('query', (value) => {
+      const input = record(value as Record<string, unknown>, ['scheme']);
+      if (input.scheme !== undefined && input.scheme !== 'grai' && input.scheme !== 'gtin') {
+        throw new ValidationError('A managed class key is a GTIN or a GRAI asset type');
+      }
+      return { scheme: input.scheme as 'grai' | 'gtin' | undefined };
+    }), async (c) => c.json({ classKeys: await store.listClassKeys(actor(c.get('user')),
+      c.req.param('key'), c.req.valid('query').scheme) }))
+    // One route for allocation and adoption, because the difference is a
+    // single recorded fact: supplying the key's own value is what makes it an
+    // adoption, and the stored provenance says which it was.
+    .post('/gs1-namespaces/:key/class-keys', validator('json', (value) =>
+      record(value, ['scheme', 'gtin', 'serial', 'assetType', 'assetReference', 'serialExclusions'])),
+    async (c) => c.json({ classKey: await store.manageClassKey(actor(c.get('user')),
+      c.req.param('key'), c.req.valid('json')) }, 201))
+    .patch('/gs1-namespaces/:key/class-keys/:classKeyKey', validator('json', (value) => {
+      const input = record(value, ['active']);
+      if (typeof input.active !== 'boolean') throw new ValidationError('Class key active state must be a boolean');
+      return { active: input.active };
+    }), async (c) => c.json({ classKey: await store.setClassKeyActive(actor(c.get('user')),
+      c.req.param('classKeyKey'), c.req.valid('json').active) }))
     .onError((error, c) => {
       if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
       if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);

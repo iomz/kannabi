@@ -2,16 +2,18 @@ import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { assetPageRequest, assetSorts, assetDirections } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
-import { giaiLedgerQuery } from './giai-ledger.js';
+import { gs1LedgerQuery } from './gs1-ledger.js';
 import { isAssetId } from './asset-id.js';
-import { identifierSchemes, type ExternalIdentifier } from './gs1.js';
+import {
+  classKeySchemes, identifierSchemes, issuanceSchemes, type ExternalIdentifier,
+} from './gs1.js';
 import { digitalLinkPath } from './gs1-digital-link.js';
 import { surfacedAssetPath } from './surfaced-uri.js';
 import { ValidationError } from './identity.js';
 import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
 import {
-  ReferenceError as DomainReferenceError, type Asset, type GiaiIssuance, type GiaiNamespace,
-  type IdentityStore,
+  namespaceCounters, ReferenceError as DomainReferenceError, type Asset,
+  type Gs1ClassKeyAllocation, type Gs1LedgerEntry, type Gs1Namespace, type IdentityStore,
 } from './identity-store.js';
 
 /** Kannabi's domain MCP surface.
@@ -70,8 +72,10 @@ function summarise(asset: Asset) {
       digitalLink: digitalLinkFor(identifier),
     })),
     surfacedPath: surfacedAssetPath(asset.id, asset.identifiers),
-    // Present only when Kannabi's issuance ledger records the allocation.
-    kannabiAllocatedGiai: asset.allocation ? asset.allocation.value : null,
+    // Present only where Kannabi's issuance ledger records the allocation. A
+    // list, because an Asset may carry issued keys of several schemes at once.
+    kannabiIssued: asset.issuances.map((issuance) => ({
+      scheme: issuance.scheme, canonical: issuance.canonical })),
     photoCount: asset.photos.length,
   };
 }
@@ -101,8 +105,10 @@ const summarySchema = z.object({
     .describe('Every external identity Kannabi holds for this Asset. Zero identifiers is an ordinary state, not missing data.'),
   surfacedPath: z.string()
     .describe('The path Kannabi puts in front of a person for this Asset: its preferred Digital Link when it has an eligible individual-level GS1 identity, and its native /asset/{assetId} path otherwise. Presentation only — assetId remains the stable identity, and this path changes if the identifier it derives from is detached.'),
-  kannabiAllocatedGiai: z.string().nullable()
-    .describe('The GIAI Kannabi itself issued for this Asset, taken from its issuance ledger, as a bare AI 8004 asset reference. Null means Kannabi issued none — including when the Asset stores a GIAI that merely begins with a managed company prefix.'),
+  kannabiIssued: z.array(z.object({
+    scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]),
+    canonical: z.string(),
+  })).describe('The identifiers Kannabi itself issued for this Asset, taken from its issuance ledger. An Asset may carry one per scheme, so a GIAI, a serialised GRAI and an SGTIN can all appear. An empty list means Kannabi issued none — including when the Asset stores a value that merely begins with a managed company prefix.'),
   photoCount: z.number().int()
     .describe('How many photos Kannabi holds for this Asset. The images are not served over MCP.'),
 });
@@ -111,17 +117,56 @@ const attributionSchema = z.object({
   key: z.string(), name: z.string(), status: z.enum(['active', 'deleted']),
 }).describe('Who acted, as immutable provenance. "deleted" means the account is gone and only the name was kept. Never an indication of who may access the Asset.');
 
-const allocationSchema = z.object({
-  value: z.string()
-    .describe('The issued GIAI as a bare AI 8004 asset reference, which is what resolve_external_identifier takes as assetReference.'),
+const issuanceSchema = z.object({
+  key: z.string().describe('Kannabi\'s handle for this ledger row.'),
+  scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]])
+    .describe('Which GS1 key Kannabi issued. A GIAI comes straight from the company prefix; a serialised GRAI and an SGTIN are serials under a managed class key.'),
+  canonical: z.string()
+    .describe('The issued identifier in GS1 element-string form, which is what get_asset and resolve_external_identifier report for the same value.'),
   gcp: z.string().describe('The GS1 Company Prefix this value was issued from.'),
   sequence: z.number().int()
-    .describe('The asset reference number the namespace counter produced. Unique within the namespace; gaps are excluded ranges, not missing issuances.'),
+    .describe('The number the counter produced. Unique only within the counter that produced it — the namespace for a GIAI, the class key for a serial — so it orders issuances within one counter and nowhere else. Gaps are excluded ranges, not missing issuances.'),
+  classKeyCanonical: z.string().nullable()
+    .describe('The managed class key this was serialised under, for a serialised GRAI or an SGTIN. Null for a GIAI, which has no class level.'),
   allocatedAt: z.string().describe('When Kannabi issued the value.'),
   allocatedForAssetId: z.string()
     .describe('The Asset this issuance is permanently bound to. The binding survives detaching the identifier, and the value is never reissued elsewhere.'),
   allocatedBy: attributionSchema,
 });
+
+const classKeySchema = z.object({
+  classKeyKey: z.string().describe('Kannabi\'s handle for this managed class key.'),
+  scheme: z.enum(classKeySchemes as unknown as readonly [string, ...string[]])
+    .describe('gtin for a trade item, grai for a returnable asset type.'),
+  canonical: z.string().describe('The class key in GS1 element-string form.'),
+  provenance: z.enum(['allocated', 'adopted'])
+    .describe('allocated means Kannabi produced this reference from the namespace counter. adopted means the Group asserted a key it had already allocated elsewhere so Kannabi could issue serials under it. Kannabi claims to have allocated only the first.'),
+  active: z.boolean()
+    .describe('Whether new serials may be issued under it. Configuration state only: a deactivated class key keeps every serial it already issued.'),
+  sequence: z.number().int().nullable()
+    .describe('The counter position that produced it, or null when adopted.'),
+  nextSerial: z.number().int()
+    .describe('The next serial number the counter would consider under this class key. Not a count of issuances: it also advances past excluded ranges.'),
+  excludedSerials: z.array(z.object({ from: z.number().int(), to: z.number().int() }))
+    .describe('Decimal serials Kannabi must never issue under this class key, because they were already in use elsewhere when it was brought into the namespace. Kannabi issues decimal serials; serials in another form that exist elsewhere for the same class key cannot be expressed here, and serial non-duplication for a GTIN remains the GTIN allocator\'s responsibility as a party.'),
+  assertedAt: z.string().describe('When this class key was brought into the namespace.'),
+  assertedBy: attributionSchema,
+});
+
+function describeClassKey(classKey: Gs1ClassKeyAllocation) {
+  return {
+    classKeyKey: classKey.key,
+    scheme: classKey.scheme,
+    canonical: classKey.canonical,
+    provenance: classKey.provenance,
+    active: classKey.active,
+    sequence: classKey.sequence,
+    nextSerial: classKey.serial.nextSequence,
+    excludedSerials: classKey.serial.exclusions.map((range) => ({ from: range.from, to: range.to })),
+    assertedAt: classKey.assertedAt,
+    assertedBy: classKey.assertedBy,
+  };
+}
 
 function detail(asset: Asset) {
   return {
@@ -135,7 +180,7 @@ function detail(asset: Asset) {
       digitalLink: digitalLinkFor(identifier),
       gs1PolicyVersion: identifier.policyVersion,
     })),
-    allocation: asset.allocation,
+    issuances: asset.issuances,
     photos: asset.photos,
   };
 }
@@ -146,53 +191,68 @@ const detailSchema = summarySchema.extend({
     gs1PolicyVersion: z.string()
       .describe('The version of Kannabi\'s GS1 policy that accepted this value. Historical provenance; stored identifiers are never revalidated.'),
   })).describe('Every external identity Kannabi holds for this Asset.'),
-  allocation: allocationSchema.nullable()
-    .describe('Kannabi\'s own issuance record for this Asset, or null if Kannabi issued nothing for it. This, not the presence of a GIAI among identifiers, is what makes an identifier Kannabi-issued.'),
+  issuances: z.array(issuanceSchema)
+    .describe('Kannabi\'s own issuance records for this Asset, at most one per scheme and empty if Kannabi issued nothing for it. These, not the presence of a matching identifier, are what make an identifier Kannabi-issued.'),
   photos: z.array(z.object({
     key: z.string(), contentType: z.string(), size: z.number(), createdAt: z.string().nullable(),
   })).describe('Photo records Kannabi holds. Their bytes are not served over MCP; the keys identify them within Kannabi.'),
 });
 
+const counterSchema = z.object({
+  nextSequence: z.number().int()
+    .describe('The next number this counter would consider. NOT a count of issuances: it also advances past excluded ranges.'),
+  excludedReferences: z.array(z.object({ from: z.number().int(), to: z.number().int() }))
+    .describe('Numbers Kannabi must never issue from this counter, because they were already in use elsewhere when the namespace was configured.'),
+});
+
 const namespaceSchema = z.object({
-  namespaceKey: z.string().describe('Pass this to list_giai_issuances. Match a namespace by its gcp field when a request names a company prefix.'),
+  namespaceKey: z.string().describe('Pass this to list_gs1_issuances and list_managed_class_keys. Match a namespace by its gcp field when a request names a company prefix.'),
   gcp: z.string().describe('The GS1 Company Prefix this namespace issues from.'),
   active: z.boolean()
     .describe('Whether new issuance is enabled. Configuration state only: a deactivated namespace keeps every value it already issued.'),
   group: z.object({ key: z.string(), name: z.string() })
     .describe('The one Kannabi Group that manages this prefix.'),
-  nextSequence: z.number().int()
-    .describe('The next asset reference number the counter would consider. NOT a count of issuances: it also advances past excluded ranges. Use list_giai_issuances.matching for how many Kannabi issued.'),
-  excludedReferences: z.array(z.object({ from: z.number().int(), to: z.number().int() }))
-    .describe('Reference numbers Kannabi must never issue because they were already in use elsewhere when the namespace was configured.'),
+  counters: z.object(Object.fromEntries(namespaceCounters.map((counter) => [counter, counterSchema])))
+    .describe('One independent counter per key type: giai for AI 8004 asset references, graiType for AI 8003 asset types, gtinItem for GTIN item references. They never share numbers, because a GTIN and a GRAI made of the same digits are different keys. Use list_gs1_issuances.matching for how many values Kannabi issued.'),
+  classKeyIssuable: z.boolean()
+    .describe('Whether this prefix leaves room for a twelve-digit class reference. False means it can still issue GIAIs but cannot allocate a GTIN or a GRAI asset type — a reduced capability, not an invalid namespace.'),
+  gtinFormat: z.enum(['GTIN-12', 'GTIN-13'])
+    .describe('Which GTIN format this namespace\'s own allocations take, derived from the prefix. Presentation for whoever prints the symbol; the stored value is the same fourteen digits either way.'),
   configuredAt: z.string().describe('When a Group asserted this prefix. Kannabi cannot verify GS1 licensing.'),
 });
 
-function describeNamespace(namespace: GiaiNamespace) {
+function describeNamespace(namespace: Gs1Namespace) {
   return {
     namespaceKey: namespace.key,
     gcp: namespace.gcp,
     active: namespace.active,
     group: { key: namespace.group.key, name: namespace.group.name },
-    // The next reference the counter would consider, not a count of issuances:
-    // it also advances past excluded ranges. What Kannabi actually issued is
-    // `list_giai_issuances`, and nothing else.
-    nextSequence: namespace.nextSequence,
-    excludedReferences: namespace.exclusions.map((range) => ({ from: range.from, to: range.to })),
+    // The next number each counter would consider, not a count of issuances:
+    // they also advance past excluded ranges. What Kannabi actually issued is
+    // `list_gs1_issuances`, and nothing else.
+    counters: Object.fromEntries(namespaceCounters.map((counter) => [counter, {
+      nextSequence: namespace.counters[counter].nextSequence,
+      excludedReferences: namespace.counters[counter].exclusions
+        .map((range) => ({ from: range.from, to: range.to })),
+    }])),
+    classKeyIssuable: namespace.classKeyIssuable,
+    gtinFormat: namespace.gtinFormat,
     configuredAt: namespace.configuredAt,
   };
 }
 
-function describeIssuance(issuance: GiaiIssuance) {
-  const { allocation, asset } = issuance;
+function describeEntry(entry: Gs1LedgerEntry) {
+  const { issuance, asset } = entry;
   return {
-    allocation,
-    assetId: allocation.allocatedForAssetId,
+    issuance,
+    assetId: issuance.allocatedForAssetId,
     asset: asset ? summarise(asset) : null,
-    // A Kannabi-issued GIAI stays bound to its Asset in the ledger even when
-    // the identifier has been detached, so the two facts are reported apart.
+    // An issued value stays bound to its Asset in the ledger even when the
+    // identifier has been detached, so the two facts are reported apart. The
+    // comparison is on the canonical form, which is what makes it one rule for
+    // every scheme rather than a per-scheme component match.
     stillAttached: asset
-      ? asset.identifiers.some((identifier) => identifier.scheme === 'giai'
-        && identifier.components.assetReference === allocation.value)
+      ? asset.identifiers.some((identifier) => identifier.canonical === issuance.canonical)
       : null,
   };
 }
@@ -250,7 +310,7 @@ Kannabi owns these facts, and this server can answer them:
 - the external GS1 identifiers attached to an Asset (GTIN, SGTIN, GRAI, GIAI), at individual or class level;
 - the GS1 Digital Link path each individual-level identity corresponds to, which a Kannabi deployment dereferences to that Asset;
 - Groups, the unit that collaborates on Assets;
-- the GS1 Company Prefix namespaces Kannabi Groups manage, and the ledger of GIAIs Kannabi itself issued from them.
+- the GS1 Company Prefix namespaces Kannabi Groups manage, the class keys they manage inside them, and the ledger of GIAIs, serialised GRAIs and SGTINs Kannabi itself issued from them.
 
 Kannabi does not own these facts, and this server cannot answer them:
 - where an Asset is now or where it has been;
@@ -264,13 +324,15 @@ Choosing a tool:
 - an incomplete human description, such as "the inspection camera" -> search_assets;
 - a complete GS1 identifier already in hand -> resolve_external_identifier;
 - a native Kannabi Asset ID -> get_asset;
-- list_groups and list_giai_namespaces supply the keys the other tools accept.
+- list_groups and list_gs1_namespaces supply the keys the other tools accept.
 Every Asset a tool returns carries its assetId, which is the stable handle get_asset takes.
 
 Three distinctions matter here and must not be collapsed:
 - Kannabi dereferences the Digital Link forms it supports; it is not a GS1-Conformant Resolver. It publishes no resolver description file, declares no supported primary keys, and answers no linkset, so do not describe a Kannabi address as conformant resolution or as a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org. A path here is also not a claim that anyone else resolves that identifier to this Asset.
 - individual identity is not class identity. A class-level identifier such as a GTIN describes a kind of thing, so several Assets are a correct answer rather than an ambiguity. An individual-level identifier resolves to at most one.
-- storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored GIAI merely begins with a managed company prefix was not issued by Kannabi, and list_giai_issuances is the only evidence of issuance.
+- storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored identifier merely begins with a managed company prefix was not issued by Kannabi, and list_gs1_issuances is the only evidence of issuance. The same distinction one level up: a GTIN recorded on an Asset is an observation, while a GTIN in list_managed_class_keys is one a Group brought into a prefix it manages, and only the second can carry Kannabi-issued serials.
+
+Kannabi allocates identifiers; it is not a product catalogue. A managed GTIN here is a number Kannabi issued or was told about, with no name, description or other trade-item data attached, and communicating a trade item's characteristics to trading partners remains its allocator's responsibility in their own systems. Do not read a managed class key as product master data, and do not infer what a thing is from the fact that Kannabi allocated a GTIN for it.
 
 surfacedPath is presentation, not identity. assetId is what addresses an Asset and never changes; surfacedPath follows whichever identifier Kannabi currently prefers and changes if that identifier is detached. Carry assetId between tools.
 
@@ -456,12 +518,15 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     } catch (error) { return failed(error); }
   });
 
-  server.registerTool('list_giai_namespaces', {
-    title: 'List managed GIAI namespaces',
+  server.registerTool('list_gs1_namespaces', {
+    title: 'List managed GS1 namespaces',
     description: [
-      'List the GS1 Company Prefix namespaces a Kannabi Group has configured for issuing GIAIs.',
+      'List the GS1 Company Prefix namespaces a Kannabi Group has configured for issuing GS1 keys.',
       'A namespace is the only place Kannabi claims allocation authority, and each belongs to one Group.',
-      'Use a namespaceKey with list_giai_issuances to see what Kannabi actually issued from it.',
+      'One prefix issues GIAIs directly, and issues GRAI asset types and GTINs as class keys that',
+      'serialised GRAIs and SGTINs are then issued under.',
+      'Use a namespaceKey with list_gs1_issuances to see what Kannabi actually issued from it,',
+      'and with list_managed_class_keys to see what it can issue serials under.',
       'Kannabi cannot verify GS1 licensing: a configured prefix is an assertion by an authorized member.',
     ].join(' '),
     outputSchema: z.object({
@@ -471,39 +536,76 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     annotations: readOnly,
   }, async (ctx) => {
     try {
-      const namespaces = await store.listGiaiNamespaces(await resolveAudience(ctx.mcpReq._meta));
+      const namespaces = await store.listGs1Namespaces(await resolveAudience(ctx.mcpReq._meta));
       return result({ namespaces: namespaces.map(describeNamespace) });
     } catch (error) { return failed(error); }
   });
 
-  server.registerTool('list_giai_issuances', {
-    title: 'List GIAI issuances from a namespace',
+  server.registerTool('list_managed_class_keys', {
+    title: 'List managed class keys in a namespace',
     description: [
-      'Read Kannabi\'s issuance ledger for one managed namespace: the GIAIs Kannabi itself allocated,',
-      'in issued order, each permanently bound to the Asset it was issued for.',
-      'This is the only evidence of Kannabi allocation provenance. An Asset whose stored GIAI merely',
-      'begins with the same company prefix was not allocated by Kannabi and does not appear here:',
-      'storing an identifier is not issuing it.',
-      'stillAttached reports whether the issued value is still attached to that Asset; a detached',
-      'issuance stays in the ledger and its value is never reissued.',
+      'List the class-level keys a namespace manages: the GTINs and GRAI asset types under which',
+      'Kannabi may issue SGTIN and serialised GRAI serials.',
+      'A class key is here only because a Group brought it into a prefix it manages, either by having',
+      'Kannabi allocate the reference or by asserting one it had already allocated elsewhere;',
+      'provenance says which. A GTIN merely recorded on an Asset is not a managed class key and',
+      'cannot be serialised.',
+      'These are allocation records and carry no product data: Kannabi holds no name, description or',
+      'other trade-item detail for them, and is not a product catalogue.',
     ].join(' '),
     inputSchema: z.object({
       namespaceKey: z.string()
-        .describe('namespaceKey from list_giai_namespaces. When a request names a company prefix, find the namespace whose gcp matches and use its namespaceKey; the prefix itself is not a key.'),
+        .describe('namespaceKey from list_gs1_namespaces. When a request names a company prefix, find the namespace whose gcp matches; the prefix itself is not a key.'),
+      scheme: z.enum(classKeySchemes as unknown as readonly [string, ...string[]]).optional()
+        .describe('Narrow to gtin or grai. Omit for both.'),
+    }),
+    outputSchema: z.object({
+      classKeys: z.array(classKeySchema)
+        .describe('Every class key this namespace manages. An empty list means Kannabi can issue GIAIs from this prefix but has no class key to issue serials under.'),
+    }),
+    annotations: readOnly,
+  }, async (input, ctx) => {
+    try {
+      const audience = await resolveAudience(ctx.mcpReq._meta);
+      const classKeys = await store.listClassKeys(audience, input.namespaceKey,
+        input.scheme as 'gtin' | 'grai' | undefined);
+      return result({ classKeys: classKeys.map(describeClassKey) });
+    } catch (error) { return failed(error); }
+  });
+
+  server.registerTool('list_gs1_issuances', {
+    title: 'List GS1 key issuances from a namespace',
+    description: [
+      'Read Kannabi\'s issuance ledger for one managed namespace: the GIAIs, serialised GRAIs and',
+      'SGTINs Kannabi itself allocated, each permanently bound to the Asset it was issued for.',
+      'This is the only evidence of Kannabi allocation provenance. An Asset whose stored identifier',
+      'merely begins with the same company prefix was not allocated by Kannabi and does not appear',
+      'here: storing an identifier is not issuing it.',
+      'stillAttached reports whether the issued value is still attached to that Asset; a detached',
+      'issuance stays in the ledger and its value is never reissued.',
+      'Ordered by canonical form, because a sequence is unique only within the counter that produced',
+      'it and an Asset\'s issuances can come from several.',
+    ].join(' '),
+    inputSchema: z.object({
+      namespaceKey: z.string()
+        .describe('namespaceKey from list_gs1_namespaces. When a request names a company prefix, find the namespace whose gcp matches and use its namespaceKey; the prefix itself is not a key.'),
+      scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]).optional()
+        .describe('Narrow to one issued scheme: giai, grai or sgtin. Omit for all three.'),
       limit: z.number().int().min(1).max(100).optional().describe('Page size, default 30.'),
-      cursor: z.string().optional().describe('nextCursor from the previous page for this same namespace.'),
+      cursor: z.string().optional()
+        .describe('nextCursor from the previous page for this same namespace and scheme filter. A cursor does not carry across a change of filter.'),
     }),
     outputSchema: z.object({
       namespace: namespaceSchema.describe('The namespace these issuances came from.'),
-      issuances: z.array(z.object({
-        allocation: allocationSchema,
+      entries: z.array(z.object({
+        issuance: issuanceSchema,
         assetId: z.string().describe('The Asset this value was issued for. Pass it to get_asset.'),
         asset: summarySchema.nullable().describe('The Asset itself, when this server can read it.'),
         stillAttached: z.boolean().nullable()
           .describe('Whether the issued value is still attached to that Asset. False means it was detached: the issuance stands and the value is never reissued.'),
-      })).describe('One page of issuances, in issued order. The ledger is the only record of what Kannabi allocated from this namespace; matching gives its full size, and nextCursor the rest.'),
+      })).describe('One page of issuances. The ledger is the only record of what Kannabi allocated from this namespace; matching gives its full size, and nextCursor the rest.'),
       matching: z.number().int()
-        .describe('How many GIAIs Kannabi issued from this namespace in total. Zero means it has issued none.'),
+        .describe('How many values Kannabi issued from this namespace under the current scheme filter. Zero means it has issued none.'),
       nextCursor: z.string().nullable()
         .describe('Pass back as cursor for the next page, or null when this page is the last.'),
     }),
@@ -511,12 +613,13 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
   }, async (input, ctx) => {
     try {
       const audience = await resolveAudience(ctx.mcpReq._meta);
-      const page = await store.giaiIssuances(audience, giaiLedgerQuery(queryRecord({
-        namespaceKey: input.namespaceKey, limit: input.limit, cursor: input.cursor,
+      const page = await store.gs1Issuances(audience, gs1LedgerQuery(queryRecord({
+        namespaceKey: input.namespaceKey, scheme: input.scheme,
+        limit: input.limit, cursor: input.cursor,
       })));
       return result({
         namespace: describeNamespace(page.namespace),
-        issuances: page.issuances.map(describeIssuance),
+        entries: page.entries.map(describeEntry),
         matching: page.matching,
         nextCursor: page.nextCursor,
       });

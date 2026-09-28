@@ -177,7 +177,7 @@ export function demoMembers(viewer: number): number[] {
 export const demoNamespaces = [
   { group: 0, gcp: '0614141', exclusions: [{ from: 1, to: 4 }, { from: 9, to: 11 }] },
   { group: 0, gcp: '9521234', exclusions: [] },
-  { group: 1, gcp: '0455123', exclusions: [] },
+  { group: 1, gcp: '9520123', exclusions: [] },
 ] as const;
 
 /** Assets that receive a Kannabi-issued GIAI from the first namespace.

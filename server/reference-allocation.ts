@@ -1,13 +1,24 @@
 import { record, ValidationError } from './identity.js';
 
-/** Allocation arithmetic for a managed GIAI namespace: which numeric asset
- * references Kannabi may issue, and which candidate comes next.
+/** Allocation arithmetic for every counter Kannabi advances: which numbers it
+ * may issue, and which candidate comes next.
+ *
+ * Four counters use it — a namespace's GIAI references, its GRAI asset types
+ * and its GTIN item references, and the serials under one managed class key.
+ * They are separate counters with separate meanings; what they share is this
+ * arithmetic and nothing else. A counter is inline state on whichever record
+ * owns it, deliberately rather than a node of its own: a reference counter is
+ * authoritative because Kannabi is the only allocator inside a managed
+ * namespace, while a serial counter records a commitment Kannabi cannot
+ * enforce, since serial non-duplication for a GTIN belongs to the GTIN
+ * allocator as a party. One persistence shape for both would present two
+ * different guarantees as one thing.
  *
  * This module knows nothing about GS1 syntax. It deals in candidate sequence
- * numbers; turning one into a GIAI is the GS1 boundary's job.
+ * numbers; turning one into an identifier is the GS1 boundary's job.
  */
 
-/** A closed interval of asset-reference numbers Kannabi must never issue. */
+/** A closed interval of numbers Kannabi must never issue from one counter. */
 export type ExclusionRange = Readonly<{ from: number; to: number }>;
 
 /** Sequences are positive integers, so the first candidate is 1. */

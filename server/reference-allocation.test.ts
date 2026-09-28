@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   allocatableSequence, canonicalExclusions, firstSequence, formatExclusionRanges,
   maxExclusionRanges, parseExclusionRanges, storedExclusions,
-} from './giai-allocation.js';
+} from './reference-allocation.js';
 import { ValidationError } from './identity.js';
 
 test('a namespace with no existing use starts at the first sequence', () => {

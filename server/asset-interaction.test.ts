@@ -164,7 +164,8 @@ test('an identifier mutation leaves an address that no longer serves the Asset',
 
     // Issuance is the same rule, not a special case.
     const allocate = new FormData();
-    allocate.set('intent', 'allocate-giai');
+    allocate.set('intent', 'issue-identifier');
+    allocate.set('scheme', 'giai');
     allocate.set('namespaceKey', 'ns');
     respondWith([sgtin, giai]);
     const issued = await submit('/asset/' + id, allocate);

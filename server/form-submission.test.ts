@@ -8,13 +8,16 @@ import AssetPage, { clientAction as assetAction } from '../web/routes/asset.js';
 import { mount, settle } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
 import { Button } from '../web/components/ui/button.js';
-import { AllocateGiai, IdentifierForm } from '../web/asset-identifiers.js';
+import { IdentifierForm, IssueIdentifier } from '../web/asset-identifiers.js';
 import { InventoryControls, noFilters } from '../web/inventory-controls.js';
 import { assetPageRequest } from './asset-page.js';
 
 const group = { key: 'workshop', name: 'Workshop' };
+const counter = { nextSequence: 1, exclusions: [] };
 const namespaces = [true, false].map((active) => ({ key: active ? 'active' : 'inactive',
-  gcp: active ? '0614141' : '9521234', active, nextSequence: 1, exclusions: [], group }));
+  gcp: active ? '0614141' : '9521234', active,
+  counters: { giai: counter, graiType: counter, gtinItem: counter },
+  classKeyIssuable: true, gtinFormat: 'GTIN-12', group }));
 
 /** Click the rendered control: calling a route action directly misses broken
  * submit semantics between Base UI, the browser form, and React Router. */
@@ -28,7 +31,7 @@ test('every existing Group form submits its intended API mutation on click', asy
   };
   const router = createMemoryRouter([{ path: '/groups',
     element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
-      controlledGroups: [group], namespaces } } as never),
+      controlledGroups: [group], namespaces, classKeys: [] } } as never),
     action: (args) => groupAction(args as never),
   }], { initialEntries: ['/groups'] });
   const view = mount(createElement(RouterProvider, { router }));
@@ -37,10 +40,10 @@ test('every existing Group form submits its intended API mutation on click', asy
     for (const [label, fields, path, method, body] of [
       ['Create Group', { name: 'New team' }, '/api/groups', 'POST', { name: 'New team' }],
       ['Add member', { userKey: 'invitee' }, '/api/groups/workshop/members', 'POST', { userKey: 'invitee' }],
-      ['Configure prefix', { gcp: '1234567', exclusions: '1-3' }, '/api/groups/workshop/giai-namespaces', 'POST',
-        { gcp: '1234567', exclusions: [{ from: 1, to: 3 }] }],
-      ['Deactivate', {}, '/api/giai-namespaces/active', 'PATCH', { active: false }],
-      ['Reactivate', {}, '/api/giai-namespaces/inactive', 'PATCH', { active: true }],
+      ['Configure prefix', { gcp: '1234567', giaiExclusions: '1-3' }, '/api/groups/workshop/gs1-namespaces', 'POST',
+        { gcp: '1234567', giaiExclusions: [{ from: 1, to: 3 }] }],
+      ['Deactivate', {}, '/api/gs1-namespaces/active', 'PATCH', { active: false }],
+      ['Reactivate', {}, '/api/gs1-namespaces/inactive', 'PATCH', { active: true }],
       ['Leave Group', {}, '/api/groups/workshop/membership', 'DELETE', null],
     ] as const) {
       const button = view.button(label);
@@ -69,10 +72,10 @@ test('Asset Save changes submits both name and public visibility through its fet
     element: createElement(AssetPage, { loaderData: {
       asset: { id, name: 'Before', isPublic: false, owner: null, groups: [group],
         reportedBy: { key: 'actor', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
-        identifiers: [], photos: [], allocation: null },
+        identifiers: [], photos: [], issuances: [] },
       settings: { displayTimezone: 'UTC' }, canEdit: true, authenticated: true, canViewReporterProfile: false,
       nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
-      digitalLinks: {}, namespaces: [{ key: 'eligible', gcp: '0614141' }], controlled: [], canGrant: false,
+      digitalLinks: {}, namespaces: [{ key: 'eligible', gcp: '0614141' }], classKeys: [], controlled: [], canGrant: false,
     } } as never), action: (args) => assetAction(args as never),
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
@@ -118,11 +121,11 @@ test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI'
   const router = createMemoryRouter([{ path: '/assets/:id', element: createElement(AssetPage, { loaderData: {
     asset: { id, name: 'Presentation check', isPublic: false, owner: null, groups: [],
       reportedBy: { key: 'reporter', name: 'Reporter', status: 'active' }, reportedAt: '2026-01-01T00:00:00Z',
-      identifiers: [], photos: [], allocation: null },
+      identifiers: [], photos: [], issuances: [] },
     settings: { displayTimezone: 'UTC', showAssetId: true, showIdentifierPolicyVersion: false },
     canEdit: false, authenticated: true, canViewReporterProfile: false,
     nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
-    digitalLinks: {}, namespaces: [], controlled: [], canGrant: false,
+    digitalLinks: {}, namespaces: [], classKeys: [], controlled: [], canGrant: false,
   } } as never) }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
@@ -152,11 +155,11 @@ test('explicit submit buttons preserve validation, submitter data, and non-submi
   } finally { view.stop(); }
 });
 
-test('GIAI empty state describes actor eligibility rather than a single Asset Group', () => {
-  const view = mount(createElement(AllocateGiai, { namespaces: [], allocation: null,
-    allocationAttached: false, busy: false, error: null }));
+test('issuance empty state describes actor eligibility rather than a single Asset Group', () => {
+  const view = mount(createElement(IssueIdentifier, { namespaces: [], classKeys: [],
+    issuances: [], identifiers: [], busy: false, error: null }));
   try {
-    assert.match(view.text(), /You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset/);
+    assert.match(view.text(), /Kannabi has nothing further to issue for this Asset/);
     assert.match(view.text(), /collaborating Group you belong to/);
     assert.equal(view.button('Issue GIAI'), null);
   } finally { view.stop(); }

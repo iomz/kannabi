@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  allocatedGiai, assertAiAssociations, assertCompatible, assertReversibleSchemes, canonicalGcp,
-  canonicalGtin, canonicalIdentifier, canonicalIdentifiers, gs1Policy, identifierSchemes,
-  schemeInputs, storedIdentifier,
+  adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
+  allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertCompatible,
+  assertReversibleSchemes, canIssueClassKey, canonicalGcp, canonicalGtin, canonicalIdentifier,
+  canonicalIdentifiers, classKeyWithinGcp, gs1Policy, identifierSchemes, schemeInputs,
+  storedIdentifier,
 } from './gs1.js';
-import { entries, enforcedLinters, syntaxDictionaryRelease, unenforcedLinters } from './gs1-syntax.js';
+import {
+  checkDigit, entries, enforcedLinters, syntaxDictionaryRelease, unenforcedLinters,
+} from './gs1-syntax.js';
 import { ValidationError } from './identity.js';
 
 const sgtin = { scheme: 'sgtin', gtin: '0614141123452', serial: '001a/A%' } as const;
@@ -16,7 +20,7 @@ test('GS1 policy is versioned independently and never misattributes its GenSpec 
   assert.equal(gs1Policy.syntaxDictionaryRelease, syntaxDictionaryRelease);
   // The overlay gained Digital Link derivation while the pinned release did
   // not change, which is exactly the case the suffix exists to record.
-  assert.equal(gs1Policy.version, `${syntaxDictionaryRelease}+kannabi.2`);
+  assert.equal(gs1Policy.version, `${syntaxDictionaryRelease}+kannabi.3`);
   // GS1 does not publish this mapping, so Kannabi must own it explicitly.
   assert.equal(gs1Policy.assertedBy, 'kannabi');
   assert.match(gs1Policy.generalSpecificationsRelease, /^\d+\.\d+$/);
@@ -190,23 +194,104 @@ test('an allocated GIAI is built from a configured prefix and a numeric referenc
   }
 });
 
-test('a configured prefix is validated only as far as Kannabi can justify', () => {
-  // GS1 Company Prefixes are digit strings, and at least one reference
-  // character must remain within AI 8004's 30.
-  for (const gcp of ['0', '0614141', '9'.repeat(29)]) assert.equal(canonicalGcp(gcp), gcp);
-  for (const gcp of ['', '06141A1', '0614141 ', '9'.repeat(30), 614141, null]) {
+test('a configured prefix is validated against published rules, never a GCP Length Table', () => {
+  // General Specifications 26.0 §1.2.3.3: four to twelve digits. Publishing
+  // that range is not the same as being able to locate a prefix boundary
+  // inside an arbitrary key, which is what the unpublished GCP Length Table
+  // answers — so the range is enforced and `gcppos` stays unenforced.
+  for (const gcp of ['0614', '0614141', '9'.repeat(12)]) assert.equal(canonicalGcp(gcp), gcp);
+  for (const gcp of ['', '06141A1', '0614141 ', '061', '9'.repeat(13), 614141, null]) {
     assert.throws(() => canonicalGcp(gcp), ValidationError, String(gcp));
   }
-  // No invented length range: Kannabi holds no GCP Length Table, so a
-  // plausible-looking 6-12 rule would be a heuristic posing as conformance.
-  for (const gcp of ['1', '12345', '1234567890123']) assert.doesNotThrow(() => canonicalGcp(gcp));
+  // §1.2.2.2.1: an RCN SHALL NOT be encoded using any GS1 Application
+  // Identifier, and every value Kannabi issues is an AI element string, so
+  // restricted-circulation prefix space can never be a managed namespace.
+  for (const gcp of ['0000000', '0212345', '0412345', '2012345', '2912345', '0000050']) {
+    assert.throws(() => canonicalGcp(gcp), ValidationError, gcp);
+  }
+  // 952 is GS1's own demonstration and example range, so it stays usable.
+  assert.equal(canonicalGcp('9521234'), '9521234');
 });
 
-test('an allocated GIAI that would exceed AI 8004 is rejected, never truncated', () => {
-  const gcp = '9'.repeat(25);
-  assert.equal(allocatedGiai(gcp, 12345).components.assetReference.length, 30);
-  assert.throws(() => allocatedGiai(gcp, 123456), ValidationError);
-  assert.throws(() => allocatedGiai('9'.repeat(29), 10), ValidationError);
+test('a prefix too long for a class reference stays valid for GIAI', () => {
+  // Capability, never validity: a twelve-digit prefix leaves no room for the
+  // twelve digits a GTIN or a GRAI asset type needs before its check digit.
+  assert.equal(canIssueClassKey('95212345678'), true);
+  assert.equal(canIssueClassKey('952123456789'), false);
+  assert.equal(canonicalGcp('952123456789'), '952123456789');
+  assert.doesNotThrow(() => allocatedGiai('952123456789', 1));
+  assert.throws(() => allocatedGtin('952123456789', 1), ValidationError);
+  assert.throws(() => allocatedGraiAssetType('952123456789', 1), ValidationError);
+});
+
+test('a class reference is padded to the prefix and carries its own check digit', () => {
+  // The arithmetic a GRAI asset type and a base GTIN genuinely share, applied
+  // twice under two names rather than through one generic key builder.
+  const type = allocatedGraiAssetType('0614141', 42);
+  const gtin = allocatedGtin('0614141', 42);
+  assert.equal(type.components.assetType, '0614141000425');
+  assert.equal(type.canonical, '(8003)00614141000425');
+  assert.equal(type.level, 'class');
+  assert.equal(gtin.components.gtin, '00614141000425');
+  assert.equal(gtin.level, 'class');
+  // §2.3: the same digits under AI 01 and AI 8003 are two different keys, so
+  // the two counters never collide even when they reach the same position.
+  assert.notEqual(type.canonical, gtin.canonical);
+  // A prefix beginning with zero forms a U.P.C. Company Prefix, so its own
+  // allocations are GTIN-12s; the stored fourteen digits are the same either
+  // way, because the leading zeroes are filler (§1.3.1, Table 1-9).
+  assert.equal(allocatedGtinFormat('0614141'), 'GTIN-12');
+  assert.equal(allocatedGtinFormat('9521234'), 'GTIN-13');
+  // The reference space is finite and exhaustion is reported, not wrapped.
+  assert.equal(allocatedGtin('95212345678', 9).components.gtin, '09521234567899');
+  assert.throws(() => allocatedGtin('95212345678', 10), ValidationError);
+});
+
+test('issued serials are drawn under a class key, never invented beside one', () => {
+  const type = allocatedGraiAssetType('0614141', 42);
+  const gtin = allocatedGtin('0614141', 42);
+  const serialised = allocatedGraiSerial(type.components.assetType, 7);
+  const sgtin = allocatedSgtin(gtin.components.gtin, 7);
+  assert.equal(serialised.canonical, '(8003)006141410004257');
+  assert.equal(serialised.level, 'individual');
+  assert.equal(sgtin.canonical, '(01)00614141000425(21)7');
+  assert.equal(sgtin.level, 'individual');
+  for (const sequence of [0, -1, 1.5, '4']) {
+    assert.throws(() => allocatedGraiSerial(type.components.assetType, sequence as number),
+      ValidationError, String(sequence));
+    assert.throws(() => allocatedSgtin(gtin.components.gtin, sequence as number),
+      ValidationError, String(sequence));
+  }
+});
+
+test('adoption refuses the keys a company prefix cannot carry', () => {
+  // A base GTIN and a GRAI asset type are adoptable.
+  assert.equal(adoptableClassKey({ scheme: 'gtin', gtin: '0614141000425' }).canonical,
+    '(01)00614141000425');
+  assert.equal(adoptableClassKey({ scheme: 'grai', assetType: '0614141000425' }).canonical,
+    '(8003)00614141000425');
+  // §2.1.7: an indicator of 1 to 8 identifies a trade item grouping derived
+  // from a base GTIN, and §2.1.10 reserves 9 for variable measure, whose
+  // measure data completes the identity. Neither is a prefix allocation.
+  for (const indicator of ['1', '8', '9']) {
+    const body = indicator + '061414100042';
+    assert.throws(() => adoptableClassKey({ scheme: 'gtin', gtin: body + checkDigit(body) }),
+      ValidationError, indicator);
+  }
+  // §1.2.3.2: a GTIN-8 comes from a GS1-8 Prefix allocated to Member
+  // Organisations, so it is never issued from a company prefix.
+  assert.throws(() => adoptableClassKey({ scheme: 'gtin', gtin: '96385074' }), ValidationError);
+  // Individual-level keys are not class keys, whatever their scheme.
+  assert.throws(() => adoptableClassKey({ scheme: 'grai', assetType: '0614141000425', serial: 'A1' }),
+    ValidationError);
+  assert.throws(() => adoptableClassKey({ scheme: 'giai', assetReference: '0614141X' }), ValidationError);
+  // Containment is checked against the prefix the Group asserted, and nothing
+  // stronger: it is not a licensing check.
+  const adopted = adoptableClassKey({ scheme: 'gtin', gtin: '0614141000425' });
+  assert.equal(classKeyWithinGcp(adopted, '0614141'), true);
+  assert.equal(classKeyWithinGcp(adopted, '9521234'), false);
+  assert.equal(classKeyWithinGcp(
+    adoptableClassKey({ scheme: 'grai', assetType: '0614141000425' }), '0614141'), true);
 });
 
 test('allocation adds no guarantee to GIAIs Kannabi merely stores', () => {

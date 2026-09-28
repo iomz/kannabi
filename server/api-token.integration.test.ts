@@ -425,7 +425,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
   });
 
   await t.test('allocation authority stays independent of the asserting credential', async () => {
-    const namespace = await store.configureGiaiNamespace(people.owner.key, ownerGroup, { gcp: '0991122' });
+    const namespace = await store.configureGs1Namespace(people.owner.key, ownerGroup, { gcp: '0991122' });
     const call = bearer(adminSecret);
     const allocated = await call(`/assets/${ownedAsset}/giai`, 'POST', { namespaceKey: namespace.key },
       { 'X-Kannabi-Basis': 'depot:assets:900' });
@@ -433,7 +433,9 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     const { asset } = await allocated.json();
     // The ledger records the authorizing User, never the credential, and the
     // credential appears only where it belongs.
-    assert.deepEqual(asset.allocation.allocatedBy, attribution(people.owner, 'active'));
+    assert.equal(asset.issuances.length, 1);
+    assert.equal(asset.issuances[0].scheme, 'giai');
+    assert.deepEqual(asset.issuances[0].allocatedBy, attribution(people.owner, 'active'));
     assert.equal(asset.provenance.assertedBy.label, 'Admin automation');
     assert.equal(asset.provenance.basis, 'depot:assets:900');
   });

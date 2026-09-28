@@ -1,7 +1,9 @@
 import { ValidationError, record } from './identity.js';
 import {
-  cset82, csum, entries, enforcedLinters, syntaxDictionaryRelease, unenforcedLinters, zero,
+  checkDigit, cset82, csum, entries, enforcedLinters, syntaxDictionaryRelease,
+  unenforcedLinters, zero,
 } from './gs1-syntax.js';
+import { restrictedPrefixReason } from './gs1-prefixes.js';
 
 /** The single GS1 boundary. GS1 syntax and association rules are enforced here
  * and nowhere else; the rest of Kannabi treats an identifier as opaque data
@@ -68,7 +70,7 @@ export type ExternalIdentifier = Readonly<{
  * migration, not a policy bump.
  */
 export const gs1Policy = {
-  version: `${syntaxDictionaryRelease}+kannabi.2`,
+  version: `${syntaxDictionaryRelease}+kannabi.3`,
   syntaxDictionaryRelease,
   generalSpecificationsRelease: '26.0',
   assertedBy: 'kannabi',
@@ -77,6 +79,29 @@ export const gs1Policy = {
 } as const;
 
 export const identifierSchemes: readonly IdentifierScheme[] = ['gtin', 'sgtin', 'grai', 'giai'];
+
+/** The schemes Kannabi issues, at each of the two levels it allocates.
+ *
+ * A class key names a class and is not an Asset's identity: a GTIN names a
+ * trade item, an unserialised GRAI a returnable asset type. An individual key
+ * identifies one Asset, and two of the three are reached only through a class
+ * key — an SGTIN serialises a GTIN, a serialised GRAI serialises an asset
+ * type — while a GIAI is allocated straight from the prefix.
+ *
+ * These lists are Kannabi's issuance surface, not a GS1 taxonomy. GS1 defines
+ * many more keys, and a licensed GS1 Company Prefix entitles its holder to
+ * allocate all of them (§1.5); these are the ones Kannabi implements.
+ */
+export const classKeySchemes = ['gtin', 'grai'] as const;
+export type ClassKeyScheme = (typeof classKeySchemes)[number];
+export const issuanceSchemes = ['giai', 'grai', 'sgtin'] as const;
+export type IssuanceScheme = (typeof issuanceSchemes)[number];
+
+/** The class key an individual key is issued under, or null when the scheme
+ * is allocated directly from the prefix. */
+export const issuanceClassScheme: Readonly<Record<IssuanceScheme, ClassKeyScheme | null>> = {
+  giai: null, grai: 'grai', sgtin: 'gtin',
+};
 
 /** Every field any supported scheme accepts. The single list transports
  * identifier input across the API without restating a GS1 rule. */
@@ -398,10 +423,13 @@ export function canonicalIdentifiers(value: unknown): ExternalIdentifier[] {
 /** Kannabi's own coherence rules for the set of identifiers on one Asset.
  *
  * Asset-level cardinality is permissive by design: any number of independent
- * identifiers may describe the same Asset. Deliberately absent here is any GS1
- * `req=` / `ex=` evaluation, which belongs to a single AI element string and is
- * applied per identifier by `assertAiAssociations`. Only these two rules are
- * Kannabi's, and both are about the Asset rather than about AI syntax.
+ * identifiers may describe the same Asset, and identifiers of different
+ * schemes coexist freely — a Kannabi-issued GIAI, a serialised GRAI and an
+ * SGTIN on one Asset are three identities from three schemes, not a conflict.
+ * Deliberately absent here is any GS1 `req=` / `ex=` evaluation, which belongs
+ * to a single AI element string and is applied per identifier by
+ * `assertAiAssociations`. Only these three rules are Kannabi's, and all are
+ * about the Asset rather than about AI syntax.
  */
 export function assertCompatible(identifiers: readonly ExternalIdentifier[]): void {
   const seen = new Set<string>();
@@ -416,25 +444,100 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
   const gtins = new Set(identifiers.flatMap((identifier) =>
     typeof identifier.components.gtin === 'string' ? [identifier.components.gtin] : []));
   if (gtins.size > 1) throw new ValidationError('Identifiers claim conflicting GTINs for one Asset');
+  // The same rule one scheme along. A GRAI asset type names a series of
+  // identical returnable assets, so an Asset belongs to at most one: carrying
+  // two would claim it is a member of one series and an instance within
+  // another. This is coherence within AI 8003 for one Asset, and says nothing
+  // about which other schemes may sit beside it.
+  const assetTypes = new Set(identifiers.flatMap((identifier) =>
+    typeof identifier.components.assetType === 'string' ? [identifier.components.assetType] : []));
+  if (assetTypes.size > 1) {
+    throw new ValidationError('Identifiers claim conflicting GRAI asset types for one Asset');
+  }
 }
 
 /** A GS1 Company Prefix as a Kannabi namespace configures it.
  *
- * Kannabi validates only what it can justify: GS1 Company Prefixes are digit
- * strings, and at least one reference character must remain within AI 8004's
- * 30. It deliberately imposes no length range — Kannabi holds no GCP Length
- * Table, and a plausible-looking range would be a heuristic dressed as a
- * standards rule.
+ * Two rules, both normative, and neither the GCP Length Table:
+ *
+ *  - A GS1 Company Prefix is four to twelve digits (General Specifications
+ *    26.0 §1.2.3.3). Publishing that range is not the same as being able to
+ *    locate a prefix boundary inside an arbitrary key, which is what the GCP
+ *    Length Table answers and what GS1 does not publish openly. `gcppos1` and
+ *    `gcppos2` therefore stay unenforced for values Kannabi did not build.
+ *  - Restricted Circulation Number prefix space is refused, because an RCN
+ *    SHALL NOT be encoded using any GS1 Application Identifier (§1.2.2.2.1)
+ *    and every value Kannabi issues is an AI element string.
+ *
+ * What a namespace may go on to issue is a separate question: see
+ * `classReferenceWidth`. A prefix too long to leave a class reference is
+ * capability-limited, not invalid.
  */
+export const gcpLengths = { min: 4, max: 12 } as const;
+
 export function canonicalGcp(value: unknown): string {
   if (typeof value !== 'string' || !/^\d+$/.test(value)) {
     throw new ValidationError('A GS1 Company Prefix is a string of digits');
   }
-  const room = (entries['8004'].components[0].maxLength ?? 0) - 1;
-  if (value.length > room) {
-    throw new ValidationError(`A GS1 Company Prefix must leave room for an asset reference within ${room + 1} characters`);
+  if (value.length < gcpLengths.min || value.length > gcpLengths.max) {
+    throw new ValidationError(
+      `A GS1 Company Prefix is ${gcpLengths.min} to ${gcpLengths.max} digits`);
+  }
+  const restricted = restrictedPrefixReason(value);
+  if (restricted) {
+    throw new ValidationError(`That GS1 Prefix ${restricted}, so it cannot be managed as a GS1 Company Prefix`);
   }
   return value;
+}
+
+/** Digits left for a class-level reference inside a GCP, before the check
+ * digit. A GTIN and a GRAI asset type both carry twelve digits plus a check
+ * digit, so both draw on the same width — from the same prefix, but never from
+ * the same counter, because §2.3 states that a GTIN and a GRAI sharing the
+ * same digits do not conflict.
+ *
+ * Zero or less means this namespace cannot issue class keys at all. That is a
+ * reduced capability, never an invalid namespace: it stays fully usable for
+ * GIAI, whose reference is alphanumeric and up to thirty characters.
+ */
+export const classReferenceDigits = 12;
+export function classReferenceWidth(gcp: string): number {
+  return classReferenceDigits - gcp.length;
+}
+export function canIssueClassKey(gcp: string): boolean {
+  return classReferenceWidth(gcp) >= 1;
+}
+
+/** The class-level reference shared by a GRAI asset type and a base GTIN:
+ * the prefix, a zero-padded sequence filling the remaining digits, and the
+ * modulo-10 check digit.
+ *
+ * Shared because the arithmetic is genuinely identical, and shared as a
+ * function rather than as a scheme table — each caller below names its own
+ * scheme, so no generic key builder exists for a future scheme to be bolted
+ * onto by accident.
+ */
+function classReference(gcp: string, sequence: number): string {
+  const prefix = canonicalGcp(gcp);
+  const width = classReferenceWidth(prefix);
+  if (width < 1) {
+    throw new ValidationError(
+      `A ${prefix.length}-digit GS1 Company Prefix leaves no room for a ${classReferenceDigits}-digit class reference`);
+  }
+  const reference = allocatedSequence(sequence, 'class reference');
+  if (reference.length > width) {
+    throw new ValidationError('The namespace has exhausted its allocatable class references');
+  }
+  const body = prefix + reference.padStart(width, '0');
+  return body + checkDigit(body);
+}
+
+/** A whole allocated sequence number as its decimal digits. */
+function allocatedSequence(sequence: number, what: string): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new ValidationError(`An allocated ${what} is a whole number of at least 1`);
+  }
+  return String(sequence);
 }
 
 /** Construct a GIAI Kannabi is issuing from a managed namespace.
@@ -447,16 +550,111 @@ export function canonicalGcp(value: unknown): string {
  */
 export function allocatedGiai(gcp: string, sequence: number): ExternalIdentifier {
   const prefix = canonicalGcp(gcp);
-  if (!Number.isSafeInteger(sequence) || sequence < 1) {
-    throw new ValidationError('An allocated asset reference is a whole number of at least 1');
-  }
   // Unpadded decimal: the reference is terminal, so no width is needed, and a
   // fixed width would impose a ceiling. Ordering is by the stored sequence.
-  const identifier = canonicalIdentifier({ scheme: 'giai', assetReference: prefix + String(sequence) });
+  const identifier = canonicalIdentifier({
+    scheme: 'giai', assetReference: prefix + allocatedSequence(sequence, 'asset reference') });
   if (!identifier.components.assetReference.startsWith(prefix)) {
     throw new Error('Allocated GIAI does not begin with its configured prefix');
   }
   return identifier;
+}
+
+/** Construct a GRAI asset type Kannabi is allocating from a managed namespace.
+ *
+ * Class level by construction: the result carries no serial, so it names a
+ * returnable asset type — a series of identical returnable assets — and not
+ * any individual asset (§1.3.6.1, §4.4.2.1).
+ */
+export function allocatedGraiAssetType(gcp: string, sequence: number): ExternalIdentifier {
+  return canonicalIdentifier({ scheme: 'grai', assetType: classReference(gcp, sequence) });
+}
+
+/** Construct a base GTIN Kannabi is allocating from a managed namespace.
+ *
+ * Base only. An indicator digit of 1 to 8 identifies a trade item grouping
+ * derived from a base GTIN's own digits with a recomputed check digit
+ * (§2.1.7), which is not an allocation from a prefix at all, and 9 is reserved
+ * for variable measure trade items whose measure data completes the identity
+ * (§2.1.10). Neither is constructible here, by design.
+ */
+export function allocatedGtin(gcp: string, sequence: number): ExternalIdentifier {
+  return canonicalIdentifier({ scheme: 'gtin', gtin: classReference(gcp, sequence) });
+}
+
+/** Which GTIN format a namespace's own allocations take.
+ *
+ * A GS1 Company Prefix beginning with zero forms a U.P.C. Company Prefix,
+ * which SHALL only construct twelve-digit trade item identifiers; any other
+ * prefix yields a GTIN-13 (§1.2.3.3, §1.2.3.5). Both normalise to the same
+ * fourteen-digit value with the same check digit, because the leading zeroes
+ * are filler that does not change the GTIN data element value (§1.3.1, Table
+ * 1-9). So this is presentation for whoever prints the symbol, derived from
+ * the namespace on every read and never stored.
+ */
+export function allocatedGtinFormat(gcp: string): 'GTIN-12' | 'GTIN-13' {
+  return gcp.startsWith('0') ? 'GTIN-12' : 'GTIN-13';
+}
+
+/** A class key a Group is asserting into a namespace it manages, so Kannabi
+ * may issue serials under it. Validated by exactly the rules an attached
+ * identifier is, plus the two refusals adoption owns.
+ */
+export function adoptableClassKey(value: unknown): ExternalIdentifier {
+  const input = record(value, identifierInputFields);
+  if (input.scheme === 'gtin' && typeof input.gtin === 'string' && input.gtin.length === 8) {
+    // A GTIN-8 comes from a GS1-8 Prefix, which GS1 allocates to Member
+    // Organisations rather than to companies (§1.2.3.2), so it is never
+    // issued from a GS1 Company Prefix and has no serial space here. It stays
+    // recordable through the ordinary identifier path, which claims nothing.
+    throw new ValidationError('A GTIN-8 is issued from a GS1-8 Prefix, not from a GS1 Company Prefix, so it cannot be adopted into a namespace');
+  }
+  const identifier = canonicalIdentifier(input);
+  if (identifier.scheme === 'gtin' && identifier.components.gtin[0] !== '0') {
+    throw new ValidationError('A GTIN-14 with an indicator digit identifies a trade item grouping or a variable measure trade item, which this namespace does not manage');
+  }
+  if (identifier.scheme !== 'gtin' && identifier.scheme !== 'grai') {
+    throw new ValidationError('A managed class key is a GTIN or a GRAI asset type');
+  }
+  if (identifier.level !== 'class') {
+    throw new ValidationError('A managed class key is class level; a serialised GRAI identifies one Asset and is not one');
+  }
+  return identifier;
+}
+
+/** Whether a class key lies inside the prefix a namespace asserts.
+ *
+ * One rule for every GTIN format. In the fourteen-digit representation the
+ * leading filler of a GTIN-8, GTIN-12 or GTIN-13 and the indicator of a true
+ * GTIN-14 occupy the same position, so the prefix always begins at the second
+ * digit (§1.3.1, Table 1-9). A GRAI asset type carries no filler, so its
+ * prefix begins at the first.
+ *
+ * This establishes containment in the prefix the Group asserted, with exactly
+ * the standing of that assertion. It is not a licensing check.
+ */
+export function classKeyWithinGcp(identifier: ExternalIdentifier, gcp: string): boolean {
+  const digits = identifier.scheme === 'gtin'
+    ? identifier.components.gtin.slice(1)
+    : identifier.components.assetType;
+  return typeof digits === 'string' && digits.startsWith(gcp);
+}
+
+/** Construct the serialised GRAI Kannabi is issuing under an asset type it
+ * manages. The serial distinguishes an individual asset within that type and
+ * is assigned by the asset owner or manager (§4.4.2.2). */
+export function allocatedGraiSerial(assetType: string, sequence: number): ExternalIdentifier {
+  return canonicalIdentifier({
+    scheme: 'grai', assetType, serial: allocatedSequence(sequence, 'serial') });
+}
+
+/** Construct the SGTIN Kannabi is issuing under a GTIN it manages. Serial
+ * non-duplication for a GTIN is the GTIN allocator's responsibility (§3.5.2);
+ * Kannabi discharges it for the serials it issues and records, and cannot
+ * speak for serials issued elsewhere for the same GTIN. */
+export function allocatedSgtin(gtin: string, sequence: number): ExternalIdentifier {
+  return canonicalIdentifier({
+    scheme: 'sgtin', gtin, serial: allocatedSequence(sequence, 'serial') });
 }
 
 /** Rendering descriptors. Presentation only; the policy above remains the sole

@@ -7,7 +7,7 @@ import {
   type AssetSort,
 } from './asset-page.js';
 import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
-import { giaiLedgerCursor, type GiaiLedgerRequest } from './giai-ledger.js';
+import { gs1LedgerCursor, type Gs1LedgerRequest } from './gs1-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
@@ -15,12 +15,15 @@ import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change
 import { gravatarIdentifier } from './avatar.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
-  allocatedGiai, assertCompatible, canonicalGcp, canonicalIdentifier, canonicalIdentifiers,
-  storedIdentifier, type ExternalIdentifier, type IdentifierLevel, type IdentifierScheme,
+  adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
+  allocatedGtinFormat, allocatedSgtin, assertCompatible, canIssueClassKey, canonicalGcp,
+  canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gs1Policy, issuanceClassScheme,
+  storedIdentifier, type ClassKeyScheme, type ExternalIdentifier, type IdentifierLevel,
+  type IdentifierScheme, type IssuanceScheme,
 } from './gs1.js';
 import {
   allocatableSequence, canonicalExclusions, firstSequence, storedExclusions, type ExclusionRange,
-} from './giai-allocation.js';
+} from './reference-allocation.js';
 import { isAppearancePreference, type AppearancePreference } from '../shared/appearance.js';
 import { MailRevisionConflictError, type MailVerificationStatus, type PersistedMailSettings,
   type StoredMailConfiguration } from './mail.js';
@@ -76,8 +79,15 @@ export type Asset = Readonly<{
   id: string;
   name: string;
   identifiers: readonly AttachedIdentifier[];
-  /** Derived from the issuance ledger, not from any identifier property. */
-  allocation: GiaiAllocation | null;
+  /** Derived from the issuance ledger, not from any identifier property.
+   *
+   * A list, because an Asset may carry Kannabi-issued keys of several schemes
+   * at once — a GIAI, a serialised GRAI and an SGTIN are three identities from
+   * three schemes rather than a conflict. Issuance stays idempotent per
+   * scheme, which is a guarantee about the operation and not a claim that one
+   * scheme excludes another.
+   */
+  issuances: readonly Gs1KeyIssuance[];
   reportedBy: ReporterAttribution;
   reportedAt: string;
   /** Null only for an Asset last written before Kannabi recorded this; it
@@ -90,27 +100,108 @@ export type Asset = Readonly<{
 }>;
 export type Photo = { key: string; contentType: string; size: number; createdAt: string | null };
 
+/** One counter and the numbers it must never produce.
+ *
+ * The same arithmetic serves four counters with two different standings. A
+ * namespace's reference counters are authoritative, because inside a managed
+ * namespace Kannabi is the only allocator. A class key's serial counter is
+ * not: serial non-duplication for a GTIN is the GTIN allocator's
+ * responsibility as a party (GS1 General Specifications 26.0 §3.5.2), so
+ * Kannabi discharges it for the serials it issues and records a commitment it
+ * cannot enforce for serials issued elsewhere. The counters are kept as inline
+ * state on whichever record owns them rather than as one shared node type, so
+ * that difference stays visible where each is read.
+ */
+export type AllocationCounter = Readonly<{
+  nextSequence: number;
+  exclusions: readonly ExclusionRange[];
+}>;
+
+/** The counters a namespace owns. Independent by design: §2.3 states that a
+ * GTIN and a GRAI sharing the same digits do not conflict, because the data
+ * carrier distinguishes the two keys, so one prefix issues each key type from
+ * its own sequence. */
+export const namespaceCounters = ['giai', 'graiType', 'gtinItem'] as const;
+export type NamespaceCounter = (typeof namespaceCounters)[number];
+
+/** Which namespace counter a class-level scheme draws on. Separate counters
+ * for the same prefix, because the two keys do not collide. */
+const classKeyCounters: Readonly<Record<ClassKeyScheme, NamespaceCounter>> = {
+  grai: 'graiType', gtin: 'gtinItem',
+};
+function classKeyCounter(scheme: ClassKeyScheme): NamespaceCounter {
+  return classKeyCounters[scheme];
+}
+function classKeyScheme(value: unknown): ClassKeyScheme {
+  if (value !== 'grai' && value !== 'gtin') {
+    throw new ValidationError('A managed class key is a GTIN or a GRAI asset type');
+  }
+  return value;
+}
+
 /** A GS1 Company Prefix namespace a Group has configured for allocation.
  * `active` is configuration state, never allocation lifecycle. */
-export type GiaiNamespace = Readonly<{
+export type Gs1Namespace = Readonly<{
   key: string;
   gcp: string;
   active: boolean;
-  exclusions: readonly ExclusionRange[];
-  nextSequence: number;
+  counters: Readonly<Record<NamespaceCounter, AllocationCounter>>;
+  /** Whether this prefix leaves room for a class reference at all. A prefix
+   * too long for one stays fully valid for GIAI; this is reduced capability,
+   * never an invalid namespace. */
+  classKeyIssuable: boolean;
+  /** Which GTIN format this namespace's own allocations take, derived from
+   * the prefix on every read. Presentation for whoever prints the symbol. */
+  gtinFormat: 'GTIN-12' | 'GTIN-13';
   group: Entity;
   configuredAt: string;
   configuredBy: string;
 }>;
 
-/** One immutable issuance. Kannabi's claim to have allocated a GIAI rests on
- * this record and nothing else — never on an Asset merely carrying a value. */
-export type GiaiAllocation = Readonly<{
-  value: string;
+/** A class-level key inside a managed namespace, and the serial space under
+ * it.
+ *
+ * Two provenances, kept apart because they are different assertions.
+ * `allocated` means Kannabi produced the reference from this namespace's
+ * counter; `adopted` means the Group asserted a key it had already allocated
+ * elsewhere into its own namespace so Kannabi may issue serials under it.
+ * Neither is inferred from the other, and a row missing the discriminator is
+ * rejected rather than defaulted.
+ *
+ * Deliberately absent: any name, description, product attribute, dimension or
+ * image. This is allocation bookkeeping. It is not a trade item, a product or
+ * an asset class, and giving it a label would be the cheapest way to answer
+ * #50 by accretion.
+ */
+export type Gs1ClassKeyAllocation = Readonly<{
+  key: string;
+  scheme: ClassKeyScheme;
+  canonical: string;
+  gcp: string;
+  namespaceKey: string;
+  /** The counter position that produced it, or null when adopted. */
+  sequence: number | null;
+  provenance: 'allocated' | 'adopted';
+  active: boolean;
+  serial: AllocationCounter;
+  assertedAt: string;
+  assertedBy: ReporterAttribution;
+}>;
+
+/** One immutable issuance. Kannabi's claim to have allocated a value rests on
+ * this record and nothing else — never on an Asset merely carrying a value
+ * whose digits fall inside a managed prefix. */
+export type Gs1KeyIssuance = Readonly<{
+  key: string;
+  scheme: IssuanceScheme;
+  canonical: string;
   gcp: string;
   sequence: number;
-  allocatedAt: string;
   allocatedForAssetId: string;
+  /** The class key this was serialised under, for GRAI and SGTIN. Null for a
+   * GIAI, which is allocated straight from the prefix. */
+  classKeyCanonical: string | null;
+  allocatedAt: string;
   /** Public provenance in the same shape as `reportedBy`: who acted, rendered
    * through the same tombstone rules, never a bare stored actor key. */
   allocatedBy: ReporterAttribution;
@@ -127,26 +218,89 @@ export function orderPhotos(photos: readonly Photo[]): Photo[] {
 
 type StoredIdentifier = { key: string; canonical: string; scheme: string; policyVersion: string };
 type StoredAsset = Omit<Asset, 'identifiers'> & { identifiers: StoredIdentifier[] };
+/** A counter's three stored properties, named for the counter that owns them
+ * so a reader never has to join to learn what a sequence counts. */
+const counterProperties = (counter: string) => ({
+  nextSequence: `${counter}NextSequence`,
+  exclusionsFrom: `${counter}ExclusionsFrom`,
+  exclusionsTo: `${counter}ExclusionsTo`,
+});
+
+/** Project one inline counter from `node` into a nested `{nextSequence, …}`. */
+function counterProjection(node: string, counter: string): string {
+  const property = counterProperties(counter);
+  return `{ nextSequence: toFloat(${node}.${property.nextSequence}),
+    exclusionsFrom: ${node}.${property.exclusionsFrom},
+    exclusionsTo: ${node}.${property.exclusionsTo} }`;
+}
+
+type StoredCounter = { nextSequence: number; exclusionsFrom: unknown; exclusionsTo: unknown };
+function counterFrom(stored: StoredCounter): AllocationCounter {
+  return Object.freeze({
+    nextSequence: stored.nextSequence,
+    exclusions: storedExclusions(stored.exclusionsFrom, stored.exclusionsTo),
+  });
+}
+
+/** `property: $property` assignments for one counter, for a CREATE clause,
+ * paired with the parameters `counterParams` produces under the same names. */
+function counterAssignments(counter: string): string {
+  return Object.values(counterProperties(counter))
+    .map((property) => `${property}: $${property}`).join(', ');
+}
+
+/** The parameters that initialise one counter on a freshly created record. */
+function counterParams(counter: string, exclusions: readonly ExclusionRange[]) {
+  const property = counterProperties(counter);
+  return {
+    [property.nextSequence]: int(firstSequence),
+    [property.exclusionsFrom]: exclusions.map((range) => int(range.from)),
+    [property.exclusionsTo]: exclusions.map((range) => int(range.to)),
+  };
+}
+
 const namespaceProjection = `n { .key, .gcp, .active, .configuredBy,
-  configuredAt: toString(n.configuredAt), nextSequence: toFloat(n.nextSequence),
-  exclusionsFrom: n.exclusionsFrom, exclusionsTo: n.exclusionsTo,
+  configuredAt: toString(n.configuredAt),
+  counters: { ${namespaceCounters.map((counter) =>
+    `${counter}: ${counterProjection('n', counter)}`).join(', ')} },
   group: head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g { .key, .name }]) }`;
 
-type StoredNamespace = Omit<GiaiNamespace, 'exclusions'>
-  & { exclusionsFrom: unknown; exclusionsTo: unknown };
+type StoredNamespace = Omit<Gs1Namespace, 'counters' | 'classKeyIssuable' | 'gtinFormat'>
+  & { counters: Record<NamespaceCounter, StoredCounter> };
 
-function namespaceFrom(stored: StoredNamespace): GiaiNamespace {
-  const { exclusionsFrom, exclusionsTo, ...namespace } = stored;
-  return { ...namespace, exclusions: storedExclusions(exclusionsFrom, exclusionsTo) };
+function namespaceFrom(stored: StoredNamespace): Gs1Namespace {
+  return Object.freeze({
+    ...stored,
+    counters: Object.freeze(Object.fromEntries(namespaceCounters
+      .map((counter) => [counter, counterFrom(stored.counters[counter])])) as
+        Record<NamespaceCounter, AllocationCounter>),
+    // Both derived on every read from the prefix alone, never stored: what a
+    // prefix can issue and which GTIN format it yields follow from its digits.
+    classKeyIssuable: canIssueClassKey(stored.gcp),
+    gtinFormat: allocatedGtinFormat(stored.gcp),
+  });
+}
+
+type StoredClassKey = Omit<Gs1ClassKeyAllocation, 'serial'> & { serial: StoredCounter };
+function classKeyFrom(stored: StoredClassKey): Gs1ClassKeyAllocation {
+  return Object.freeze({ ...stored, serial: counterFrom(stored.serial) });
 }
 
 /** Components and level are always re-derived from the canonical form, so a
  * stored identifier cannot become an independent source of GS1 truth. */
+function byCanonical<T extends { canonical: string }>(left: T, right: T): number {
+  return left.canonical < right.canonical ? -1 : left.canonical > right.canonical ? 1 : 0;
+}
+
 function assetFrom(stored: StoredAsset): Asset {
   const identifiers = stored.identifiers
     .map((row) => ({ key: row.key, ...storedIdentifier(row.scheme, row.canonical, row.policyVersion) }))
-    .sort((left, right) => (left.canonical < right.canonical ? -1 : left.canonical > right.canonical ? 1 : 0));
-  return { ...stored, identifiers, photos: orderPhotos(stored.photos) };
+    .sort(byCanonical);
+  // Issued values are ordered by their canonical form rather than by the
+  // sequence that produced them: a sequence is unique only within the counter
+  // that produced it, and an Asset's issuances can come from several.
+  const issuances = [...stored.issuances].sort(byCanonical);
+  return { ...stored, identifiers, issuances, photos: orderPhotos(stored.photos) };
 }
 export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
 
@@ -171,10 +325,10 @@ export type AssetLookup = Readonly<{
  * may read that Asset. `asset` is null for an issuance whose Asset is not
  * readable: the issuance is a Kannabi-owned fact, but it grants no Asset
  * access. */
-export type GiaiIssuance = Readonly<{ allocation: GiaiAllocation; asset: Asset | null }>;
-export type GiaiIssuancePage = Readonly<{
-  namespace: GiaiNamespace;
-  issuances: readonly GiaiIssuance[];
+export type Gs1LedgerEntry = Readonly<{ issuance: Gs1KeyIssuance; asset: Asset | null }>;
+export type Gs1LedgerPage = Readonly<{
+  namespace: Gs1Namespace;
+  entries: readonly Gs1LedgerEntry[];
   matching: number;
   nextCursor: string | null;
 }>;
@@ -210,14 +364,34 @@ const constraints = [
   'CREATE CONSTRAINT individual_identifier_key IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT class_identifier IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.canonical IS UNIQUE',
   'CREATE CONSTRAINT class_identifier_key IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.key IS UNIQUE',
-  // One GCP has exactly one allocation counter, so a prefix can never be
-  // configured twice and issue the same reference from two counters.
-  'CREATE CONSTRAINT giai_namespace_key IF NOT EXISTS FOR (n:GiaiNamespace) REQUIRE n.key IS UNIQUE',
-  'CREATE CONSTRAINT giai_namespace_gcp IF NOT EXISTS FOR (n:GiaiNamespace) REQUIRE n.gcp IS UNIQUE',
-  // A GIAI is issued once, and Kannabi issues at most one per Asset. Both are
-  // schema facts rather than application sequencing.
-  'CREATE CONSTRAINT giai_allocation_value IF NOT EXISTS FOR (n:GiaiAllocation) REQUIRE n.value IS UNIQUE',
-  'CREATE CONSTRAINT giai_allocation_asset IF NOT EXISTS FOR (n:GiaiAllocation) REQUIRE n.allocatedForAssetId IS UNIQUE',
+  // One GCP has exactly one set of allocation counters, so a prefix can never
+  // be configured twice and issue the same reference from two counters.
+  'CREATE CONSTRAINT gs1_namespace_key IF NOT EXISTS FOR (n:Gs1Namespace) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT gs1_namespace_gcp IF NOT EXISTS FOR (n:Gs1Namespace) REQUIRE n.gcp IS UNIQUE',
+  // A class key is managed once. The canonical form carries the AI, so a GTIN
+  // and a GRAI asset type made of the same digits are two different keys —
+  // which is what section 2.3 says they are.
+  'CREATE CONSTRAINT gs1_class_key_key IF NOT EXISTS FOR (n:Gs1ClassKeyAllocation) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT gs1_class_key_canonical IF NOT EXISTS FOR (n:Gs1ClassKeyAllocation) REQUIRE n.canonical IS UNIQUE',
+  // An issued value is issued once, and issuance is idempotent per scheme per
+  // Asset. The second is a composite rather than a bare `allocatedForAssetId`
+  // on purpose: it makes repeating one scheme's issuance a no-op while leaving
+  // a GIAI, a serialised GRAI and an SGTIN free to coexist on one Asset.
+  'CREATE CONSTRAINT gs1_issuance_key IF NOT EXISTS FOR (n:Gs1KeyIssuance) REQUIRE n.key IS UNIQUE',
+  'CREATE CONSTRAINT gs1_issuance_canonical IF NOT EXISTS FOR (n:Gs1KeyIssuance) REQUIRE n.canonical IS UNIQUE',
+  'CREATE CONSTRAINT gs1_issuance_asset IF NOT EXISTS FOR (n:Gs1KeyIssuance) REQUIRE (n.scheme, n.allocatedForAssetId) IS UNIQUE',
+];
+
+/** Constraints from the GIAI-only schema, dropped once their nodes have been
+ * migrated. Kept as an explicit list so a database that never carried them is
+ * unaffected and one that did cannot keep enforcing a rule the domain no
+ * longer holds — in particular one Kannabi issuance per Asset, which was only
+ * ever true because there was one scheme. */
+const retiredConstraints = [
+  'DROP CONSTRAINT giai_namespace_key IF EXISTS',
+  'DROP CONSTRAINT giai_namespace_gcp IF EXISTS',
+  'DROP CONSTRAINT giai_allocation_value IF EXISTS',
+  'DROP CONSTRAINT giai_allocation_asset IF EXISTS',
 ];
 
 // Installed only once every Asset carries a native id, so a pre-Phase-1
@@ -304,25 +478,48 @@ const attribution = (node: string, key: string) => `{ key: ${key},
 
 /** One issuance as the domain sees it. Requires `issuance` and `allocator` in
  * scope. Shared by the Asset projection and by the ledger read, so an Asset's
- * allocation and a namespace's issuance can never describe the same record
+ * issuances and a namespace's ledger can never describe the same record
  * differently. */
-const allocationProjection = `issuance { .value, .gcp, sequence: toFloat(issuance.sequence),
+const issuanceProjection = `issuance { .key, .scheme, .canonical, .gcp,
+      sequence: toFloat(issuance.sequence),
       allocatedAt: toString(issuance.allocatedAt), .allocatedForAssetId,
+      classKeyCanonical: head([(issuance)-[:ISSUED_UNDER]->(c:Gs1ClassKeyAllocation) | c.canonical]),
       allocatedBy: ${attribution('allocator', 'issuance.allocatedBy')} }`;
+
+/** One class key as the domain sees it. Requires `classKey` in scope. */
+const classKeyProjection = `classKey { .key, .scheme, .canonical, .gcp, .provenance, .active,
+      sequence: CASE WHEN classKey.sequence IS NULL THEN null ELSE toFloat(classKey.sequence) END,
+      assertedAt: toString(classKey.assertedAt),
+      assertedBy: ${attribution('asserter', 'classKey.assertedBy')},
+      namespaceKey: head([(classKey)-[:IN_NAMESPACE]->(ns:Gs1Namespace) | ns.key]),
+      serial: ${counterProjection('classKey', 'serial')} }`;
+
+/** Every issuance bound to this Asset, as one list.
+ *
+ * A subquery rather than an OPTIONAL MATCH beside the Group match: an Asset
+ * may now hold an issuance per scheme, and two independent collections in one
+ * scope would multiply each other's rows. Aggregating inside the subquery also
+ * means an Asset with no issuance yields an empty list rather than a row of
+ * nulls.
+ *
+ * Rows are found by the Asset id they record rather than by a relationship,
+ * which is what lets an issuance outlive the Asset it was issued for. The
+ * ledger stores an actor key; the allocator is resolved here so the public
+ * representation carries attribution rather than that internal key alone.
+ */
+const issuancesSubquery = `CALL {
+    WITH a
+    MATCH (issuance:Gs1KeyIssuance {allocatedForAssetId: a.id})
+    OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})
+    RETURN collect(${issuanceProjection}) AS issuances
+  }`;
 
 const identifierProjection = `
     identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
         x { .key, .canonical, .scheme, .policyVersion }]
       + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
         y { .key, .canonical, .scheme, .policyVersion }],
-    allocation: ${allocationProjection},`
-
-// The ledger row is found by the Asset id it records, which is unique, so this
-// cannot multiply rows and needs no relationship to the Asset to survive one.
-// The ledger stores an actor key; the allocator is resolved here so the public
-// representation carries attribution rather than that internal key alone.
-const allocationMatch = `OPTIONAL MATCH (issuance:GiaiAllocation {allocatedForAssetId: a.id})
-  OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})`;
+    issuances: issuances,`
 
 /** Resolves the accepting User of the Asset's most recent canonical change.
  * Optional in both directions: an Asset may predate this record, and the
@@ -414,16 +611,16 @@ const assetRowsProjection = (order: string) => `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-  ${allocationMatch}
+  ${issuancesSubquery}
   ${changeMatch}
-  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, issuances, acceptor, collect(g { .key, .name }) AS groups
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
-/** Which GIAI namespaces an audience may see. Requires `n` in scope. */
+/** Which GS1 namespaces an audience may see. Requires `n` in scope. */
 const visibleNamespace = `($systemRead OR EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n) })`;
 
@@ -483,9 +680,9 @@ const assetProjection = `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
-  ${allocationMatch}
+  ${issuancesSubquery}
   ${changeMatch}
-  WITH a, u, o, issuance, allocator, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, issuances, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     owner: o { .key, .name },
@@ -512,8 +709,13 @@ export class IdentityStore {
       await session.run(assetIdConstraint);
       await IdentityStore.migrateExternalIdentifiers(driver);
       await IdentityStore.verifyExternalIdentifiers(session);
-      // The pre-Phase-2 identifier schema has no remaining nodes to guard.
+      await IdentityStore.migrateGs1Allocation(driver);
+      await IdentityStore.verifyGs1Allocation(session);
+      // The pre-Phase-2 identifier schema has no remaining nodes to guard, and
+      // the GIAI-only allocation schema has none either now that its rows have
+      // been migrated onto the scheme-discriminated labels.
       await session.run('DROP CONSTRAINT identifier_claim IF EXISTS');
+      for (const statement of retiredConstraints) await session.run(statement);
       await session.run(`MERGE (s:Settings {key: 'instance'})
         ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0,
           s.showAssetId = false, s.showIdentifierPolicyVersion = false
@@ -559,8 +761,10 @@ export class IdentityStore {
       ['Migration', ['key']], ['Asset', ['id']], ['ExternalIdentity', ['canonical']],
       ['IndividualIdentifier', ['canonical']], ['IndividualIdentifier', ['key']],
       ['ClassIdentifier', ['canonical']], ['ClassIdentifier', ['key']],
-      ['GiaiNamespace', ['key']], ['GiaiNamespace', ['gcp']],
-      ['GiaiAllocation', ['value']], ['GiaiAllocation', ['allocatedForAssetId']],
+      ['Gs1Namespace', ['key']], ['Gs1Namespace', ['gcp']],
+      ['Gs1ClassKeyAllocation', ['key']], ['Gs1ClassKeyAllocation', ['canonical']],
+      ['Gs1KeyIssuance', ['key']], ['Gs1KeyIssuance', ['canonical']],
+      ['Gs1KeyIssuance', ['scheme', 'allocatedForAssetId']],
     ] as const) {
       if (!result.records.some((row) => row.get('type') === 'UNIQUENESS'
         && JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([label])
@@ -661,6 +865,104 @@ export class IdentityStore {
         if (!migrated) return;
       }
     } finally { await session.close(); }
+  }
+
+  /** Move the GIAI-only allocation schema onto the scheme-discriminated one.
+   *
+   * Serialised on its own migration node for the reason the native-id backfill
+   * established: a concurrent peer must block and then observe committed work
+   * rather than re-reading rows it is about to rewrite.
+   *
+   * Two rewrites, both shape-preserving:
+   *
+   *   Gs1Namespace   → Gs1Namespace, its single counter renamed to the GIAI
+   *                     counter and the two class-reference counters started
+   *                     at the first sequence with no exclusions.
+   *   Gs1KeyIssuance  → Gs1KeyIssuance, scheme 'giai', its bare AI 8004 value
+   *                     rebuilt into a canonical form through the GS1 boundary.
+   *
+   * Nothing gains authority it did not have. A namespace keeps exactly the
+   * prefix it was configured with, a GIAI keeps the Asset it was issued for
+   * and the sequence that produced it, and no class key is invented for a
+   * GIAI, which has no class level to invent one from.
+   */
+  private static async migrateGs1Allocation(driver: Driver): Promise<void> {
+    const session = driver.session();
+    try {
+      await session.executeWrite(async (tx) => {
+        await tx.run("MERGE (m:Migration {key: 'gs1-allocation'}) SET m.lock = true");
+        // The left-hand labels here are the OLD ones and must stay old: this
+        // statement reads what the previous schema wrote. Renaming them to the
+        // new labels would make the migration a no-op on a database that needs
+        // it, and would strip the label off a namespace that does not.
+        await tx.run(`MATCH (n:GiaiNamespace)
+          SET n:Gs1Namespace,
+            n.giaiNextSequence = n.nextSequence,
+            n.giaiExclusionsFrom = n.exclusionsFrom,
+            n.giaiExclusionsTo = n.exclusionsTo,
+            n.graiTypeNextSequence = $first, n.graiTypeExclusionsFrom = [], n.graiTypeExclusionsTo = [],
+            n.gtinItemNextSequence = $first, n.gtinItemExclusionsFrom = [], n.gtinItemExclusionsTo = []
+          REMOVE n:GiaiNamespace, n.nextSequence, n.exclusionsFrom, n.exclusionsTo`,
+        { first: int(firstSequence) });
+      });
+      for (;;) {
+        const migrated = await session.executeWrite(async (tx) => {
+          await tx.run("MERGE (m:Migration {key: 'gs1-allocation'}) SET m.lock = true");
+          const legacy = await tx.run(`MATCH (l:GiaiAllocation)
+            WITH l LIMIT $batch RETURN l.value AS value`, { batch: int(500) });
+          if (!legacy.records.length) return 0;
+          // Rebuilt through the GS1 boundary so migration validates rather
+          // than transcribes, exactly as the identifier migration does.
+          const rows = legacy.records.map((row) => {
+            const value = row.get('value') as string;
+            return { value, key: randomUUID(),
+              canonical: canonicalIdentifier({ scheme: 'giai', assetReference: value }).canonical };
+          });
+          await tx.run(`UNWIND $rows AS row
+            MATCH (l:GiaiAllocation {value: row.value})
+            SET l:Gs1KeyIssuance, l.key = row.key, l.scheme = 'giai', l.canonical = row.canonical
+            REMOVE l:GiaiAllocation, l.value
+            WITH l
+            MATCH (l)-[old:ALLOCATED_FROM]->(n:Gs1Namespace)
+            CREATE (l)-[:ISSUED_FROM]->(n)
+            DELETE old`, { rows });
+          return rows.length;
+        });
+        if (!migrated) return;
+      }
+    } finally { await session.close(); }
+  }
+
+  /** Startup invariant: no GIAI-only allocation node survives, and every
+   * migrated record carries what the domain needs to read it back. A row
+   * missing its scheme or its provenance is corruption, never a default. */
+  private static async verifyGs1Allocation(session: Session): Promise<void> {
+    // Old labels on purpose: this asserts that nothing from the previous
+    // schema survived, so it is the one place that must still name them.
+    const legacy = await session.run(`MATCH (n) WHERE n:GiaiNamespace OR n:GiaiAllocation
+      RETURN count(n) AS remaining`);
+    const remaining = legacy.records[0].get('remaining').toNumber();
+    if (remaining) throw new Error(`${remaining} GIAI-only allocation node(s) could not be migrated`);
+    const incomplete = await session.run(`MATCH (n:Gs1Namespace)
+      WHERE ${namespaceCounters.map((counter) =>
+    `n.${counter}NextSequence IS NULL`).join(' OR ')}
+      RETURN count(n) AS invalid`);
+    if (incomplete.records[0].get('invalid').toNumber()) {
+      throw new Error('A GS1 namespace is missing an allocation counter');
+    }
+    const issuances = await session.run(`MATCH (n:Gs1KeyIssuance)
+      WHERE n.key IS NULL OR n.scheme IS NULL OR n.canonical IS NULL OR n.allocatedForAssetId IS NULL
+      RETURN count(n) AS invalid`);
+    if (issuances.records[0].get('invalid').toNumber()) {
+      throw new Error('An issuance record is missing required properties');
+    }
+    const classKeys = await session.run(`MATCH (n:Gs1ClassKeyAllocation)
+      WHERE n.key IS NULL OR n.scheme IS NULL OR n.canonical IS NULL OR n.provenance IS NULL
+        OR n.serialNextSequence IS NULL
+      RETURN count(n) AS invalid`);
+    if (classKeys.records[0].get('invalid').toNumber()) {
+      throw new Error('A class key allocation is missing required properties');
+    }
   }
 
   /** Startup invariant: no pre-Phase-2 identifier survives, and every stored
@@ -1424,16 +1726,16 @@ export class IdentityStore {
     const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
       .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
     assertCompatible([...existing, identifier]);
-    // A GIAI Kannabi issued may only ever return to the Asset it was issued
-    // for. An externally assigned GIAI has no ledger row and keeps the ordinary
-    // correction semantics of detaching from one Asset and attaching to another.
-    if (identifier.scheme === 'giai') {
-      const issued = await tx.run('MATCH (l:GiaiAllocation {value: $value}) RETURN l.allocatedForAssetId AS assetId',
-        { value: identifier.components.assetReference });
-      const issuedFor = issued.records[0]?.get('assetId') as string | undefined;
-      if (issuedFor !== undefined && issuedFor !== assetKey) {
-        throw new ValidationError('Kannabi issued that GIAI for another Asset');
-      }
+    // A value Kannabi issued may only ever return to the Asset it was issued
+    // for. One check for every scheme, matched on the canonical form: an
+    // externally assigned value has no ledger row and keeps the ordinary
+    // correction semantics of detaching from one Asset and attaching to
+    // another. The ledger decides this, never the digits of the value.
+    const issued = await tx.run(`MATCH (l:Gs1KeyIssuance {canonical: $canonical})
+      RETURN l.allocatedForAssetId AS assetId`, { canonical: identifier.canonical });
+    const issuedFor = issued.records[0]?.get('assetId') as string | undefined;
+    if (issuedFor !== undefined && issuedFor !== assetKey) {
+      throw new ValidationError('Kannabi issued that identifier for another Asset');
     }
     await tx.run(`${assetMatch} WHERE ${collaboration}
       ${recordChange}
@@ -1441,19 +1743,42 @@ export class IdentityStore {
     { assetId: assetKey, actorKey, ...change, ...identifierParams([identifier]) });
   }
 
-  /** GIAI namespaces the audience can reach, ordered by prefix. */
-  async listGiaiNamespaces(audience: NamedAudienceInput): Promise<GiaiNamespace[]> {
+  /** GS1 namespaces the audience can reach, ordered by prefix. */
+  async listGs1Namespaces(audience: NamedAudienceInput): Promise<Gs1Namespace[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (n:GiaiNamespace) WHERE ${visibleNamespace}
+        MATCH (n:Gs1Namespace) WHERE ${visibleNamespace}
         RETURN DISTINCT ${namespaceProjection} AS namespace ORDER BY namespace.gcp`,
       audienceParameters(audience)));
       return result.records.map((row) => namespaceFrom(row.get('namespace')));
     } finally { await session.close(); }
   }
 
-  /** Read a namespace's GIAI issuance ledger.
+  /** The class keys a namespace manages, ordered by canonical form.
+   *
+   * Reachable exactly where the namespace is. A class key is namespace
+   * configuration, so it is neither Asset data nor visible through Asset
+   * access, and knowing one grants nothing — serialising under it still
+   * requires membership of the managing Group.
+   */
+  async listClassKeys(audience: NamedAudienceInput, namespaceKey: string,
+    scheme?: ClassKeyScheme): Promise<Gs1ClassKeyAllocation[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.executeRead((tx) => tx.run(`
+        MATCH (n:Gs1Namespace {key: $namespaceKey}) WHERE ${visibleNamespace}
+        MATCH (classKey:Gs1ClassKeyAllocation)-[:IN_NAMESPACE]->(n)
+        WHERE $scheme IS NULL OR classKey.scheme = $scheme
+        OPTIONAL MATCH (asserter:User {key: classKey.assertedBy})
+        RETURN ${classKeyProjection} AS classKey ORDER BY classKey.canonical`,
+      { namespaceKey: requiredText(namespaceKey, 'namespace key'), scheme: scheme ?? null,
+        ...audienceParameters(audience) }));
+      return result.records.map((row) => classKeyFrom(row.get('classKey')));
+    } finally { await session.close(); }
+  }
+
+  /** Read a namespace's issuance ledger.
    *
    * This is the only answer Kannabi can give to "which Assets did Kannabi
    * allocate from this namespace". Matching a stored identifier against the
@@ -1465,41 +1790,43 @@ export class IdentityStore {
    * identifier is detached. The Asset itself is attached only where the
    * audience may read it, so the ledger never widens Asset access.
    */
-  async giaiIssuances(audience: NamedAudienceInput, request: GiaiLedgerRequest): Promise<GiaiIssuancePage> {
-    const { namespaceKey, limit, after } = request;
+  async gs1Issuances(audience: NamedAudienceInput, request: Gs1LedgerRequest): Promise<Gs1LedgerPage> {
+    const { namespaceKey, scheme, limit, after } = request;
     const parameters = audienceParameters(audience);
     const session = this.driver.session();
     try {
       return await session.executeRead(async (tx) => {
         const found = await tx.run(`
-          MATCH (n:GiaiNamespace {key: $namespaceKey}) WHERE ${visibleNamespace}
-          OPTIONAL MATCH (:GiaiAllocation)-[issued:ALLOCATED_FROM]->(n)
+          MATCH (n:Gs1Namespace {key: $namespaceKey}) WHERE ${visibleNamespace}
+          OPTIONAL MATCH (issued:Gs1KeyIssuance)-[:ISSUED_FROM]->(n)
+          WHERE $scheme IS NULL OR issued.scheme = $scheme
           RETURN ${namespaceProjection} AS namespace, count(issued) AS matching`,
-        { namespaceKey, ...parameters });
+        { namespaceKey, scheme, ...parameters });
         if (!found.records.length) throw new ReferenceError('Allocation namespace not found');
         const page = await tx.run(`
-          MATCH (issuance:GiaiAllocation)-[:ALLOCATED_FROM]->(:GiaiNamespace {key: $namespaceKey})
-          WHERE $after IS NULL OR issuance.sequence > $after
-          WITH issuance ORDER BY issuance.sequence ASC LIMIT $fetchSize
+          MATCH (issuance:Gs1KeyIssuance)-[:ISSUED_FROM]->(:Gs1Namespace {key: $namespaceKey})
+          WHERE ($scheme IS NULL OR issuance.scheme = $scheme)
+            AND ($after IS NULL OR issuance.canonical > $after)
+          WITH issuance ORDER BY issuance.canonical ASC LIMIT $fetchSize
           OPTIONAL MATCH (allocator:User {key: issuance.allocatedBy})
-          WITH issuance, allocator ORDER BY issuance.sequence ASC
-          RETURN collect(${allocationProjection}) AS rows`,
-        { namespaceKey, after: after === null ? null : int(after), fetchSize: int(limit + 1) });
-        const rows = page.records[0].get('rows') as GiaiAllocation[];
-        const allocations = rows.slice(0, limit);
+          WITH issuance, allocator ORDER BY issuance.canonical ASC
+          RETURN collect(${issuanceProjection}) AS rows`,
+        { namespaceKey, scheme, after, fetchSize: int(limit + 1) });
+        const rows = page.records[0].get('rows') as Gs1KeyIssuance[];
+        const issuances = rows.slice(0, limit);
         const readable = await tx.run(`
           MATCH (a:Asset) WHERE a.id IN $ids AND ${readableAsset}
           ${assetRowsProjection('ORDER BY a.name ASC, a.id ASC')}`,
-        { ids: allocations.map((allocation) => allocation.allocatedForAssetId), ...parameters });
+        { ids: issuances.map((issuance) => issuance.allocatedForAssetId), ...parameters });
         const assets = new Map((readable.records[0].get('rows') as StoredAsset[])
           .map((stored) => [stored.id, assetFrom(stored)]));
         return Object.freeze({
           namespace: namespaceFrom(found.records[0].get('namespace')),
           matching: found.records[0].get('matching').toNumber(),
-          issuances: allocations.map((allocation) => Object.freeze({
-            allocation, asset: assets.get(allocation.allocatedForAssetId) ?? null })),
+          entries: issuances.map((issuance) => Object.freeze({
+            issuance, asset: assets.get(issuance.allocatedForAssetId) ?? null })),
           nextCursor: rows.length > limit
-            ? giaiLedgerCursor(namespaceKey, allocations.at(-1)!.sequence) : null,
+            ? gs1LedgerCursor(namespaceKey, scheme, issuances.at(-1)!.canonical) : null,
         });
       });
     } finally { await session.close(); }
@@ -1510,20 +1837,28 @@ export class IdentityStore {
    * The prefix is an assertion by an authorized member, recorded with who made
    * it. Kannabi cannot verify GS1 licensing and does not imply that it did.
    */
-  async configureGiaiNamespace(actorKey: string, groupKey: string, value: unknown): Promise<GiaiNamespace> {
-    const input = record(value, ['gcp', 'exclusions']);
+  async configureGs1Namespace(actorKey: string, groupKey: string, value: unknown): Promise<Gs1Namespace> {
+    const input = record(value, ['gcp',
+      ...namespaceCounters.map((counter) => `${counter}Exclusions`)]);
     const gcp = canonicalGcp(input.gcp);
-    const exclusions = canonicalExclusions(input.exclusions);
     const params = {
-      actorKey, groupKey: requiredText(groupKey, 'groupKey'), gcp,
-      key: randomUUID(), nextSequence: int(firstSequence),
-      exclusionsFrom: exclusions.map((range) => int(range.from)),
-      exclusionsTo: exclusions.map((range) => int(range.to)),
+      actorKey, groupKey: requiredText(groupKey, 'groupKey'), gcp, key: randomUUID(),
+      ...Object.assign({}, ...namespaceCounters.map((counter) =>
+        counterParams(counter, canonicalExclusions(input[`${counter}Exclusions`])))),
     };
     return this.write(async (tx) => {
-      const owner = await tx.run(`MATCH (n:GiaiNamespace {gcp: $gcp})
-        RETURN head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g.key]) AS groupKey`, { gcp });
+      // Exact duplicates and prefix overlaps are one query, because they are
+      // one rule: section 1.2.3.3 states that once a GS1 Company Prefix is
+      // issued, no other beginning with the same digits SHALL be issued. Two
+      // overlapping assertions therefore mean at least one of them is wrong.
+      const owner = await tx.run(`MATCH (n:Gs1Namespace)
+        WHERE n.gcp STARTS WITH $gcp OR $gcp STARTS WITH n.gcp
+        RETURN n.gcp AS gcp, head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g.key]) AS groupKey`, { gcp });
       if (owner.records.length) {
+        const existing = owner.records[0].get('gcp') as string;
+        if (existing !== gcp) {
+          throw new DuplicateIdentityError(`GS1 Company Prefix ${existing} is already configured, and no two GS1 Company Prefixes may begin with the same digits`);
+        }
         // One managed GCP belongs to one Group while Group membership is the
         // only authorization we have. Issue #20's privilege model can relax
         // this without touching any namespace or allocation record.
@@ -1533,9 +1868,9 @@ export class IdentityStore {
       }
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
-        CREATE (g)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace {
-          key: $key, gcp: $gcp, active: true, nextSequence: $nextSequence,
-          exclusionsFrom: $exclusionsFrom, exclusionsTo: $exclusionsTo,
+        CREATE (g)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {
+          key: $key, gcp: $gcp, active: true,
+          ${namespaceCounters.map(counterAssignments).join(',\n          ')},
           configuredAt: datetime(), configuredBy: $actorKey })
         RETURN ${namespaceProjection} AS namespace`, params);
       if (!result.records.length) throw new ReferenceError('Group not found');
@@ -1546,11 +1881,11 @@ export class IdentityStore {
   /** Deactivate or reactivate a namespace. Deactivation stops new issuance and
    * nothing else: the counter, the exclusions and every ledger row remain, so
    * reactivation resumes the same namespace rather than starting a new one. */
-  async setGiaiNamespaceActive(actorKey: string, namespaceKey: string, active: unknown): Promise<GiaiNamespace> {
+  async setGs1NamespaceActive(actorKey: string, namespaceKey: string, active: unknown): Promise<Gs1Namespace> {
     if (typeof active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
     return this.write(async (tx) => {
       const result = await tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace {key: $key})
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {key: $key})
         SET n.active = $active
         RETURN ${namespaceProjection} AS namespace`,
       { actorKey, key: requiredText(namespaceKey, 'namespace key'), active });
@@ -1559,21 +1894,148 @@ export class IdentityStore {
     });
   }
 
-  /** Issue a GIAI for an Asset from a managed namespace, idempotently.
+  /** Deactivate or reactivate one class key. Stops new serials under it and
+   * nothing else: the serial counter, its exclusions and every value already
+   * issued survive, so reactivation resumes the same key rather than starting
+   * a new one. Configuration state, never allocation lifecycle. */
+  async setClassKeyActive(actorKey: string, classKeyKey: string,
+    active: unknown): Promise<Gs1ClassKeyAllocation> {
+    if (typeof active !== 'boolean') throw new ValidationError('Class key active state must be a boolean');
+    return this.write(async (tx) => {
+      const result = await tx.run(`
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace)
+          <-[:IN_NAMESPACE]-(classKey:Gs1ClassKeyAllocation {key: $key})
+        SET classKey.active = $active
+        WITH classKey
+        OPTIONAL MATCH (asserter:User {key: classKey.assertedBy})
+        RETURN ${classKeyProjection} AS classKey`,
+      { actorKey, key: requiredText(classKeyKey, 'class key'), active });
+      if (!result.records.length) throw new ReferenceError('Managed class key not found');
+      return classKeyFrom(result.records[0].get('classKey'));
+    });
+  }
+
+  /** Bring a class key into a namespace the actor's Group manages, either by
+   * allocating a new reference from the namespace's counter or by adopting a
+   * key the Group had already allocated elsewhere.
    *
-   * One transaction, and the namespace write lock is taken before anything is
-   * decided — the Phase 1 lesson. A concurrent caller therefore blocks and then
-   * observes the committed allocation at step 3, so a double-click returns the
-   * same GIAI without consuming a sequence number.
+   * One method for both, because the difference is a single recorded fact and
+   * everything else — authority, locking, the serial counter it creates — is
+   * identical. The fact itself is never inferred: `provenance` is stored
+   * explicitly, so "Kannabi allocated this" can never be read off a value that
+   * merely sits inside a managed prefix.
    *
-   * After the namespace, lock the Asset before checking authority. This also
-   * serializes issuance through different namespaces with collaboration
-   * revocation; the unique ledger constraint remains the persistence backstop.
+   * Touches no Asset and grants no Asset access. Managing a class key is
+   * namespace configuration; serialising under it is a separate operation with
+   * its own Asset check.
    */
-  async allocateGiai(id: string, actorKey: string, namespaceKey: string,
-    origin: ChangeOrigin = {}): Promise<Asset> {
-    const assetKey = assetId(id);
+  async manageClassKey(actorKey: string, namespaceKey: string,
+    value: unknown): Promise<Gs1ClassKeyAllocation> {
+    const { serialExclusions: rawExclusions, ...input } = record(value,
+      ['scheme', 'gtin', 'serial', 'assetType', 'assetReference', 'serialExclusions']);
+    // Supplying the key's own value is what makes this an adoption: the Group
+    // is asserting a key it already allocated, rather than asking Kannabi to
+    // produce one. Allocation takes the scheme and nothing else, so a caller
+    // can never hand Kannabi a value and have it recorded as Kannabi-issued.
+    const adopting = Object.keys(input).some((field) => field !== 'scheme');
+    const serialExclusions = canonicalExclusions(rawExclusions);
+    const scheme = classKeyScheme(input.scheme);
     const key = requiredText(namespaceKey, 'namespace key');
+    return this.write(async (tx) => {
+      // Lock the namespace before reading anything the decision depends on,
+      // so a concurrent allocation cannot read the same counter position.
+      const locked = await tx.run(`MATCH (n:Gs1Namespace {key: $key}) SET n.lock = true
+        RETURN n.gcp AS gcp, n.active AS active,
+          ${counterProjection('n', classKeyCounter(scheme))} AS counter`, { key });
+      if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
+      const authorized = await tx.run(`
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
+        RETURN true AS ok`, { actorKey, key });
+      if (!authorized.records.length) throw new ReferenceError('Allocation namespace not found');
+      const gcp = locked.records[0].get('gcp') as string;
+      if (locked.records[0].get('active') !== true) {
+        throw new ValidationError('That GS1 Company Prefix namespace is deactivated');
+      }
+      let identifier: ExternalIdentifier;
+      let sequence: number | null = null;
+      if (adopting) {
+        identifier = adoptableClassKey(input);
+        if (identifier.scheme !== scheme) {
+          throw new ValidationError('The adopted class key does not match the requested scheme');
+        }
+        // Containment in the prefix this Group asserted, which is exactly as
+        // strong as that assertion and is not a licensing check.
+        if (!classKeyWithinGcp(identifier, gcp)) {
+          throw new ValidationError(`That class key does not lie within GS1 Company Prefix ${gcp}`);
+        }
+      } else {
+        const counter = counterFrom(locked.records[0].get('counter'));
+        sequence = allocatableSequence(counter.nextSequence, counter.exclusions);
+        identifier = scheme === 'grai'
+          ? allocatedGraiAssetType(gcp, sequence) : allocatedGtin(gcp, sequence);
+        const property = counterProperties(classKeyCounter(scheme));
+        await tx.run(`MATCH (n:Gs1Namespace {key: $key}) SET n.${property.nextSequence} = $next`,
+          { key, next: int(sequence + 1) });
+      }
+      const params = {
+        actorKey, key, classKey: randomUUID(), scheme, canonical: identifier.canonical, gcp,
+        sequence: sequence === null ? null : int(sequence),
+        provenance: adopting ? 'adopted' : 'allocated',
+        ...counterParams('serial', serialExclusions),
+      };
+      try {
+        const created = await tx.run(`
+          MATCH (n:Gs1Namespace {key: $key})
+          CREATE (classKey:Gs1ClassKeyAllocation {
+            key: $classKey, scheme: $scheme, canonical: $canonical, gcp: $gcp,
+            sequence: $sequence, provenance: $provenance, active: true,
+            ${counterAssignments('serial')},
+            assertedAt: datetime(), assertedBy: $actorKey })
+          CREATE (classKey)-[:IN_NAMESPACE]->(n)
+          WITH classKey
+          OPTIONAL MATCH (asserter:User {key: $actorKey})
+          RETURN ${classKeyProjection} AS classKey`, params);
+        return classKeyFrom(created.records[0].get('classKey'));
+      } catch (error) {
+        if (isDuplicateIdentifier(error)) {
+          throw new DuplicateIdentityError('That class key is already managed', { cause: error });
+        }
+        throw error;
+      }
+    });
+  }
+
+  /** Issue an individual key for an Asset from a managed namespace,
+   * idempotently per scheme.
+   *
+   * One transaction, and the write lock is taken before anything is decided —
+   * the Phase 1 lesson. A concurrent caller therefore blocks and then observes
+   * the committed issuance at step 3, so a double-click returns the same value
+   * without consuming a sequence number.
+   *
+   * After the counter, lock the Asset before checking authority. This also
+   * serializes issuance through different namespaces with collaboration
+   * revocation; the unique ledger constraints remain the persistence backstop.
+   *
+   * The three schemes differ only in where the sequence comes from and how the
+   * value is built. A GIAI draws on the namespace's own counter; a serialised
+   * GRAI and an SGTIN draw on the serial counter of a class key that must
+   * already be managed in that namespace and active. That requirement is what
+   * makes serialising a merely recorded GTIN unexpressible rather than merely
+   * forbidden: recording an identifier creates no class key to issue under.
+   */
+  async issueKey(id: string, actorKey: string, scheme: IssuanceScheme, request: unknown,
+    origin: ChangeOrigin = {}): Promise<Asset> {
+    const input = record(request, ['namespaceKey', 'classKeyKey']);
+    const assetKey = assetId(id);
+    const key = requiredText(input.namespaceKey, 'namespace key');
+    // Null for a GIAI, which is allocated straight from the prefix; otherwise
+    // the class key this serial must be issued under, and the scheme that key
+    // has to be. Carried together so neither can be considered without the
+    // other.
+    const classScheme = issuanceClassScheme[scheme];
+    const under = classScheme === null ? null
+      : { scheme: classScheme, key: requiredText(input.classKeyKey, 'class key') };
     const change = changeParams(origin);
     const project = async (tx: ManagedTransaction) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
@@ -1582,53 +2044,97 @@ export class IdentityStore {
     };
     try {
       return await this.write(async (tx) => {
-        // 1. Lock the namespace before reading anything the decision depends on.
-        const locked = await tx.run(`MATCH (n:GiaiNamespace {key: $key}) SET n.lock = true
-          RETURN n.gcp AS gcp, n.active AS active, toFloat(n.nextSequence) AS nextSequence,
-            n.exclusionsFrom AS exclusionsFrom, n.exclusionsTo AS exclusionsTo`, { key });
+        // 1. Lock the namespace, and the class key when one is involved,
+        //    before reading anything the decision depends on.
+        const locked = await tx.run(`MATCH (n:Gs1Namespace {key: $key}) SET n.lock = true
+          RETURN n.gcp AS gcp, n.active AS active,
+            ${counterProjection('n', 'giai')} AS counter`, { key });
         if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
         await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
         // 2. Authority comes from the Group that manages the namespace, and
         //    that Group must also collaborate on the Asset.
         const authorized = await tx.run(`
-          MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:GiaiNamespace {key: $key})
+          MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
           MATCH (g)-[:CAN_COLLABORATE]->(a:Asset {id: $assetId})
           RETURN a.id AS id`, { actorKey, key, assetId: assetKey });
         if (!authorized.records.length) throw new ReferenceError('Asset access or allocation namespace not found');
-        // 3/4. An existing issuance is returned as-is, whether or not the
-        //      identifier is still attached, and never consumes a sequence.
-        const existing = await tx.run('MATCH (l:GiaiAllocation {allocatedForAssetId: $assetId}) RETURN l.value AS value',
-          { assetId: assetKey });
+        // 3. An existing issuance of this scheme is returned as-is, whether or
+        //    not the identifier is still attached, and consumes no sequence.
+        //    Scoped to the scheme: another scheme's issuance is a different
+        //    identity for the same Asset, not a reason to refuse this one.
+        const existing = await tx.run(`MATCH (l:Gs1KeyIssuance {scheme: $scheme, allocatedForAssetId: $assetId})
+          RETURN l.canonical AS canonical`, { scheme, assetId: assetKey });
         if (existing.records.length) return project(tx);
         if (locked.records[0].get('active') !== true) {
           throw new ValidationError('That GS1 Company Prefix namespace is deactivated');
         }
-        // 5. The next candidate, skipping existing-use ranges by range.
-        const row = locked.records[0];
-        const sequence = allocatableSequence(row.get('nextSequence') as number,
-          storedExclusions(row.get('exclusionsFrom'), row.get('exclusionsTo')));
-        // 6. Advance past the candidate; skipping happens again on the next read.
-        await tx.run('MATCH (n:GiaiNamespace {key: $key}) SET n.nextSequence = $next',
-          { key, next: int(sequence + 1) });
-        // 7. Construction and validation belong to the GS1 boundary.
-        const identifier = allocatedGiai(row.get('gcp') as string, sequence);
-        // 8. The issuance record, which outlives the Asset and the attachment.
-        await tx.run(`MATCH (n:GiaiNamespace {key: $key})
-          CREATE (l:GiaiAllocation { value: $value, gcp: $gcp, sequence: $sequence,
-            allocatedAt: datetime(), allocatedForAssetId: $assetId, allocatedBy: $actorKey })
-          CREATE (l)-[:ALLOCATED_FROM]->(n)`,
-        { key, value: identifier.components.assetReference, gcp: row.get('gcp'),
-          sequence: int(sequence), assetId: assetKey, actorKey });
-        // 9. Phase 2 attachment semantics, unchanged and not duplicated.
+        const gcp = locked.records[0].get('gcp') as string;
+
+        let identifier: ExternalIdentifier;
+        let sequence: number;
+        if (under === null) {
+          // 4a. A GIAI comes straight from the namespace's own counter.
+          const counter = counterFrom(locked.records[0].get('counter'));
+          sequence = allocatableSequence(counter.nextSequence, counter.exclusions);
+          const property = counterProperties('giai');
+          await tx.run(`MATCH (n:Gs1Namespace {key: $key}) SET n.${property.nextSequence} = $next`,
+            { key, next: int(sequence + 1) });
+          identifier = allocatedGiai(gcp, sequence);
+        } else {
+          // 4b. A serial comes from the class key's own counter, which is
+          //     locked here for the same reason the namespace was.
+          const managed = await tx.run(`
+            MATCH (classKey:Gs1ClassKeyAllocation {key: $classKeyKey})-[:IN_NAMESPACE]->(:Gs1Namespace {key: $key})
+            SET classKey.lock = true
+            RETURN classKey.canonical AS canonical, classKey.scheme AS scheme,
+              classKey.active AS active, ${counterProjection('classKey', 'serial')} AS counter`,
+          { classKeyKey: under.key, key });
+          if (!managed.records.length) {
+            throw new ReferenceError('That class key is not managed in this namespace');
+          }
+          if (managed.records[0].get('scheme') !== under.scheme) {
+            throw new ValidationError(`Issuing a ${scheme.toUpperCase()} requires a ${under.scheme.toUpperCase()} class key`);
+          }
+          if (managed.records[0].get('active') !== true) {
+            throw new ValidationError('That managed class key is deactivated');
+          }
+          const counter = counterFrom(managed.records[0].get('counter'));
+          sequence = allocatableSequence(counter.nextSequence, counter.exclusions);
+          const property = counterProperties('serial');
+          await tx.run(`MATCH (classKey:Gs1ClassKeyAllocation {key: $classKeyKey})
+            SET classKey.${property.nextSequence} = $next`,
+          { classKeyKey: under.key, next: int(sequence + 1) });
+          // 5. Construction and validation belong to the GS1 boundary. The
+          //    class key is re-parsed there rather than concatenated here.
+          const classKey = storedIdentifier(under.scheme,
+            managed.records[0].get('canonical') as string, gs1Policy.version);
+          identifier = scheme === 'grai'
+            ? allocatedGraiSerial(classKey.components.assetType, sequence)
+            : allocatedSgtin(classKey.components.gtin, sequence);
+        }
+        // 6. The issuance record, which outlives the Asset and the attachment.
+        await tx.run(`MATCH (n:Gs1Namespace {key: $key})
+          CREATE (l:Gs1KeyIssuance { key: $issuanceKey, scheme: $scheme, canonical: $canonical,
+            gcp: $gcp, sequence: $sequence, allocatedAt: datetime(),
+            allocatedForAssetId: $assetId, allocatedBy: $actorKey })
+          CREATE (l)-[:ISSUED_FROM]->(n)
+          WITH l
+          OPTIONAL MATCH (classKey:Gs1ClassKeyAllocation {key: $classKeyKey})
+          FOREACH (c IN CASE WHEN classKey IS NULL THEN [] ELSE [classKey] END |
+            CREATE (l)-[:ISSUED_UNDER]->(c))`,
+        { key, issuanceKey: randomUUID(), scheme, canonical: identifier.canonical, gcp,
+          sequence: int(sequence), assetId: assetKey, actorKey,
+          classKeyKey: under === null ? null : under.key });
+        // 7. Phase 2 attachment semantics, unchanged and not duplicated.
         await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
         return project(tx);
       });
     } catch (error) {
       if (isDuplicateIdentifier(error)) {
-        // Another transaction issued for this Asset first. Return its result
-        // rather than reporting a conflict the caller cannot act on.
+        // Another transaction issued this scheme for this Asset first. Return
+        // its result rather than reporting a conflict the caller cannot act on.
         const settled = await this.getAsset(assetKey, actorKey);
-        if (settled?.allocation) return settled;
+        if (settled?.issuances.some((issuance) => issuance.scheme === scheme)) return settled;
         throw new DuplicateIdentityError('The allocated identifier is already claimed', { cause: error });
       }
       throw error;

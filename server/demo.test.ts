@@ -5,7 +5,7 @@ import { canonicalIdentifiers } from './gs1.js';
 import { demoAccounts, demoAdministrators, demoAllocatedSequences, demoAllocations, demoAssets,
   demoDiscoverable, demoGroupMembers, demoMembers, demoNamespaces, demoScopes,
   evaluatorScopes } from '../scripts/demo/fixtures.js';
-import { allocatableSequence, canonicalExclusions, firstSequence } from './giai-allocation.js';
+import { allocatableSequence, canonicalExclusions, firstSequence } from './reference-allocation.js';
 import { canonicalGcp } from './gs1.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket } from '../scripts/demo/safety.js';
 

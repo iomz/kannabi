@@ -70,7 +70,7 @@ test('Group control grants membership, never Asset access', { skip: !uri || !pas
   assert.equal(reported.status, 201);
   const assetId = (await reported.json()).asset.id as string;
   const assetPath = `/assets/${assetId}`;
-  const configured = await member(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '0614141' });
+  const configured = await member(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' });
   assert.equal(configured.status, 201);
   const namespaceKey = (await configured.json()).namespace.key as string;
 
@@ -80,7 +80,7 @@ test('Group control grants membership, never Asset access', { skip: !uri || !pas
     assert.deepEqual((await (await controller('/groups/controlled')).json()).groups.map((g: { key: string }) => g.key), [groupKey]);
     assert.equal((await controller(assetPath)).status, 404);
     assert.equal((await controller(assetPath, 'PATCH', { name: 'No control-plane edit' })).status, 404);
-    assert.equal((await controller(`/groups/${groupKey}/giai-namespaces`, 'POST', { gcp: '9521234' })).status, 404);
+    assert.equal((await controller(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '9521234' })).status, 404);
     assert.equal((await controller(`${assetPath}/giai`, 'POST', { namespaceKey })).status, 404);
     assert.equal((await member(assetPath)).status, 200);
     assert.equal((await member(assetPath, 'PATCH', { name: 'Member edit' })).status, 200);

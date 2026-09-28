@@ -33,7 +33,7 @@ const asset = {
   groups: [{ key: 'workshop', name: 'Workshop' }],
   reportedBy: { key: 'alex', name: 'Alex', status: 'active' },
   reportedAt: '2026-01-01T00:00:00Z',
-  identifiers: [{ key: 'i1', ...sgtin }], photos: [], allocation: null,
+  identifiers: [{ key: 'i1', ...sgtin }], photos: [], issuances: [],
 };
 
 const loaderData = {
@@ -42,7 +42,7 @@ const loaderData = {
   digitalLinks: { i1: 'http://127.0.0.1:3000' + digitalLink },
   nativeUri: `http://127.0.0.1:3000/asset/${id}`,
   surfacedUri: 'http://127.0.0.1:3000' + digitalLink,
-  namespaces: [], controlled: [], canGrant: false,
+  namespaces: [], classKeys: [], controlled: [], canGrant: false,
 };
 
 /** Answers the API the way the running instance does, and records the calls.

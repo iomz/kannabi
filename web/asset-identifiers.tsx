@@ -3,15 +3,19 @@ import {
   identifierSchemes, levelLabels, schemeDescriptions, schemeInputs, schemeLabels,
   type IdentifierScheme,
 } from '../server/gs1.js';
-import type { AttachedIdentifier, GiaiAllocation } from '../server/identity-store.js';
+import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
 import { Icon } from './icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, Field, Hint, NativeSelect } from './ui';
 
-export function IdentifierList({ identifiers, allocation, digitalLinks, showPolicyVersion, canEdit, busy, onDetach }: {
-  identifiers: readonly AttachedIdentifier[]; allocation: GiaiAllocation | null;
+export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, onDetach }: {
+  identifiers: readonly AttachedIdentifier[];
+  /** Kannabi's own issuance records for this Asset, at most one per scheme.
+   * An identifier is Kannabi-issued when one of these carries its canonical
+   * form — never because its digits fall inside a managed prefix. */
+  issuances: readonly Gs1KeyIssuance[];
   /** The Digital Link URI for each identifier Kannabi also dereferences,
    * keyed by attachment. A class-level identifier has none: its URI is
    * constructible, and Kannabi does not answer it. */
@@ -23,17 +27,20 @@ export function IdentifierList({ identifiers, allocation, digitalLinks, showPoli
   if (!identifiers.length) {
     return <p>No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>;
   }
-  return <ul className="mb-6 grid gap-3">{identifiers.map((identifier) => <li key={identifier.key}
-    className="relative rounded-lg border bg-muted py-[.85rem] pr-12 pl-4">
+  return <ul className="mb-6 grid gap-3">{identifiers.map((identifier) => {
+    // One rule for every scheme: the ledger row carries the whole canonical
+    // form, so nothing here compares a scheme-specific component.
+    const issued = issuances.find((issuance) => issuance.canonical === identifier.canonical) ?? null;
+    return <li key={identifier.key}
+      className="relative rounded-lg border bg-muted py-[.85rem] pr-12 pl-4">
     <div>
       <div className="flex flex-wrap items-center gap-2">
         <strong>{schemeLabels[identifier.scheme]}</strong>
         <Badge variant={identifier.level === 'individual' ? 'brand' : 'secondary'}>
           {levelLabels[identifier.level]}
         </Badge>
-        <Badge variant={identifier.scheme === 'giai' && identifier.components.assetReference === allocation?.value
-          ? 'brand' : 'outline'}>{identifier.scheme === 'giai'
-            && identifier.components.assetReference === allocation?.value ? 'Issued by Kannabi' : 'Recorded existing'}</Badge>
+        <Badge variant={issued ? 'brand' : 'outline'}>
+          {issued ? 'Issued by Kannabi' : 'Recorded existing'}</Badge>
       </div>
       <code className="mt-[.35rem] block break-all">{identifier.canonical}</code>
       <dl className="mt-2 mb-0 flex flex-wrap gap-x-5 gap-y-1 [&_dd]:m-0 [&_dd]:break-all [&_dt]:text-[.75rem] [&_dt]:text-muted-foreground">
@@ -47,45 +54,103 @@ export function IdentifierList({ identifiers, allocation, digitalLinks, showPoli
           <dd><a href={digitalLinks[identifier.key]}>{digitalLinks[identifier.key]}</a></dd>
         </div>}
       </dl>
-      {identifier.scheme === 'giai' && identifier.components.assetReference === allocation?.value &&
-        <p className="mt-2 text-[.82rem] text-muted-foreground">Issued from managed prefix <code>{allocation.gcp}</code>
-          {' '}as reference <code>{allocation.sequence}</code>.</p>}
+      {issued && <p className="mt-2 text-[.82rem] text-muted-foreground">
+        Issued from managed prefix <code>{issued.gcp}</code>
+        {issued.classKeyCanonical
+          ? <> under class key <code>{issued.classKeyCanonical}</code> as serial <code>{issued.sequence}</code>.</>
+          : <> as reference <code>{issued.sequence}</code>.</>}</p>}
       {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>}
     </div>
     {canEdit && <Button type="button" variant="outline" size="icon-sm" disabled={busy}
       className="absolute top-[.6rem] right-[.6rem] bg-card text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive [&_.icon]:size-4"
       aria-label={'Detach ' + schemeLabels[identifier.scheme] + ' ' + identifier.canonical}
       onClick={() => onDetach(identifier.key)}><Icon name="trash" /></Button>}
-  </li>)}</ul>;
+    </li>;
+  })}</ul>;
 }
 
-/** Allocation is offered only with an active namespace managed by a
- * collaborating Group the actor belongs to. Once issued, provenance replaces the control:
- * there is no second allocation to offer. */
-export function AllocateGiai({ namespaces, allocation, allocationAttached, busy, error }: {
+/** A class key an Asset's issuance controls can serialise under, flattened
+ * across every namespace the actor may issue from. */
+export type IssuableClassKey = {
+  key: string; namespaceKey: string; gcp: string; scheme: 'grai' | 'gtin'; canonical: string;
+};
+
+/** What each issuance scheme needs before Kannabi can produce a value. */
+const issuanceOptions = [
+  { scheme: 'giai' as const, label: 'GIAI', classScheme: null,
+    hint: 'Allocated straight from the company prefix. Identifies this Asset as an individual asset.' },
+  { scheme: 'grai' as const, label: 'Serialised GRAI', classScheme: 'grai' as const,
+    hint: 'A serial under a managed GRAI asset type, which names a series of identical returnable assets.' },
+  { scheme: 'sgtin' as const, label: 'SGTIN', classScheme: 'gtin' as const,
+    hint: 'A serial under a managed GTIN. Only a GTIN this Group manages in its own prefix can be serialised; a GTIN merely recorded on an Asset cannot.' },
+];
+
+/** Issuance is offered only with an active namespace managed by a
+ * collaborating Group the actor belongs to, and for GRAI and SGTIN only with
+ * an active class key inside one. Once a scheme has been issued, provenance
+ * replaces its control: issuance is idempotent per scheme, so there is no
+ * second value of that scheme to offer — and no bar to issuing another scheme.
+ */
+export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers, busy, error }: {
   namespaces: readonly { key: string; gcp: string }[];
-  allocation: GiaiAllocation | null;
-  allocationAttached: boolean; busy: boolean; error: string | null;
+  classKeys: readonly IssuableClassKey[];
+  issuances: readonly Gs1KeyIssuance[];
+  identifiers: readonly AttachedIdentifier[];
+  busy: boolean; error: string | null;
 }) {
-  if (allocation) {
-    return allocationAttached ? null : <Hint>Kannabi-issued GIAI <code>{allocation.value}</code> is not currently recorded
-      on this Asset.</Hint>;
-  }
-  if (!namespaces.length) {
-    return <Hint>You have no eligible active GS1 Company Prefix for issuing a GIAI for this Asset.
-      The prefix must be managed by a collaborating Group you belong to. Manage prefixes from Groups.</Hint>;
-  }
-  return <fieldset disabled={busy} aria-busy={busy}>
-    <input type="hidden" name="intent" value="allocate-giai" />
-    {namespaces.length === 1
-      ? <input type="hidden" name="namespaceKey" value={namespaces[0].key} />
-      : <Field label="GS1 Company Prefix"><NativeSelect name="namespaceKey">
-        {namespaces.map((namespace) =>
-          <option key={namespace.key} value={namespace.key}>{namespace.gcp}</option>)}
-      </NativeSelect></Field>}
-    {error && <p role="alert">{error}</p>}
-    <ActionRow><Button type="submit">{busy ? 'Issuing…' : 'Issue GIAI'}</Button></ActionRow>
-  </fieldset>;
+  const issued = new Map(issuances.map((issuance) => [issuance.scheme, issuance]));
+  const available = issuanceOptions.filter((option) => !issued.has(option.scheme)
+    && (option.classScheme === null
+      ? namespaces.length > 0
+      : classKeys.some((classKey) => classKey.scheme === option.classScheme)));
+  const [scheme, setScheme] = useState(available[0]?.scheme ?? 'giai');
+  const option = issuanceOptions.find((entry) => entry.scheme === scheme) ?? issuanceOptions[0];
+  const eligible = option.classScheme === null ? []
+    : classKeys.filter((classKey) => classKey.scheme === option.classScheme);
+  const [classKeyKey, setClassKeyKey] = useState(eligible[0]?.key ?? '');
+  const selected = eligible.find((classKey) => classKey.key === classKeyKey) ?? eligible[0];
+  const detached = issuances.filter((issuance) =>
+    !identifiers.some((identifier) => identifier.canonical === issuance.canonical));
+  return <>
+    {detached.map((issuance) => <Hint key={issuance.key}>Kannabi-issued <code>{issuance.canonical}</code> is
+      not currently recorded on this Asset. It stays bound to this Asset in the issuance ledger and is never reissued elsewhere.</Hint>)}
+    {!available.length
+      ? <Hint>Kannabi has nothing further to issue for this Asset. A prefix must be managed by a
+        collaborating Group you belong to and be active, and a serialised GRAI or an SGTIN also needs
+        an active managed class key in it. Manage prefixes and class keys from Groups.</Hint>
+      : <fieldset disabled={busy} aria-busy={busy}>
+        <input type="hidden" name="intent" value="issue-identifier" />
+        <input type="hidden" name="scheme" value={scheme} />
+        {available.length > 1 && <Field label="Identifier to issue" hint={option.hint}>
+          <NativeSelect value={scheme} onChange={(event) =>
+            setScheme(event.target.value as typeof scheme)}>
+            {available.map((entry) =>
+              <option key={entry.scheme} value={entry.scheme}>{entry.label}</option>)}
+          </NativeSelect>
+        </Field>}
+        {available.length === 1 && <Hint>{option.hint}</Hint>}
+        {option.classScheme === null ? (namespaces.length === 1
+          ? <input type="hidden" name="namespaceKey" value={namespaces[0].key} />
+          : <Field label="GS1 Company Prefix"><NativeSelect name="namespaceKey">
+            {namespaces.map((namespace) =>
+              <option key={namespace.key} value={namespace.key}>{namespace.gcp}</option>)}
+          </NativeSelect></Field>)
+          : <>
+            <input type="hidden" name="namespaceKey" value={selected?.namespaceKey ?? ''} />
+            <input type="hidden" name="classKeyKey" value={selected?.key ?? ''} />
+            <Field label={option.classScheme === 'grai' ? 'Managed GRAI asset type' : 'Managed GTIN'}
+              hint="Managed class keys are allocation records. Kannabi holds no product data for them.">
+              <NativeSelect value={selected?.key ?? ''}
+                onChange={(event) => setClassKeyKey(event.target.value)}>
+                {eligible.map((classKey) => <option key={classKey.key} value={classKey.key}>
+                  {classKey.gcp} · {classKey.canonical}</option>)}
+              </NativeSelect>
+            </Field>
+          </>}
+        {error && <p role="alert">{error}</p>}
+        <ActionRow><Button type="submit">{busy ? 'Issuing…' : 'Issue ' + option.label}</Button></ActionRow>
+      </fieldset>}
+  </>;
 }
 
 export function IdentifierForm({ busy, error }: {

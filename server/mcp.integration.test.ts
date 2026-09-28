@@ -54,15 +54,19 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   const sealed = await store.reportAsset({ name: 'Inspection camera · Vault 900' },
     { actorKey: robin.key, groupKey: vault.key });
 
-  const namespace = await store.configureGiaiNamespace(alex.key, workshop.key,
-    { gcp, exclusions: [{ from: 1, to: 4 }] });
+  const namespace = await store.configureGs1Namespace(alex.key, workshop.key,
+    { gcp, giaiExclusions: [{ from: 1, to: 4 }] });
   // Configured but never issued from, so the ledger has an empty page to serve.
-  const unusedNamespace = await store.configureGiaiNamespace(alex.key, workshop.key,
-    { gcp: unusedGcp, exclusions: [] });
-  const allocatedCamera = await store.allocateGiai(camera.id, alex.key, namespace.key);
-  const allocatedLaptop = await store.allocateGiai(laptop.id, alex.key, namespace.key);
-  const issuedToCamera = allocatedCamera.allocation!.value;
-  const issuedToLaptop = allocatedLaptop.allocation!.value;
+  const unusedNamespace = await store.configureGs1Namespace(alex.key, workshop.key,
+    { gcp: unusedGcp, giaiExclusions: [] });
+  const allocatedCamera = await store.issueKey(camera.id, alex.key, 'giai', { namespaceKey: namespace.key });
+  const allocatedLaptop = await store.issueKey(laptop.id, alex.key, 'giai', { namespaceKey: namespace.key });
+  const issuedToCamera = allocatedCamera.issuances[0].canonical;
+  const issuedToLaptop = allocatedLaptop.issuances[0].canonical;
+  // The bare AI 8004 reference the lookup tool takes, as the attached
+  // identifier itself reports it rather than by slicing the canonical form.
+  const cameraReference = allocatedCamera.identifiers
+    .find((identifier) => identifier.scheme === 'giai')!.components.assetReference;
   // Detached afterwards: the issuance survives, the attachment does not.
   await store.detachIdentifier(laptop.id, alex.key,
     allocatedLaptop.identifiers.find((identifier) => identifier.scheme === 'giai')!.key);
@@ -111,7 +115,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
 
   await t.test('the transport completes initialize and tool discovery', async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 6);
+    assert.equal(tools.length, 7);
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true));
     assert.equal(client.getServerVersion()?.name, 'kannabi');
   });
@@ -140,7 +144,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
 
   await t.test('an exact individual identity resolves to exactly one Asset', async () => {
     const lookup = await call('resolve_external_identifier',
-      { scheme: 'giai', assetReference: issuedToCamera });
+      { scheme: 'giai', assetReference: cameraReference });
     assert.equal((lookup.identity as Json).level, 'individual');
     assert.equal(lookup.matching, 1);
     assert.deepEqual(ids(lookup), [camera.id]);
@@ -179,18 +183,18 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   });
 
   await t.test('allocation provenance comes from the ledger, not from the prefix', async () => {
-    const { namespaces } = await call('list_giai_namespaces') as { namespaces: Json[] };
+    const { namespaces } = await call('list_gs1_namespaces') as { namespaces: Json[] };
     const managed = namespaces.find((entry) => entry.gcp === gcp)!;
     assert.deepEqual((managed.group as Json).name, 'Demo Workshop');
 
-    const ledger = await call('list_giai_issuances', { namespaceKey: managed.namespaceKey as string });
-    const issuances = ledger.issuances as Json[];
+    const ledger = await call('list_gs1_issuances', { namespaceKey: managed.namespaceKey as string });
+    const issuances = ledger.entries as Json[];
     assert.equal(ledger.matching, 2);
     assert.deepEqual(issuances.map((issuance) => issuance.assetId), [camera.id, laptop.id]);
-    assert.deepEqual(issuances.map((issuance) => (issuance.allocation as Json).value),
+    assert.deepEqual(issuances.map((issuance) => (issuance.issuance as Json).canonical),
       [issuedToCamera, issuedToLaptop]);
     // Exclusions 1-4 were never issuable, so issuance starts at 5.
-    assert.deepEqual(issuances.map((issuance) => (issuance.allocation as Json).sequence), [5, 6]);
+    assert.deepEqual(issuances.map((issuance) => (issuance.issuance as Json).sequence), [5, 6]);
     assert.equal(issuances[0].stillAttached, true);
     assert.equal(issuances[1].stillAttached, false, 'a detached issuance stays in the ledger');
 
@@ -201,19 +205,19 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.deepEqual(ids(resolved), [lookalike.id]);
     assert.ok(lookalikeReference.startsWith(gcp));
     assert.ok(!issuances.some((issuance) => issuance.assetId === lookalike.id));
-    assert.equal((resolved.assets as Json[])[0].kannabiAllocatedGiai, null);
+    assert.deepEqual((resolved.assets as Json[])[0].kannabiIssued, []);
   });
 
   await t.test('a namespace Kannabi has never issued from reports no issuances', async () => {
-    const ledger = await call('list_giai_issuances', { namespaceKey: unusedNamespace.key });
-    assert.deepEqual(ledger.issuances, []);
+    const ledger = await call('list_gs1_issuances', { namespaceKey: unusedNamespace.key });
+    assert.deepEqual(ledger.entries, []);
     assert.equal(ledger.matching, 0);
     assert.equal(ledger.nextCursor, null);
     assert.equal((ledger.namespace as Json).gcp, unusedGcp);
   });
 
   await t.test('an unknown namespace is refused, and knowing a key grants nothing', async () => {
-    assert.match(await rejects('list_giai_issuances', { namespaceKey: 'not-a-namespace' }), /not found/i);
+    assert.match(await rejects('list_gs1_issuances', { namespaceKey: 'not-a-namespace' }), /not found/i);
   });
 
   await t.test('a candidate\'s Asset ID carries into inspection unchanged', async () => {
@@ -230,7 +234,8 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.ok(identifiers.every((identifier) => typeof identifier.gs1PolicyVersion === 'string'));
     // Detached, so the Asset no longer carries the issued value even though the
     // ledger still binds it.
-    assert.equal(detail.kannabiAllocatedGiai, issuedToLaptop);
+    assert.deepEqual((detail.kannabiIssued as Json[]).map((entry) => entry.canonical),
+      [issuedToLaptop]);
     assert.ok(!identifiers.some((identifier) => identifier.scheme === 'giai'));
   });
 
@@ -272,18 +277,25 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.ok(ids(again).includes(candidate.assetId as string));
   });
 
-  await t.test('an issued GIAI is reported in the form that resolves it', async () => {
-    // kannabiAllocatedGiai and allocation.value are bare AI 8004 references,
-    // while canonical is the element string. An agent must be able to take the
-    // ledger's value straight back to resolve_external_identifier.
-    const { namespaces } = await call('list_giai_namespaces') as { namespaces: Json[] };
+  await t.test('an issued value is reported in the form the ledger and the Asset agree on', async () => {
+    // The ledger reports a canonical element string, and so does every
+    // identifier on the Asset, so an agent can match the two without
+    // reformatting either. resolve_external_identifier still takes the
+    // scheme's own components, which the Asset carries beside the canonical.
+    const { namespaces } = await call('list_gs1_namespaces') as { namespaces: Json[] };
     const managed = namespaces.find((entry) => entry.gcp === gcp)!;
-    const ledger = await call('list_giai_issuances', { namespaceKey: managed.namespaceKey as string });
-    const issued = (ledger.issuances as Json[])[0];
+    const ledger = await call('list_gs1_issuances', { namespaceKey: managed.namespaceKey as string });
+    const issued = (ledger.entries as Json[])[0];
+    const canonical = (issued.issuance as Json).canonical as string;
+    const holder = await call('get_asset', { assetId: issued.assetId as string });
+    const detail = holder.asset as Json;
+    const attached = (detail.identifiers as Json[]).find((entry) => entry.canonical === canonical)!;
     const resolved = await call('resolve_external_identifier',
-      { scheme: 'giai', assetReference: (issued.allocation as Json).value as string });
+      { scheme: 'giai', assetReference: (attached.components as Json).assetReference as string });
     assert.deepEqual(ids(resolved), [issued.assetId]);
-    assert.equal((resolved.assets as Json[])[0].kannabiAllocatedGiai, (issued.allocation as Json).value);
+    assert.deepEqual((detail.issuances as Json[]).map((entry) => entry.canonical), [canonical]);
+    assert.deepEqual(((resolved.assets as Json[])[0].kannabiIssued as Json[])
+      .map((entry) => entry.canonical), [canonical]);
   });
 
   await t.test('a valid identifier Kannabi never stored answers empty, not error', async () => {

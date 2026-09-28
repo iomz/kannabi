@@ -7,7 +7,7 @@ import { systemAudienceResolver } from './mcp-principal.js';
 import { canonicalIdentifier } from './gs1.js';
 import { ValidationError } from './identity.js';
 import type {
-  Asset, AssetLookup, AssetPage, GiaiIssuancePage, IdentityStore,
+  Asset, AssetLookup, AssetPage, Gs1LedgerPage, IdentityStore,
 } from './identity-store.js';
 import type { AudienceInput } from './asset-audience.js';
 
@@ -22,7 +22,7 @@ const gcp = '0614141';
 
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
-    id, name, identifiers: [], allocation: null, reportedBy: reporter,
+    id, name, identifiers: [], issuances: [], reportedBy: reporter,
     reportedAt: '2026-06-22T00:00:00.000Z', provenance: null, owner: null, groups: [workshop],
     isPublic: false, photos: [], ...overrides,
   });
@@ -35,11 +35,11 @@ const lookalikeGiai = canonicalIdentifier({ scheme: 'giai', assetReference: gcp 
 
 const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera · Bench 001', {
   identifiers: [{ key: 'i1', ...cameraGtin }, { key: 'i2', ...issuedGiai }],
-  allocation: {
-    value: issuedGiai.components.assetReference, gcp, sequence: 5,
-    allocatedAt: '2026-06-23T00:00:00.000Z',
+  issuances: [{
+    key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
+    classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
     allocatedForAssetId: '0198c2a0-0000-7000-8000-000000000001', allocatedBy: reporter,
-  },
+  }],
   photos: [{ key: 'p1', contentType: 'image/png', size: 1024, createdAt: '2026-06-22T00:00:00.000Z' }],
 });
 const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection microscope · Studio 011', {
@@ -50,8 +50,14 @@ const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection mic
 const detached = asset('0198c2a0-0000-7000-8000-000000000003', 'Signal generator · Field 007');
 
 const namespace = Object.freeze({
-  key: 'namespace-1', gcp, active: true, exclusions: [{ from: 1, to: 4 }],
-  nextSequence: 7, group: workshop, configuredAt: '2026-06-20T00:00:00.000Z',
+  key: 'namespace-1', gcp, active: true,
+  counters: {
+    giai: { nextSequence: 7, exclusions: [{ from: 1, to: 4 }] },
+    graiType: { nextSequence: 1, exclusions: [] },
+    gtinItem: { nextSequence: 1, exclusions: [] },
+  },
+  classKeyIssuable: true, gtinFormat: 'GTIN-12' as const,
+  group: workshop, configuredAt: '2026-06-20T00:00:00.000Z',
   configuredBy: reporter.key,
 });
 
@@ -80,19 +86,21 @@ function recordingStore(calls: Call[]) {
       calls.push({ method: 'listGroups', audience });
       return [workshop, studio];
     },
-    async listGiaiNamespaces(audience: AudienceInput) {
-      calls.push({ method: 'listGiaiNamespaces', audience });
+    async listGs1Namespaces(audience: AudienceInput) {
+      calls.push({ method: 'listGs1Namespaces', audience });
       return [namespace];
     },
-    async giaiIssuances(audience: AudienceInput, request: unknown): Promise<GiaiIssuancePage> {
-      calls.push({ method: 'giaiIssuances', audience, request });
+    async gs1Issuances(audience: AudienceInput, request: unknown): Promise<Gs1LedgerPage> {
+      calls.push({ method: 'gs1Issuances', audience, request });
       return Object.freeze({
         namespace,
         matching: 2,
-        issuances: [
-          Object.freeze({ allocation: camera.allocation!, asset: camera }),
+        entries: [
+          Object.freeze({ issuance: camera.issuances[0], asset: camera }),
           Object.freeze({
-            allocation: { value: gcp + '6', gcp, sequence: 6, allocatedAt: '2026-06-24T00:00:00.000Z',
+            issuance: { key: 'issuance-2', scheme: 'giai' as const,
+              canonical: '(8004)' + gcp + '6', gcp, sequence: 6, classKeyCanonical: null,
+              allocatedAt: '2026-06-24T00:00:00.000Z',
               allocatedForAssetId: detached.id, allocatedBy: reporter },
             asset: detached,
           }),
@@ -129,7 +137,8 @@ test('the MCP tool surface is discoverable and read-only', async (t) => {
 
   await t.test('exposes exactly the Kannabi domain tools', () => {
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
-      'get_asset', 'list_giai_issuances', 'list_giai_namespaces', 'list_groups',
+      'get_asset', 'list_groups', 'list_gs1_issuances', 'list_gs1_namespaces',
+      'list_managed_class_keys',
       'resolve_external_identifier', 'search_assets',
     ]);
   });
@@ -169,18 +178,19 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.deepEqual(page.nextCursor, 'next-page');
     const assets = page.assets as Record<string, unknown>[];
     assert.deepEqual(assets.map((entry) => entry.assetId), [camera.id, microscope.id]);
-    assert.deepEqual(assets[0].kannabiAllocatedGiai, camera.allocation!.value);
-    assert.deepEqual(assets[1].kannabiAllocatedGiai, null);
+    assert.deepEqual((assets[0].kannabiIssued as { canonical: string }[])
+      .map((issued) => issued.canonical), [camera.issuances[0].canonical]);
+    assert.deepEqual(assets[1].kannabiIssued, []);
     // A candidate stays small: no reporter, components, policy version or photo keys.
     assert.deepEqual(Object.keys(assets[0]).sort(), ['assetId', 'groups', 'identifiers', 'isPublic',
-      'kannabiAllocatedGiai', 'name', 'owner', 'photoCount', 'reportedAt', 'surfacedPath'].sort());
+      'kannabiIssued', 'name', 'owner', 'photoCount', 'reportedAt', 'surfacedPath'].sort());
     // Presentation travels with a candidate; identity is still the assetId.
     // Both surface their GIAI, and the microscope's was never issued by
     // Kannabi — issuance is provenance and decides nothing about what is
     // surfaced, which is exactly why these two agree here.
     assert.equal(assets[0].surfacedPath, '/8004/' + camera.identifiers[1].components.assetReference);
     assert.equal(assets[1].surfacedPath, '/8004/' + microscope.identifiers[1].components.assetReference);
-    assert.equal(assets[1].kannabiAllocatedGiai, null);
+    assert.deepEqual(assets[1].kannabiIssued, []);
   });
 
   await t.test('search reuses the shared request parser', async () => {
@@ -241,30 +251,35 @@ test('allocation provenance is reported from the issuance ledger', async (t) => 
   t.after(() => client.close());
 
   await t.test('namespaces describe the authority Kannabi claims', async () => {
-    const listed = structured(await client.callTool({ name: 'list_giai_namespaces', arguments: {} }));
+    const listed = structured(await client.callTool({ name: 'list_gs1_namespaces', arguments: {} }));
     const namespaces = listed.namespaces as Record<string, unknown>[];
     assert.equal(namespaces[0].namespaceKey, namespace.key);
     assert.equal(namespaces[0].gcp, gcp);
     assert.deepEqual(namespaces[0].group, workshop);
-    assert.deepEqual(namespaces[0].excludedReferences, [{ from: 1, to: 4 }]);
-    assert.deepEqual(Object.keys(namespaces[0]).sort(), ['active', 'configuredAt', 'excludedReferences',
-      'gcp', 'group', 'namespaceKey', 'nextSequence'].sort());
+    const counters = namespaces[0].counters as Record<string, Record<string, unknown>>;
+    assert.deepEqual(counters.giai.excludedReferences, [{ from: 1, to: 4 }]);
+    // Three counters, never one: a GTIN and a GRAI asset type made of the same
+    // digits are different keys and must not share a sequence.
+    assert.deepEqual(Object.keys(counters).sort(), ['giai', 'graiType', 'gtinItem']);
+    assert.deepEqual(Object.keys(namespaces[0]).sort(), ['active', 'classKeyIssuable',
+      'configuredAt', 'counters', 'gcp', 'group', 'gtinFormat', 'namespaceKey'].sort());
   });
 
   await t.test('the allocation counter is never presented as a count of issuances', async () => {
     // The counter advances past excluded references too, so 7 here means two
     // issuances and four skipped numbers. Only the ledger may be counted.
-    const listed = structured(await client.callTool({ name: 'list_giai_namespaces', arguments: {} }));
-    assert.equal((listed.namespaces as Record<string, unknown>[])[0].nextSequence, 7);
-    const ledger = structured(await client.callTool({ name: 'list_giai_issuances',
+    const listed = structured(await client.callTool({ name: 'list_gs1_namespaces', arguments: {} }));
+    assert.equal(((listed.namespaces as Record<string, unknown>[])[0]
+      .counters as Record<string, Record<string, unknown>>).giai.nextSequence, 7);
+    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
       arguments: { namespaceKey: namespace.key } }));
     assert.equal(ledger.matching, 2);
   });
 
   await t.test('issuances bind a value to an Asset and report attachment separately', async () => {
-    const ledger = structured(await client.callTool({ name: 'list_giai_issuances',
+    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
       arguments: { namespaceKey: namespace.key } }));
-    const issuances = ledger.issuances as Record<string, unknown>[];
+    const issuances = ledger.entries as Record<string, unknown>[];
     assert.equal(issuances.length, 2);
     assert.equal(issuances[0].assetId, camera.id);
     assert.equal(issuances[0].stillAttached, true);
@@ -274,20 +289,20 @@ test('allocation provenance is reported from the issuance ledger', async (t) => 
   });
 
   await t.test('an Asset whose GIAI only shares the prefix is not an issuance', async () => {
-    const ledger = structured(await client.callTool({ name: 'list_giai_issuances',
+    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
       arguments: { namespaceKey: namespace.key } }));
-    const issuances = ledger.issuances as { assetId: string }[];
+    const issuances = ledger.entries as { assetId: string }[];
     assert.ok(microscope.identifiers.some((identifier) =>
       identifier.canonical.includes(gcp)), 'the fixture must share the prefix textually');
     assert.ok(!issuances.some((issuance) => issuance.assetId === microscope.id));
   });
 
   await t.test('an unusable namespace key never reaches the store', async () => {
-    const before = calls.filter((call) => call.method === 'giaiIssuances').length;
-    const rejected = await client.callTool({ name: 'list_giai_issuances',
+    const before = calls.filter((call) => call.method === 'gs1Issuances').length;
+    const rejected = await client.callTool({ name: 'list_gs1_issuances',
       arguments: { namespaceKey: '   ' } }) as { isError?: boolean };
     assert.equal(rejected.isError, true);
-    assert.equal(calls.filter((call) => call.method === 'giaiIssuances').length, before);
+    assert.equal(calls.filter((call) => call.method === 'gs1Issuances').length, before);
   });
 });
 
@@ -300,8 +315,8 @@ test('every tool reads under the accepted system-wide audience', async (t) => {
     ['resolve_external_identifier', { scheme: 'gtin', gtin: '04901234567894' }],
     ['get_asset', { assetId: camera.id }],
     ['list_groups', {}],
-    ['list_giai_namespaces', {}],
-    ['list_giai_issuances', { namespaceKey: namespace.key }],
+    ['list_gs1_namespaces', {}],
+    ['list_gs1_issuances', { namespaceKey: namespace.key }],
   ] as const) {
     await client.callTool({ name, arguments: args });
   }
@@ -356,22 +371,22 @@ const compositions = [
   { from: 'resolve_external_identifier', field: 'assets[].assetId', to: 'get_asset', argument: 'assetId' },
   { from: 'resolve_external_identifier', field: 'nextCursor', to: 'resolve_external_identifier', argument: 'cursor' },
   { from: 'list_groups', field: 'groups[].key', to: 'search_assets', argument: 'groupKeys' },
-  { from: 'list_giai_namespaces', field: 'namespaces[].namespaceKey', to: 'list_giai_issuances', argument: 'namespaceKey' },
-  { from: 'list_giai_issuances', field: 'issuances[].assetId', to: 'get_asset', argument: 'assetId' },
-  { from: 'list_giai_issuances', field: 'nextCursor', to: 'list_giai_issuances', argument: 'cursor' },
+  { from: 'list_gs1_namespaces', field: 'namespaces[].namespaceKey', to: 'list_gs1_issuances', argument: 'namespaceKey' },
+  { from: 'list_gs1_issuances', field: 'entries[].assetId', to: 'get_asset', argument: 'assetId' },
+  { from: 'list_gs1_issuances', field: 'nextCursor', to: 'list_gs1_issuances', argument: 'cursor' },
 ] as const;
 
 /** Fields an agent cannot use correctly by guessing at the name alone. */
 const mustBeDocumented = [
   ['search_assets', 'matching'], ['search_assets', 'total'], ['search_assets', 'nextCursor'],
-  ['search_assets', 'assets[].kannabiAllocatedGiai'], ['search_assets', 'assets[].identifiers[].level'],
+  ['search_assets', 'assets[].kannabiIssued'], ['search_assets', 'assets[].identifiers[].level'],
   ['search_assets', 'assets[].identifiers[].components'], ['search_assets', 'assets[].isPublic'],
   ['search_assets', 'assets[].owner'], ['search_assets', 'assets[].photoCount'],
   ['resolve_external_identifier', 'identity.levelMeaning'], ['resolve_external_identifier', 'assets'],
-  ['get_asset', 'found'], ['get_asset', 'asset.allocation'],
-  ['list_giai_namespaces', 'namespaces[].nextSequence'],
-  ['list_giai_issuances', 'issuances[].stillAttached'], ['list_giai_issuances', 'matching'],
-  ['list_giai_issuances', 'issuances[].allocation.value'],
+  ['get_asset', 'found'], ['get_asset', 'asset.issuances'],
+  ['list_gs1_namespaces', 'namespaces[].counters'],
+  ['list_gs1_issuances', 'entries[].stillAttached'], ['list_gs1_issuances', 'matching'],
+  ['list_gs1_issuances', 'entries[].issuance.canonical'],
 ] as const;
 
 test('the interface stays composable and self-describing', async (t) => {

@@ -144,22 +144,22 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     assert.equal((await query('MATCH (:User)-[r]->(:Asset) RETURN count(r) AS count')).records[0].get('count').toNumber(), 0);
   });
   await t.test('seeded GIAI namespaces and issuances survive nothing but a reset', async () => {
-    const namespaces = await query(`MATCH (g:Group)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace)
-      RETURN g.name AS group, n.gcp AS gcp, n.active AS active, toFloat(n.nextSequence) AS next
+    const namespaces = await query(`MATCH (g:Group)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace)
+      RETURN g.name AS group, n.gcp AS gcp, n.active AS active, toFloat(n.giaiNextSequence) AS next
       ORDER BY gcp`);
-    assert.deepEqual(namespaces.records.map((r) => r.get('gcp')), ['0455123', '0614141', '9521234']);
+    assert.deepEqual(namespaces.records.map((r) => r.get('gcp')), ['0614141', '9520123', '9521234']);
     assert.ok(namespaces.records.every((r) => r.get('active') === true));
-    const allocations = await query(`MATCH (l:GiaiAllocation)-[:ALLOCATED_FROM]->(n:GiaiNamespace)
-      RETURN l.value AS value, toFloat(l.sequence) AS sequence, n.gcp AS gcp ORDER BY sequence`);
+    const allocations = await query(`MATCH (l:Gs1KeyIssuance)-[:ISSUED_FROM]->(n:Gs1Namespace)
+      RETURN l.canonical AS canonical, toFloat(l.sequence) AS sequence, n.gcp AS gcp ORDER BY sequence`);
     // Exclusions on the first namespace make the skips visible in demo data.
     assert.deepEqual(allocations.records.map((r) => r.get('sequence')), [5, 6, 7, 8, 12]);
-    assert.deepEqual(allocations.records.map((r) => r.get('value')),
-      ['06141415', '06141416', '06141417', '06141418', '061414112']);
+    assert.deepEqual(allocations.records.map((r) => r.get('canonical')),
+      ['(8004)06141415', '(8004)06141416', '(8004)06141417', '(8004)06141418', '(8004)061414112']);
     assert.ok(allocations.records.every((r) => r.get('gcp') === '0614141'));
     // Each issued GIAI is attached to the Asset the ledger names.
-    const attached = await query(`MATCH (l:GiaiAllocation)
+    const attached = await query(`MATCH (l:Gs1KeyIssuance)
       MATCH (a:Asset {id: l.allocatedForAssetId})-[:IDENTIFIED_BY]->(i:IndividualIdentifier)
-      WHERE i.canonical = '(8004)' + l.value RETURN count(i) AS n`);
+      WHERE i.canonical = l.canonical RETURN count(i) AS n`);
     assert.equal(attached.records[0].get('n').toNumber(), 5);
   });
 
@@ -170,9 +170,11 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     assert.match(output.stdout, /DESTRUCTIVE RESET/);
     assert.deepEqual(await snapshot(), before);
     // Counters must not leak across resets: a fresh namespace starts over.
-    const counters = await query('MATCH (n:GiaiNamespace) RETURN toFloat(n.nextSequence) AS next ORDER BY n.gcp');
-    assert.deepEqual(counters.records.map((r) => r.get('next')), [1, 13, 1]);
-    assert.equal((await query('MATCH (l:GiaiAllocation) RETURN count(l) AS n')).records[0].get('n').toNumber(), 5);
+    const counters = await query('MATCH (n:Gs1Namespace) RETURN toFloat(n.giaiNextSequence) AS next ORDER BY n.gcp');
+    // Ordered by prefix: 0614141 has issued through its exclusions, the other
+    // two have issued nothing.
+    assert.deepEqual(counters.records.map((r) => r.get('next')), [13, 1, 1]);
+    assert.equal((await query('MATCH (l:Gs1KeyIssuance) RETURN count(l) AS n')).records[0].get('n').toNumber(), 5);
     const after = await keys();
     assert.equal(after.length, 47);
     assert.ok(after.every((key) => !mediaKeys.includes(key)));

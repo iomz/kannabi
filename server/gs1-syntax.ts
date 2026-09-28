@@ -104,14 +104,22 @@ export const unenforcedLinters: Readonly<Record<string, string>> = {
   gcppos2: 'As gcppos1.',
 };
 
-/** The `csum` linter: GS1 standard modulo-10 check digit over a numeric
- * component whose final digit is the check digit. */
-export function csum(value: string): boolean {
+/** The GS1 standard modulo-10 check digit for a numeric body, which is the
+ * value without its check digit. Weights alternate 3 and 1 from the rightmost
+ * body digit, so a leading zero is weight-neutral and padding a value to a
+ * longer fixed-length representation never changes its check digit. */
+export function checkDigit(body: string): string {
   let sum = 0;
-  for (let i = value.length - 2, weight = 3; i >= 0; i--, weight = 4 - weight) {
-    sum += Number(value[i]) * weight;
+  for (let i = body.length - 1, weight = 3; i >= 0; i--, weight = 4 - weight) {
+    sum += Number(body[i]) * weight;
   }
-  return (10 - sum % 10) % 10 === Number(value.at(-1));
+  return String((10 - sum % 10) % 10);
+}
+
+/** The `csum` linter: a numeric component whose final digit is the check digit
+ * computed over everything before it. */
+export function csum(value: string): boolean {
+  return checkDigit(value.slice(0, -1)) === value.at(-1);
 }
 
 /** The `zero` linter: the component consists entirely of zeros. */
