@@ -307,6 +307,10 @@ This is post-mutation client navigation, not canonicalization, and the distincti
 
 The rule is the same for every mutation rather than special-cased per scheme: leave an address that no longer serves this Asset, stay otherwise.
 
+Mutations themselves are addressed by the native `Asset.id`, which the page carries with every submission, never by the address the form was submitted from.
+A presentation address is for reaching a page: the router re-encodes a form's action URL, so a Digital Link carrying `%2F` in a serial arrives at the action as `%252F`, and an identity recovered from it would be a different identifier or none at all.
+Changing an Asset's name or visibility, uploading a photo and attaching or detaching an identifier therefore behave identically however the page was reached.
+
 ### Resolution
 
 Every supported Digital Link form renders the Asset directly with `200`. No Digital Link form ever redirects to another, including to the Asset's preferred one: preference governs presentation, and each supported form is an independent entry point to the same referent.

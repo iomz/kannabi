@@ -16,8 +16,10 @@ export function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   return loadAsset(params.id, request);
 }
 
-export function clientAction({ params, request }: Route.ClientActionArgs) {
-  return submitAsset(params.id, request);
+/** Identity comes from the submission, not from this route's parameters, so
+ * a mutation behaves identically however the page was addressed. */
+export function clientAction({ request }: Route.ClientActionArgs) {
+  return submitAsset(request);
 }
 
 export default function AssetPage({ loaderData }: Route.ComponentProps) {

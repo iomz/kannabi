@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { displayInstant } from '../server/settings.js';
 import { api, unwrap } from './api';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri';
+import { assetId } from '../server/asset-id.js';
 import { digitalLinkPath } from '../server/gs1-digital-link.js';
 import { surfacedAssetPath, surfacedTransition, type SurfaceableIdentifier } from '../server/surfaced-uri.js';
 import { ReporterAttribution } from './reporter-attribution';
@@ -55,6 +56,10 @@ export async function loadAsset(id: string, request: Request) {
     nativeUri: absolute(assetPath(result.asset.id)),
     surfacedUri: absolute(surfacedAssetPath(result.asset.id, result.asset.identifiers)) };
 }
+/** Fields every submission carries to route and address itself, which are
+ * never part of the payload any API is given. */
+const submissionFields = new Set(['intent', 'assetId', 'at']);
+
 /** An Asset as a mutation response returns it, which is all a transition needs. */
 type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[] };
 
@@ -73,15 +78,24 @@ type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[] 
  * The acknowledgement is raised here rather than by the component's effect,
  * because an action that redirects returns the fetcher no data to react to.
  */
-function transition(asset: MutatedAsset, message: string, request: Request) {
-  const target = surfacedTransition(new URL(request.url).pathname, asset.id, asset.identifiers);
+function transition(asset: MutatedAsset, message: string, at: string) {
+  const target = surfacedTransition(at, asset.id, asset.identifiers);
   if (!target) return null;
   notify(message);
   return redirect(target);
 }
 
-export async function submitAsset(id: string, request: Request) {
+export async function submitAsset(request: Request) {
   const data = await request.formData();
+  // The Asset's own identity, carried by the submission. Never taken from
+  // the address: a Digital Link path is a presentation address, and React
+  // Router re-encodes a form's action URL, so `%2F` inside a serial arrives
+  // as `%252F` and would resolve to a different identifier or to none. The
+  // native id is what every Asset-scoped API call is addressed by.
+  const id = assetId(data.get('assetId'));
+  // Where the viewer is standing, from the router's location rather than
+  // from that same re-encoded URL.
+  const at = String(data.get('at') ?? '');
   const intent = data.get('intent');
   if (intent === 'grant-collaboration' || intent === 'revoke-collaboration') {
     try {
@@ -117,26 +131,30 @@ export async function submitAsset(id: string, request: Request) {
       return { kind, saved: true as const, error: null, photoKey: requestedPhotoKey };
     }
     if (kind === 'attach-identifier') {
+      // Only the scheme's own fields reach the GS1 boundary. The intent and
+      // the identity this submission carries are how the form was routed,
+      // not part of the identifier, and that boundary rejects what it does
+      // not recognise.
       const identifier = Object.fromEntries([...data.entries()]
-        .filter(([field, value]) => field !== 'intent' && typeof value === 'string' && value !== '')
+        .filter(([field, value]) => !submissionFields.has(field) && typeof value === 'string' && value !== '')
         .map(([field, value]) => [field, String(value)]));
       const { asset } = await unwrap<{ asset: MutatedAsset }>(
         await api.assets[':id'].identifiers.$post({ param: { id }, json: identifier }));
-      return transition(asset, 'Identifier recorded', request)
+      return transition(asset, 'Identifier recorded', at)
         ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     if (kind === 'detach-identifier') {
       const { asset } = await unwrap<{ asset: MutatedAsset }>(
         await api.assets[':id'].identifiers[':key'].$delete({
           param: { id, key: String(data.get('identifierKey') ?? '') } }));
-      return transition(asset, 'Identifier detached', request)
+      return transition(asset, 'Identifier detached', at)
         ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     if (kind === 'allocate-giai') {
       const { asset } = await unwrap<{ asset: MutatedAsset }>(
         await api.assets[':id'].giai.$post({ param: { id },
           json: { namespaceKey: String(data.get('namespaceKey') ?? '') } }));
-      return transition(asset, 'GIAI issued', request)
+      return transition(asset, 'GIAI issued', at)
         ?? { kind, saved: true as const, error: null, photoKey: null };
     }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
@@ -165,8 +183,24 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const identifiers = useFetcher<typeof submitAsset>();
   // The row passes the complete location it was shown in, so going back returns
   // to that view — the inventory query, or the lookup that resolved this Asset.
-  const from = (useLocation().state as { from?: string } | null)?.from;
+  const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
   const back = from?.startsWith('/') ? from : '/';
+  /** What every mutation carries with it.
+   *
+   * The Asset's own identity, because the address a form posts to is a
+   * presentation address: React Router re-encodes it, so a Digital Link
+   * carrying `%2F` in a serial arrives at the action as `%252F`. Identity
+   * must not depend on that, and the page already knows it.
+   *
+   * And the address the viewer is standing on, taken from the router's
+   * location, which is faithful — so a surfaced-URI transition still knows
+   * whether the current page is one that still serves this Asset. */
+  const identity = { assetId: asset.id, at: location.pathname };
+  const identityFields = <>
+    <input type="hidden" name="assetId" value={identity.assetId} />
+    <input type="hidden" name="at" value={identity.at} />
+  </>;
   const allocate = useFetcher<typeof submitAsset>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
@@ -220,20 +254,23 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       showNativeUri={settings.showAssetId} /></Panel>
     <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
       busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
-      onChange={(groupKey, grant) => collaboration.submit({ groupKey,
+      onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
     <Panel><h2>Identifiers</h2>
       <IdentifierList identifiers={asset.identifiers} allocation={asset.allocation}
         digitalLinks={digitalLinks}
         showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
-        onDetach={(key) => identifiers.submit({ intent: 'detach-identifier', identifierKey: key }, { method: 'post' })} />
+        onDetach={(key) => identifiers.submit({ ...identity, intent: 'detach-identifier', identifierKey: key },
+          { method: 'post' })} />
       {canEdit && <allocate.Form method="post" className="mb-6">
+        {identityFields}
         <AllocateGiai namespaces={namespaces} allocation={asset.allocation}
           allocationAttached={asset.identifiers.some((identifier) => identifier.scheme === 'giai'
             && identifier.components.assetReference === asset.allocation?.value)}
           busy={allocateBusy} error={allocateResult?.error ?? null} />
       </allocate.Form>}
       {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
+        {identityFields}
         <IdentifierForm busy={identifierBusy}
           error={identifierResult?.error ?? null} />
       </identifiers.Form>}
@@ -253,6 +290,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       </div>)}</div>
       {canEdit && <>
         <upload.Form ref={uploadForm} method="post" encType="multipart/form-data">
+        {identityFields}
         <fieldset disabled={uploadBusy} aria-busy={uploadBusy}>
           <input type="hidden" name="intent" value="photo" />
           <Field label="Add photo" hint="JPEG, PNG, or WebP, up to 10 MiB.">
@@ -266,10 +304,13 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     {canEdit && <PhotoDeleteConfirmation open={photoToDelete !== null} busy={deleteBusy}
       error={deleteResult?.error && deleteResult.photoKey === photoToDelete ? deleteResult.error : null}
       onClose={() => setPhotoToDelete(null)} onConfirm={() => {
-        if (photoToDelete) deletePhoto.submit({ intent: 'delete-photo', photoKey: photoToDelete }, { method: 'post' });
+        if (photoToDelete) {
+          deletePhoto.submit({ ...identity, intent: 'delete-photo', photoKey: photoToDelete }, { method: 'post' });
+        }
       }} />}
     {canEdit && <Panel><h2>Edit Asset</h2>
       <edit.Form method="post" key={JSON.stringify([asset.name, asset.isPublic])}>
+        {identityFields}
         <fieldset disabled={editBusy} aria-busy={editBusy}>
           <input type="hidden" name="intent" value="edit" />
           <Field label="Asset name"><Input name="name" defaultValue={asset.name} required /></Field>

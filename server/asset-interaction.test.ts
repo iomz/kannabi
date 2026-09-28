@@ -6,6 +6,14 @@ import { newAssetId } from './asset-id.js';
 const id = newAssetId();
 const assetUrl = 'http://127.0.0.1:3000/asset/' + id;
 
+/** What the Asset page puts in every submission: the native identity, and
+ * the address the viewer is standing on. */
+function identify(form: FormData, at = '/asset/' + id) {
+  form.set('assetId', id);
+  form.set('at', at);
+  return form;
+}
+
 test('Asset edit and photo actions return fetcher data instead of redirects', async () => {
   const originalFetch = globalThis.fetch;
   const requests: { url: string; method: string }[] = [];
@@ -23,7 +31,7 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     edit.set('name', 'Updated Asset');
     edit.set('isPublic', 'on');
     const editResult = await clientAction({
-      params: { id }, request: new Request(assetUrl, { method: 'POST', body: edit }),
+      request: new Request(assetUrl, { method: 'POST', body: identify(edit) }),
     } as never);
     assert.deepEqual(editResult, { kind: 'edit', saved: true, error: null, photoKey: null });
     assert.equal(editResult instanceof Response, false);
@@ -32,7 +40,7 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     photo.set('intent', 'photo');
     photo.set('photo', new File([new Uint8Array([1])], 'photo.png', { type: 'image/png' }));
     const photoResult = await clientAction({
-      params: { id }, request: new Request(assetUrl, { method: 'POST', body: photo }),
+      request: new Request(assetUrl, { method: 'POST', body: identify(photo) }),
     } as never);
     assert.deepEqual(photoResult, { kind: 'photo', saved: true, error: null, photoKey: 'new-photo' });
     assert.equal(photoResult instanceof Response, false);
@@ -41,7 +49,7 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     deletion.set('intent', 'delete-photo');
     deletion.set('photoKey', 'new-photo');
     const deletionResult = await clientAction({
-      params: { id }, request: new Request(assetUrl, { method: 'POST', body: deletion }),
+      request: new Request(assetUrl, { method: 'POST', body: identify(deletion) }),
     } as never);
     assert.deepEqual(deletionResult, { kind: 'delete-photo', saved: true, error: null, photoKey: 'new-photo' });
     assert.equal(deletionResult instanceof Response, false);
@@ -73,7 +81,7 @@ test('collaboration actions preserve identity and leave the page only when acces
   const change = (intent: string) => {
     const data = new FormData();
     data.set('intent', intent); data.set('groupKey', 'group-b');
-    return clientAction({ params: { id }, request: new Request(assetUrl, { method: 'POST', body: data }) } as never);
+    return clientAction({ request: new Request(assetUrl, { method: 'POST', body: identify(data) }) } as never);
   };
   try {
     assert.deepEqual(await change('grant-collaboration'), { kind: 'collaboration', saved: true, error: null, photoKey: null });
@@ -113,9 +121,10 @@ test('an identifier mutation leaves an address that no longer serves the Asset',
     form.set('identifierKey', 'k');
     return form;
   };
+  // `from` is where the viewer stands, carried by the submission rather than
+  // read back out of the action's URL.
   const submit = (from: string, body: FormData) => clientAction({
-    params: { id },
-    request: new Request('http://127.0.0.1:3000' + from, { method: 'POST', body }),
+    request: new Request('http://127.0.0.1:3000' + from, { method: 'POST', body: identify(body, from) }),
   } as never);
 
   try {

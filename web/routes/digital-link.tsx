@@ -58,8 +58,11 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   return loadAsset(await assetIdFor(request.url), request);
 }
 
+/** A mutation never re-resolves the address it was submitted from. The page
+ * carries the native Asset ID, which is what every Asset-scoped API call is
+ * addressed by, so this is the same action the native route runs. */
 export async function clientAction({ request }: Route.ClientActionArgs) {
-  return submitAsset(await assetIdFor(request.url), request);
+  return submitAsset(request);
 }
 
 export default function DigitalLinkPage({ loaderData }: Route.ComponentProps) {
