@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, Field, Hint, PageHeading, Panel } from './ui';
-import { AllocateGiai, IdentifierForm, IdentifierList } from './asset-identifiers';
+import { IdentifierForm, IdentifierList, IssueIdentifier } from './asset-identifiers';
 
 
 export async function loadAsset(id: string, request: Request) {
@@ -26,9 +26,9 @@ export async function loadAsset(id: string, request: Request) {
     api.assets[':id'].$get({ param: { id } }),
     unwrap(await api.me.$get()),
   ]);
-  // Display only: the server re-checks the Group join on every allocation.
+  // Display only: the server re-checks the Group join on every issuance.
   const { namespaces } = account.user
-    ? await unwrap(await api['giai-namespaces'].$get()) : { namespaces: [] };
+    ? await unwrap(await api['gs1-namespaces'].$get()) : { namespaces: [] };
   if (!response.ok) throw new Response('Asset not found or access unavailable.', { status: response.status });
   const result = await response.json();
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
@@ -45,10 +45,28 @@ export async function loadAsset(id: string, request: Request) {
   const digitalLinks = Object.fromEntries(result.asset.identifiers
     .filter((identifier) => identifier.level === 'individual')
     .map((identifier) => [identifier.key, absolute(digitalLinkPath(identifier))]));
+  // Only namespaces this Asset's Groups manage, and only active ones. The
+  // server re-checks the Group join and the active state on every issuance;
+  // this narrows what is offered, never what is permitted.
+  const eligible = namespaces.filter((namespace) =>
+    namespace.active && namespace.group && groupKeys.has(namespace.group.key));
+  // The class keys those namespaces manage, flattened with the prefix each
+  // belongs to, so a serialised GRAI or an SGTIN can name the one it is
+  // issued under. Inactive class keys are left out for the same reason
+  // inactive namespaces are.
+  const classKeys = (await Promise.all(eligible.map(async (namespace) => {
+    const { classKeys: managed } = await unwrap(
+      await api['gs1-namespaces'][':key']['class-keys'].$get({
+        param: { key: namespace.key }, query: { scheme: undefined } }));
+    return managed.filter((classKey) => classKey.active).map((classKey) => ({
+      key: classKey.key, namespaceKey: namespace.key, gcp: namespace.gcp,
+      scheme: classKey.scheme, canonical: classKey.canonical,
+    }));
+  }))).flat();
   return { ...result, settings, authenticated: account.user !== null,
     controlled, canGrant,
-    namespaces: namespaces.filter((namespace) =>
-      namespace.active && namespace.group && groupKeys.has(namespace.group.key)),
+    namespaces: eligible,
+    classKeys,
     digitalLinks,
     // The native URI is always present and always valid. The surfaced one is
     // what Kannabi puts in front of a person, and is the native URI again when
@@ -61,7 +79,8 @@ export async function loadAsset(id: string, request: Request) {
 const submissionFields = new Set(['intent', 'assetId', 'at']);
 
 /** An Asset as a mutation response returns it, which is all a transition needs. */
-type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[] };
+type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[];
+  issuances: readonly { scheme: string; canonical: string }[] };
 
 /** Leave an address that no longer serves this Asset.
  *
@@ -114,7 +133,7 @@ export async function submitAsset(request: Request) {
     : intent === 'delete-photo' ? 'delete-photo' as const
       : intent === 'attach-identifier' ? 'attach-identifier' as const
         : intent === 'detach-identifier' ? 'detach-identifier' as const
-          : intent === 'allocate-giai' ? 'allocate-giai' as const : 'edit' as const;
+          : intent === 'issue-identifier' ? 'issue-identifier' as const : 'edit' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
     if (kind === 'photo') {
@@ -150,12 +169,26 @@ export async function submitAsset(request: Request) {
       return transition(asset, 'Identifier detached', at)
         ?? { kind, saved: true as const, error: null, photoKey: null };
     }
-    if (kind === 'allocate-giai') {
+    if (kind === 'issue-identifier') {
+      // One route per scheme, because the three take different inputs: a GIAI
+      // names only a namespace, while a serialised GRAI and an SGTIN each name
+      // the managed class key they are issued under.
+      const scheme = String(data.get('scheme') ?? 'giai');
+      const namespaceKey = String(data.get('namespaceKey') ?? '');
+      const classKeyKey = String(data.get('classKeyKey') ?? '');
       const { asset } = await unwrap<{ asset: MutatedAsset }>(
-        await api.assets[':id'].giai.$post({ param: { id },
-          json: { namespaceKey: String(data.get('namespaceKey') ?? '') } }));
-      return transition(asset, 'GIAI issued', at)
-        ?? { kind, saved: true as const, error: null, photoKey: null };
+        scheme === 'grai'
+          ? await api.assets[':id'].grai.$post({ param: { id }, json: { namespaceKey, classKeyKey } })
+          : scheme === 'sgtin'
+            ? await api.assets[':id'].sgtin.$post({ param: { id }, json: { namespaceKey, classKeyKey } })
+            : await api.assets[':id'].giai.$post({ param: { id }, json: { namespaceKey } }));
+      // Which value this issuance produced, so the card for it can be picked
+      // out where the reader was already looking. Only meaningful when the
+      // viewer stays: a transition is a navigation, and the page it lands on
+      // shows the identifiers directly under the header anyway.
+      const issued = asset.issuances.find((issuance) => issuance.scheme === scheme)?.canonical ?? null;
+      return transition(asset, 'Identifier issued', at)
+        ?? { kind, saved: true as const, error: null, photoKey: null, issued };
     }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
@@ -168,14 +201,14 @@ export async function submitAsset(request: Request) {
           : kind === 'delete-photo' ? 'Delete failed'
             : kind === 'attach-identifier' ? 'Identifier could not be added'
               : kind === 'detach-identifier' ? 'Identifier could not be detached'
-                : kind === 'allocate-giai' ? 'GIAI could not be allocated' : 'Update failed',
+                : kind === 'issue-identifier' ? 'Identifier could not be issued' : 'Update failed',
       photoKey: requestedPhotoKey };
   }
 }
 export type AssetViewData = Awaited<ReturnType<typeof loadAsset>>;
 
 export function AssetView({ asset, canEdit, canViewReporterProfile, settings, authenticated,
-  nativeUri, surfacedUri, digitalLinks, namespaces, controlled, canGrant }: AssetViewData) {
+  nativeUri, surfacedUri, digitalLinks, namespaces, classKeys, controlled, canGrant }: AssetViewData) {
   const collaboration = useFetcher<typeof submitAsset>();
   const upload = useFetcher<typeof submitAsset>();
   const edit = useFetcher<typeof submitAsset>();
@@ -201,7 +234,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     <input type="hidden" name="assetId" value={identity.assetId} />
     <input type="hidden" name="at" value={identity.at} />
   </>;
-  const allocate = useFetcher<typeof submitAsset>();
+  const issue = useFetcher<typeof submitAsset>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
   const uploadResult = upload.data?.kind === 'photo' ? upload.data : null;
@@ -210,8 +243,10 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const identifierResult = identifiers.data?.kind === 'attach-identifier'
     || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
   const identifierBusy = identifiers.state !== 'idle';
-  const allocateResult = allocate.data?.kind === 'allocate-giai' ? allocate.data : null;
-  const allocateBusy = allocate.state !== 'idle';
+  const issueResult = issue.data?.kind === 'issue-identifier' ? issue.data : null;
+  // The value just issued, while it is still the newest thing on the page.
+  const justIssued = issueResult?.saved ? issueResult.issued ?? null : null;
+  const issueBusy = issue.state !== 'idle';
   const uploadBusy = upload.state !== 'idle';
   const editBusy = edit.state !== 'idle';
   const deleteBusy = deletePhoto.state !== 'idle';
@@ -231,8 +266,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     if (identifiers.data?.kind === 'detach-identifier' && identifiers.data.saved) notify('Identifier detached');
   }, [identifiers.data]);
   useEffect(() => {
-    if (allocateResult?.saved) notify('GIAI issued');
-  }, [allocateResult]);
+    if (issueResult?.saved) notify('Identifier issued');
+  }, [issueResult]);
   useEffect(() => {
     if (collaboration.data?.saved) notify('Collaboration updated');
   }, [collaboration.data]);
@@ -242,39 +277,51 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       {authenticated ? <Badge variant={asset.isPublic ? 'brand' : 'secondary'}>{asset.isPublic ? 'Public' : 'Group access'}</Badge>
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
-    <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">
-      {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
-      <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
-      <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
-      <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
-      <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy}
-        link={canViewReporterProfile} /></dd>
-      <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
-    </dl><AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
-      showNativeUri={settings.showAssetId} /></Panel>
-    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
-      busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
-      onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
-        intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
+    {/* Identity first, and identity means the identifiers. What used to sit
+        here under that heading was mostly access and provenance metadata,
+        which is worth reading once; the identifiers are the material a person
+        comes to this page for, so they no longer wait below it. */}
     <Panel><h2>Identifiers</h2>
-      <IdentifierList identifiers={asset.identifiers} allocation={asset.allocation}
-        digitalLinks={digitalLinks}
+      <AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
+        showNativeUri={settings.showAssetId} />
+      <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
+        digitalLinks={digitalLinks} justIssued={justIssued}
         showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ ...identity, intent: 'detach-identifier', identifierKey: key },
           { method: 'post' })} />
-      {canEdit && <allocate.Form method="post" className="mb-6">
+      {canEdit && <issue.Form method="post" className="mb-6"
+        key={asset.issuances.map((issuance) => issuance.key).join()}>
         {identityFields}
-        <AllocateGiai namespaces={namespaces} allocation={asset.allocation}
-          allocationAttached={asset.identifiers.some((identifier) => identifier.scheme === 'giai'
-            && identifier.components.assetReference === asset.allocation?.value)}
-          busy={allocateBusy} error={allocateResult?.error ?? null} />
-      </allocate.Form>}
+        <IssueIdentifier namespaces={namespaces} classKeys={classKeys}
+          issuances={asset.issuances} identifiers={asset.identifiers}
+          busy={issueBusy} error={issueResult?.error ?? null} />
+      </issue.Form>}
       {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
         {identityFields}
         <IdentifierForm busy={identifierBusy}
           error={identifierResult?.error ?? null} />
       </identifiers.Form>}
     </Panel>
+    {/* Access and provenance, compressed to one line per fact. It is context
+        for the identifiers above rather than the subject of the page. */}
+    <Panel><h2>Details</h2>
+      <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
+        <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
+        <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
+        <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
+        <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
+          link={canViewReporterProfile} />{' · '}
+        <time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time>
+          {' '}({settings.displayTimezone})</dd>
+        {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
+      </dl>
+    </Panel>
+    {/* Below the identifiers and closed by default: managing who collaborates
+        is an occasional administrative act, not what the page is about. */}
+    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
+      busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
+      onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
+        intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
     <Panel><h2>Photos</h2>
       {!asset.photos.length && <p>No photos yet.</p>}
       <div className="mb-6 flex flex-wrap gap-4">{asset.photos.map((photo, index) => <div key={photo.key}

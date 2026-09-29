@@ -239,8 +239,9 @@ test('the audience a tool runs under follows the request', async (t) => {
       ['get_asset', { assetId: '0198c2a0-0000-7000-8000-000000000001' }],
       ['resolve_external_identifier', { scheme: 'gtin', gtin: '04901234567894' }],
       ['list_groups', {}],
-      ['list_giai_namespaces', {}],
-      ['list_giai_issuances', { namespaceKey: 'n1' }],
+      ['list_gs1_namespaces', {}],
+      ['list_managed_class_keys', { namespaceKey: 'n1' }],
+      ['list_gs1_issuances', { namespaceKey: 'n1' }],
     ] as const) {
       const response = await client.callTool({ name, arguments: args }) as
         { isError?: boolean; content?: { text?: string }[] };
@@ -257,7 +258,7 @@ test('the audience a tool runs under follows the request', async (t) => {
     const client = await connect(storeWithLink(linked), principalAudienceResolver(storeWithLink(linked)));
     t.after(() => client.close());
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 6);
+    assert.equal(tools.length, 7);
     assert.ok(client.getInstructions());
   });
 

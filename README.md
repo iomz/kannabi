@@ -161,41 +161,94 @@ GTIN/JAN accepts 8, 12, 13, or 14 digits with a valid check digit and normalizes
 GS1 `req=` and `ex=` association rules are applied to the AIs of one identifier, the coherent AI element string a scheme represents.
 They are deliberately not applied across an Asset's identifiers: the Syntax Dictionary scopes those rules to the combined data marking a physical item, whereas an Asset's identifiers are independent records attached at different times from different sources, most of which are not marked on the item at all.
 An Asset carrying a manufacturer's SGTIN beside an owner-assigned GIAI is therefore valid.
-Across an Asset, Kannabi applies only its own two coherence rules: the same identifier may not appear twice, and every AI (01) an Asset carries must name the same trade item.
+Across an Asset, Kannabi applies only its own three coherence rules: the same identifier may not appear twice, every AI (01) an Asset carries must name the same trade item, and every AI (8003) asset type it carries must name the same returnable asset type.
+Identifiers of different schemes coexist freely — a Kannabi-issued GIAI, a serialised GRAI and an SGTIN on one Asset are three identities from three schemes, not a conflict.
 
-A GIAI supplied through **Record existing identifier** is an externally assigned value and is stored as syntax only; that operation neither issues the value nor claims its origin.
-Enter the complete existing AI 8004 value, including its company prefix.
-Locating a GS1 Company Prefix requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary, and a stored GIAI is never evidence that Kannabi allocated it.
+An identifier supplied through **Record existing identifier** is an externally assigned value and is stored as syntax only; that operation neither issues the value nor claims its origin.
+For a GIAI, enter the complete existing AI 8004 value, including its company prefix.
+Locating a GS1 Company Prefix inside an arbitrary key requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary for a value it did not build, and a stored identifier is never evidence that Kannabi allocated it.
 
-## GIAI allocation
+## GS1 identifier issuance
 
-A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GIAIs under them.
+A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GS1 identifiers under them.
 Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
+General Specifications 26.0 §1.5 states that a licensed GS1 Company Prefix entitles its holder to allocate any GS1 identification key, which is why one namespace serves all three schemes below.
 
-On an Asset the actor can edit, the Identifiers panel offers **Issue GIAI** for active namespaces managed by collaborating Groups the actor belongs to, a prefix chooser when several qualify, and a short explanation when none qualify.
-The **Issue GIAI** operation constructs a value only from an eligible active namespace; a caller never supplies the reference for Kannabi issuance. The separate **Record existing identifier** operation can record a complete externally assigned GIAI. Reporting stays GS1-free.
+Four operations stay permanently distinct, and the UI keeps them distinct too — each has its own control, because collapsing two of them into one form where an empty field meant "allocate" hid exactly the difference the domain protects:
 
-`server/gs1.ts` builds every issued value as the configured prefix followed by an unpadded decimal reference, and it is the only place that does so.
-Ordering is by the stored sequence, never by comparing GIAI strings.
-Unlike a GIAI Kannabi merely stores, an issued value's prefix boundary is known because Kannabi built it from a configured prefix — a statement about construction, not about licensing, so `gcppos1` stays unenforced for identifiers Kannabi did not build.
-Kannabi validates only what it can justify: a GS1 Company Prefix is a digit string that leaves room for a reference within AI 8004's 30 characters. It imposes no prefix length range, because it holds no GCP Length Table and a plausible-looking range would be a heuristic posing as conformance.
+```text
+record existing identifier   an observation. No authority required, none claimed, none conferred.
+adopt managed class key      a Group asserts a GTIN or GRAI asset type it already allocated
+                             into a prefix it manages, so Kannabi may issue serials under it.
+allocate class key           Kannabi allocates a new GTIN or GRAI asset type from that prefix.
+issue individual key         Kannabi issues a GIAI, serialised GRAI or SGTIN for one Asset.
+```
 
-A namespace may declare existing-use ranges such as `1-4,9-11,200-300`: references that were already unavailable when it was configured, typically issued before Kannabi.
+**A recorded identifier can never become issuance authority.**
+That is structural rather than a check: a serial is issuable only under a class-key record in a namespace the acting Group manages, and recording an identifier creates no such record, so there is no route from the first operation to the fourth.
+Serialising another company's GTIN is unexpressible rather than forbidden.
+
+The three schemes differ in where the sequence comes from:
+
+```text
+GIAI    GCP ──────────────────────────────► individual asset key
+GRAI    GCP ──► asset type ──► serial ─────► individual returnable asset key
+SGTIN   GCP ──► GTIN ──► serial ───────────► individual trade item key
+```
+
+`server/gs1.ts` is the only place any issued value is built.
+A GIAI is the configured prefix followed by an unpadded decimal reference.
+A GRAI asset type and a base GTIN share one computation — the prefix, a zero-padded reference filling the remaining digits, and the modulo-10 check digit — because the arithmetic is genuinely identical; they draw on separate counters, because §2.3 states that a GTIN and a GRAI sharing the same digits are different keys that do not conflict.
+Ordering is by the stored sequence, never by comparing identifier strings.
+Unlike a value Kannabi merely stores, an issued value's prefix boundary is known because Kannabi built it from a configured prefix — a statement about construction, not about licensing, so `gcppos1` stays unenforced for identifiers Kannabi did not build.
+
+A prefix is four to twelve digits (§1.2.3.3), may not begin with the digits of another configured prefix, and may not fall in Restricted Circulation Number space, because an RCN SHALL NOT be encoded using any GS1 Application Identifier (§1.2.2.2.1) and every value Kannabi issues is an AI element string.
+Publishing that length range is not the same as locating a prefix boundary inside an arbitrary key, which is what the unpublished GCP Length Table answers; the two claims are kept apart.
+A prefix too long to leave a twelve-digit class reference is capability-limited, not invalid: it still issues GIAIs, and says so.
+GTIN-8 allocation and adoption are refused, because a GTIN-8 comes from a GS1-8 Prefix allocated to Member Organisations (§1.2.3.2); a GTIN-14 with an indicator digit is refused too, because 1–8 identifies a trade item grouping derived from a base GTIN (§2.1.7) and 9 is variable measure whose measure data completes the identity (§2.1.10).
+An externally observed GTIN-8 stays recordable through the ordinary identifier path, which claims nothing.
+
+Adoption exists because §4.2.3 states that no downstream party may assign a different GTIN to a trade item that already has one: an operator holding a prefix already has GTINs, and an allocate-only design would push them into minting a second GTIN for an already-identified trade item.
+Adoption verifies that the key's digits fall within the prefix the Group asserted — containment with exactly the standing of that assertion, and not a licensing check.
+The record says which happened: `allocated` means Kannabi produced the reference; `adopted` means the Group asserted one it already held. Neither is inferred from the other.
+
+Each counter may declare existing-use ranges such as `1-4,9-11,200-300`: numbers that were already unavailable when it was configured.
 They normalise to sorted, disjoint, non-adjacent intervals, and allocation jumps over them by range rather than by number, so an exclusion covering a trillion references costs no more than one covering a single reference.
-Exclusions are namespace configuration and never a free list; references Kannabi has issued are tracked only by the ledger.
+Exclusions are configuration and never a free list; what Kannabi issued is tracked only by the ledger.
+A serial counter's guarantee is weaker than a reference counter's and is documented as such: §3.5.2 places serial non-duplication for a GTIN on the GTIN allocator as a party, so Kannabi discharges it for the serials it issues and records a commitment it cannot enforce for serials issued elsewhere.
+Counters are inline state on whichever record owns them rather than one shared node type, so that difference stays visible where each is read.
 
-`:GiaiAllocation` is an append-only issuance ledger — `value`, `gcp`, `sequence`, `allocatedAt`, `allocatedForAssetId` and `allocatedBy`.
+`:Gs1ClassKeyAllocation` holds a managed class key — scheme, canonical form, prefix, sequence, provenance, active state, its serial counter and who asserted it.
+It carries no name, description, product attribute, dimension or image: allocation bookkeeping is not a trade item, a product or an asset class, and a label would be the cheapest way to answer #50 by accretion.
+`:Gs1KeyIssuance` is an append-only issuance ledger — `key`, `scheme`, `canonical`, `gcp`, `sequence`, `allocatedAt`, `allocatedForAssetId` and `allocatedBy`, with `ISSUED_UNDER` to the class key for a serialised GRAI or an SGTIN.
 `allocatedForAssetId` is a property rather than a relationship, so the record outlives the Asset.
-Kannabi's claim to have issued a GIAI rests on this ledger alone; nothing on the identifier marks its origin.
-Four constraints make the invariants schema facts: a GIAI is issued once, Kannabi issues at most one per Asset, one GCP has exactly one counter, and namespaces are stably addressable.
+Kannabi's claim to have issued a value rests on these ledgers alone; nothing on the identifier marks its origin.
+Seven constraints make the invariants schema facts: an issued value is issued once, a class key is managed once, issuance is idempotent per scheme per Asset, one GCP has exactly one set of counters, and namespaces, class keys and issuances are stably addressable.
 
-Allocation runs in one transaction that takes the namespace write lock before deciding anything, so a double-click returns the same GIAI without consuming a sequence number.
-Repeating the operation always returns the existing issuance, whether or not the identifier is still attached.
-An issued GIAI may be detached and reattached to the Asset it was issued for, and can never be attached to another; an externally assigned GIAI keeps its ordinary correction semantics.
-Deactivating a namespace stops new issuance and nothing else: the counter, the exclusions and every issued record survive, so reactivation resumes the same namespace.
+That idempotency constraint is `(scheme, allocatedForAssetId)` rather than `allocatedForAssetId` alone, and the difference is deliberate.
+One Asset may carry a Kannabi-issued GIAI, a serialised GRAI and an SGTIN at once.
+The older single-property rule was true only because there was one scheme, and the closest thing to a normative basis for keeping it — §2.1.8's note that only one GS1 key should be marked on a single instrument — is sector-scoped to medical-device direct part marking, is a SHOULD, and is about marking a physical instrument rather than what identities a record may hold.
+Per-scheme idempotency is a guarantee about the operation, not a claim that one scheme excludes another.
+
+Issuance runs in one transaction that takes the write lock before deciding anything, so a double-click returns the same value without consuming a sequence number.
+Repeating the operation always returns that scheme's existing issuance, whether or not the identifier is still attached, and leaves any other scheme's alone.
+An issued value may be detached and reattached to the Asset it was issued for, and can never be attached to another — one scheme-neutral check on the canonical form; an externally assigned value keeps its ordinary correction semantics.
+Deactivating a namespace or a class key stops new issuance under it and nothing else: the counters, the exclusions and every issued record survive, so reactivation resumes the same namespace or key.
+
+Kannabi never reuses an allocated reference, class key or serial.
+Most of those rules are **stricter than the GS1 floor** and are documented as Kannabi policy rather than as GS1 requirements: §4.2.5 permits GTIN reuse when the value was never published externally, §4.4.1.2 makes asset-identifier reuse absolute only in named cases, and §3.5.2 defers serial reuse to sector constraints.
+Each stricter rule is justified by a fact Kannabi cannot observe — publication state, whether a value stayed on an asset, sector constraints — and overstating what a standard requires would be the same class of error as understating it.
+
+Allocating a GTIN does not make Kannabi a product catalogue.
+§4.2.6.1 states that GTIN management and product listing are two entirely autonomous decisions, and §4.2.6 leaves communicating a trade item's characteristics to trading partners with its allocator, in their own systems.
+Kannabi says so where a GTIN is allocated, and models no product data.
 
 One managed GCP belongs to one Group, because Group membership is currently the only authorization Kannabi has; this is a Kannabi authority boundary, not a GS1 organizational claim.
-Any current Group member may configure a namespace and allocate from it, which is deliberately broader than the eventual model and will be narrowed by Group-scoped privileges without changing allocation semantics or ledger data.
+Any current Group member may configure a namespace, manage class keys in it and issue from it, which is deliberately broader than the eventual model and will be narrowed by Group-scoped privileges without changing allocation semantics or ledger data.
+Class-key management touches no Asset and grants no Asset access; issuing an individual key additionally requires that the managing Group collaborates on the Asset.
+
+Kannabi accepts normative 4–12 digit GS1 Company Prefixes for GS1 key allocation.
+The EPC Tag Data Standard imposes additional treatment for 4- and 5-digit prefixes; EPC binary encoding and EPC URI generation are outside this release and tracked separately.
 
 Asset links use `/asset/{id}`, and Asset-scoped photo requests use `/api/assets/{id}/photos/{key}`.
 The native Asset URI carries no external identifier and never changes; what Kannabi surfaces beside it is described under GS1 Digital Link below.
@@ -210,13 +263,14 @@ GS1 rules are versioned data, not application conditionals.
 The policy version is independent of the Kannabi software version:
 
 ```ts
-{ version: '2026-01-27+kannabi.1', syntaxDictionaryRelease: '2026-01-27',
+{ version: '2026-01-27+kannabi.3', syntaxDictionaryRelease: '2026-01-27',
   generalSpecificationsRelease: '26.0', assertedBy: 'kannabi' }
 ```
 
 GS1 date-versions the Syntax Dictionary and separately releases the General Specifications, and publishes no mapping between them.
 `generalSpecificationsRelease` is therefore Kannabi's assertion, marked by `assertedBy`, and must never be presented as a GS1 statement.
-`gcppos1` and `gcppos2` are declared unenforced rather than silently skipped, because locating a GS1 Company Prefix needs a table GS1 no longer publishes openly.
+`gcppos1` and `gcppos2` are declared unenforced rather than silently skipped, because locating a GS1 Company Prefix inside an arbitrary key needs the GCP Length Table, which GS1 does not publish openly.
+That is a different claim from the prefix length range in §1.2.3.3, which is published and is enforced when a namespace is configured; the two are kept apart deliberately.
 
 Bumping the version has exactly two triggers:
 
@@ -290,6 +344,9 @@ Selection is Kannabi presentation policy rather than GS1 policy: the standard ex
 
 Detaching the surfaced identifier changes the surfaced URI and nothing else.
 
+The Asset page leads with its identifiers, because that is the identity the page is about; access and provenance follow under **Details**, and collaboration below them.
+Each card shows the scheme, the value and its provenance, with what the scheme identifies available from the scheme name rather than spelled out beside the provenance badge, where two statements of different kinds read as one.
+
 The native Asset URI is shown on the Asset page only when **Show Kannabi ID** is enabled in `/admin/settings`, because it is the UUIDv7 spelled as a URL and one setting governs both.
 Hiding it is presentation alone: the address still resolves, still redirects, and remains what internal references and the API use.
 A surfaced Digital Link URI is unaffected by the setting.
@@ -345,7 +402,7 @@ pnpm mcp
 
 `pnpm dev:mcp` runs the same server from source. A host launches it as a child process and speaks MCP on its stdin/stdout; it reads `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` from the environment or `.env`, serves no network listener, and never calls Kannabi's HTTP API. Its stdout carries the protocol; diagnostics go to stderr.
 
-Six tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete GS1 identity, `get_asset` for inspection by native Asset ID, `list_groups` and `list_giai_namespaces` for the vocabulary those take, and `list_giai_issuances` for Kannabi's GIAI issuance ledger.
+Seven tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete GS1 identity, `get_asset` for inspection by native Asset ID, `list_groups` and `list_gs1_namespaces` for the vocabulary those take, `list_managed_class_keys` for the GTINs and GRAI asset types a namespace may issue serials under, and `list_gs1_issuances` for Kannabi's issuance ledger.
 Every result carries the native Asset ID, so a candidate from any tool can be inspected unambiguously, and each identifier is returned with the components that resolve it again.
 Class-level identifiers may resolve to several Assets; individual-level identifiers resolve to at most one.
 Allocation provenance is read from the ledger alone: an Asset whose stored GIAI merely begins with a managed company prefix is not reported as Kannabi-issued.
@@ -401,7 +458,7 @@ An administrator can identify Groups with no controller through `GET /api/admin/
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
 An Asset can have several collaboration Groups while keeping one Asset ID and one inventory entry.
-On the Asset page, **Manage collaboration** lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
+On the Asset page, **Manage collaboration** — a disclosure below the identifiers, closed until it is asked for, because changing who collaborates is an occasional act while the Groups themselves are already stated in **Details** — lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
 Control of the receiving Group supplies its consent; belonging to both Groups alone is insufficient.
 This bounded workflow requires one User with both control authorities; there is no invitation/acceptance workflow between separate controllers.
 A controller with current Group-derived Asset access can remove the Group they control, including the Group initially selected when reporting.
@@ -425,7 +482,7 @@ Ordering is name followed by `Asset.id` as a deterministic tiebreaker, independe
 Unsafe API requests require an Origin matching `APP_URL`.
 Better Auth rate limiting uses the TCP peer address set by the Node server; forwarded client IP headers are not trusted, so clients behind one reverse proxy share its rate-limit bucket.
 Authentication routes are limited to sign-up, sign-in, sign-out, session lookup, password change, and password recovery.
-External identity providers remain deferred. GIAI issuance is described under GIAI allocation above.
+External identity providers remain deferred. Identifier issuance is described under GS1 identifier issuance above.
 
 ## Photos and administration
 

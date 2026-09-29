@@ -8,7 +8,7 @@ import { AppSidebar } from '../web/app-sidebar.js';
 import { WorkspaceHeader } from '../web/workspace-header.js';
 import { SidebarInset, SidebarProvider } from '../web/components/ui/sidebar.js';
 import { Toaster } from '../web/components/ui/sonner.js';
-import { mount, withTheme } from './dom-render.js';
+import { mount, settle, withTheme } from './dom-render.js';
 
 const user = { key: 'u-1', name: 'Hanako', email: 'hanako@example.test' };
 
@@ -89,4 +89,43 @@ test('a narrow screen keeps the only way into the navigation it has', () => {
   assert.match(header, /\{isMobile && <>[\s\S]*?<SidebarTrigger/,
     'the trigger is offered exactly where the rail cannot reach');
   assert.match(header, /if \(!search && !isMobile\) return null;/);
+});
+
+test('clearing Asset search clears the results, not only the field', async () => {
+  // The query lives in the URL, so clearing it is a change of address rather
+  // than a change to an input. The native `type="search"` control emptied the
+  // field and left the results standing, which is why it is suppressed.
+  const router = createMemoryRouter([{ path: '*',
+    element: createElement(SidebarProvider, null,
+      createElement(SidebarInset, null,
+        createElement(WorkspaceHeader, { enabled: true, search: true }))) }],
+  { initialEntries: ['/?scope=mine&q=camera'] });
+  const view = mount(withTheme(createElement(RouterProvider, { router })));
+  try {
+    const field = view.field('#asset-search')!;
+    assert.equal(field.value, 'camera');
+    const clear = view.button('Clear Asset search');
+    assert.ok(clear, 'clearing is offered while there is something to clear');
+
+    await settle(() => clear!.click());
+    await settle();
+    // The address no longer carries the query, so the Assets view reloads
+    // unfiltered; the scope the reader was on is kept.
+    assert.equal(router.state.location.search, '?scope=mine');
+    assert.equal(view.field('#asset-search')!.value, '');
+  } finally { view.stop(); router.dispose(); }
+});
+
+test('nothing to clear means no clear control', () => {
+  const router = createMemoryRouter([{ path: '*',
+    element: createElement(SidebarProvider, null,
+      createElement(SidebarInset, null,
+        createElement(WorkspaceHeader, { enabled: true, search: true }))) }],
+  { initialEntries: ['/?scope=all'] });
+  const view = mount(withTheme(createElement(RouterProvider, { router })));
+  try {
+    assert.equal(view.button('Clear Asset search'), null);
+    // The shortcut hint stays, because focusing is always available.
+    assert.ok(view.button('Focus Asset search'));
+  } finally { view.stop(); router.dispose(); }
 });

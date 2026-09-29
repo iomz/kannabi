@@ -93,10 +93,10 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
   });
 
   await t.test('B collaboration never grants A namespace authority', async () => {
-    const namespace = await store.configureGiaiNamespace(aOnly.key, a.key, { gcp: '0614141' });
+    const namespace = await store.configureGs1Namespace(aOnly.key, a.key, { gcp: '0614141' });
     assert.equal((await bOnly.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 404);
-    assert.equal((await bOnly.call(`/giai-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
-    assert.equal((await bOnly.call(`/groups/${a.key}/giai-namespaces`, 'POST', { gcp: '9521234' })).status, 404);
+    assert.equal((await bOnly.call(`/gs1-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
+    assert.equal((await bOnly.call(`/groups/${a.key}/gs1-namespaces`, 'POST', { gcp: '9521234' })).status, 404);
     assert.equal((await dual.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 200);
   });
 
@@ -135,7 +135,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     assert.equal((await bOnly.call(path)).status, 404);
     assert.equal((await bOnly.call(path, 'PATCH', { name: 'Denied' })).status, 404);
     assert.equal((await dual.call(path)).status, 200);
-    assert.ok((await store.getAsset(asset.id, dual.key))?.allocation);
+    assert.ok((await store.getAsset(asset.id, dual.key))?.issuances.length);
     assert.equal((await bridge.call(edge(a.key), 'DELETE')).status, 409);
     await store.updateAsset(asset.id, { isPublic: true }, bridge.key);
     assert.equal((await bridge.call(edge(a.key), 'DELETE')).status, 409);
@@ -167,7 +167,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
   });
 
   await t.test('writes waiting behind revocation recheck access before changing anything', async () => {
-    const namespace = await store.configureGiaiNamespace(bOnly.key, b.key, { gcp: '9521234' });
+    const namespace = await store.configureGs1Namespace(bOnly.key, b.key, { gcp: '9521234' });
     const target = await store.reportAsset({ name: 'Revocation race' }, { actorKey: bridge.key, groupKey: a.key });
     await store.setAssetCollaboration(target.id, bridge.key, b.key, true);
     const session = driver.session();
@@ -177,7 +177,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
       const writes = [
         store.updateAsset(target.id, { name: 'Must not commit' }, bOnly.key),
         store.attachIdentifier(target.id, bOnly.key, { scheme: 'giai', assetReference: '0614141RACE' }),
-        store.allocateGiai(target.id, bOnly.key, namespace.key),
+        store.issueKey(target.id, bOnly.key, 'giai', { namespaceKey: namespace.key }),
         store.setAssetCollaboration(target.id, bridge.key, b.key, false),
       ].map((promise) => promise.then(() => null, (error: unknown) => error));
       // Observe actual blocked transactions, rather than assuming a timeout
@@ -200,7 +200,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
       const unchanged = await store.getAsset(target.id, bridge.key);
       assert.equal(unchanged?.name, 'Revocation race');
       assert.equal(unchanged?.identifiers.length, 0);
-      assert.equal(unchanged?.allocation, null);
+      assert.deepEqual(unchanged?.issuances, []);
     } finally { await tx.close(); await session.close(); }
   });
 

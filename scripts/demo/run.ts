@@ -81,10 +81,10 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     const owners = [];
     for (const name of demoOwners) owners.push(await store.createOwner(name));
     for (const namespace of demoNamespaces) {
-      await store.configureGiaiNamespace(users[[0, 1, 0, 2][namespace.group]], groups[namespace.group].key,
-        { gcp: namespace.gcp, exclusions: namespace.exclusions });
+      await store.configureGs1Namespace(users[[0, 1, 0, 2][namespace.group]], groups[namespace.group].key,
+        { gcp: namespace.gcp, giaiExclusions: namespace.exclusions });
     }
-    const namespaces = await store.listGiaiNamespaces(users[0]);
+    const namespaces = await store.listGs1Namespaces(users[0]);
     const allocateFrom = namespaces.find((namespace) => namespace.gcp === demoNamespaces[0].gcp)!;
     const media = new MediaService(store, storage);
     const reportedIds: string[] = [];
@@ -116,7 +116,7 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     }
     // Allocation order is fixed, so the issued references are deterministic.
     for (const index of demoAllocations) {
-      await store.allocateGiai(reportedIds[index], users[demoAssets()[index].reporter], allocateFrom.key);
+      await store.issueKey(reportedIds[index], users[demoAssets()[index].reporter], 'giai', { namespaceKey: allocateFrom.key });
     }
     const page = await store.findAssets(users[0], { q: '', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 1, after: null });
     for (const scope of ['all', 'mine', 'group', 'public'] as const) {

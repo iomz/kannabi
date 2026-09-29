@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Form, useLocation } from 'react-router';
+import { Form, useLocation, useNavigate } from 'react-router';
 import { Icon } from './icon';
 import { isApplePlatform, platformHint, searchKeyShortcuts, searchShortcutHint } from './platform';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ export function WorkspaceHeader({ enabled, search }: {
   search: boolean;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { isMobile } = useSidebar();
   const field = useRef<HTMLInputElement>(null);
   // Starts at the Apple form so the first paint matches the prerendered shell,
@@ -40,6 +41,19 @@ export function WorkspaceHeader({ enabled, search }: {
   const q = params.get('q') ?? '';
   const scope = location.pathname === '/' ? params.get('scope') ?? 'all' : 'all';
 
+  /** Clearing the search clears the results, not only the field.
+   *
+   * Navigating to the state an empty submission produces, rather than emptying
+   * the input or synthesising a keypress: the query lives in the URL, so that
+   * is the thing to change, and the field follows from it. The scope the form
+   * carries is preserved, because clearing a query is not leaving the tab the
+   * reader is on.
+   */
+  const clear = () => {
+    navigate({ pathname: '/', search: new URLSearchParams({ scope }).toString() });
+    field.current?.focus();
+  };
+
   // With neither a search field nor a sheet to open there is nothing to put
   // in a bar, and an empty one is just a rule across the top of the page.
   if (!search && !isMobile) return null;
@@ -53,14 +67,29 @@ export function WorkspaceHeader({ enabled, search }: {
       <input type="hidden" name="scope" value={scope} />
       <label className="sr-only" htmlFor="asset-search">Search Assets by name</label>
       <span className="pointer-events-none absolute left-3 text-muted-foreground"><Icon name="search" /></span>
+      {/* The native `type="search"` clear button is suppressed. It clears the
+          field and nothing else, which left the results standing and the input
+          disagreeing with them, and browsers place it at the field's own edge
+          rather than beside the shortcut hint. Clearing is a change of state,
+          so it is a control of ours that navigates. */}
       <Input ref={field} key={q} id="asset-search" name="q" type="search" maxLength={200}
         placeholder="Search assets by name…" defaultValue={q} disabled={!enabled}
-        className="bg-muted ps-9 pe-16" />
-      <button type="button" disabled={!enabled} onClick={() => { field.current?.focus(); field.current?.select(); }}
-        aria-label="Focus Asset search" aria-keyshortcuts={searchKeyShortcuts}
-        className="absolute end-1.5 rounded-sm bg-accent px-1.5 py-0.5 text-xs text-muted-foreground disabled:opacity-50">
-        <kbd>{searchShortcutHint(applePlatform)}</kbd>
-      </button>
+        className={'bg-muted ps-9 [&::-webkit-search-cancel-button]:hidden '
+          + (q ? 'pe-[5.25rem]' : 'pe-16')} />
+      {/* One group at the end of the field, so the two controls read together
+          instead of the clear drifting away toward the text. */}
+      <span className="absolute end-1.5 flex items-center gap-1">
+        {q ? <button type="button" disabled={!enabled} onClick={clear}
+          aria-label="Clear Asset search"
+          className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 [&_.icon]:size-4">
+          <Icon name="clear" />
+        </button> : null}
+        <button type="button" disabled={!enabled} onClick={() => { field.current?.focus(); field.current?.select(); }}
+          aria-label="Focus Asset search" aria-keyshortcuts={searchKeyShortcuts}
+          className="rounded-sm bg-accent px-1.5 py-0.5 text-xs text-muted-foreground disabled:opacity-50">
+          <kbd>{searchShortcutHint(applePlatform)}</kbd>
+        </button>
+      </span>
     </Form> : null}
   </header>;
 }

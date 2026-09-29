@@ -15,6 +15,7 @@ const paths = {
   key: 'M15 7a4 4 0 1 1-3.5 5.9L4 20l-2-2 1.5-1.5L5 18l1.5-1.5L5 15l6.1-6.1A4 4 0 0 1 15 7 M16.5 10.5h.01',
   sidebar: 'M4 5h16v14H4z M10 5v14',
   info: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18 M12 11v6 M12 8h.01',
+  clear: 'M6 6l12 12 M18 6L6 18',
 };
 export type IconName = keyof typeof paths;
 
