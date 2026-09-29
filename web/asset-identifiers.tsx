@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
   classKeyConflictReason, identifierSchemes, schemeDescriptions, schemeInputs, schemeLabels,
+  schemeReference,
   type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
@@ -10,23 +11,23 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
-import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
+import { ActionRow, ExternalRef, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
 
-/** The scheme, with what it identifies available on demand.
+/** The scheme, and where GS1 defines it.
  *
- * The name is the fact and stays plainly readable; what the scheme means and
- * what level it identifies at is the explanation, and goes where every other
- * explanation on this page goes. It used to hang off a dotted underline on the
- * name itself, which asked a reader to discover that the word was also a
- * control.
+ * This is not a Kannabi concept, so it does not take Kannabi's help
+ * affordance. What an SGTIN or a GIAI is belongs to GS1: the name links to
+ * GS1's own reference for the Application Identifier that distinguishes it,
+ * which is more honest than Kannabi paraphrasing a standard it does not own.
+ * The one-line description stays beside it as orientation, not as definition.
  */
 function SchemeName({ scheme }: { scheme: IdentifierScheme }) {
-  // One source, one sentence. `schemeDescriptions` already states what the
-  // scheme identifies, so also appending the level said it twice: "Serialised
-  // trade item — identifies this Asset. Identifies this Asset."
-  return <span className="inline-flex items-center gap-1">
-    <span className="font-semibold">{schemeLabels[scheme]}</span>
-    <HelpTip label={'About ' + schemeLabels[scheme]}>{schemeDescriptions[scheme]}.</HelpTip>
+  return <span className="inline-flex flex-wrap items-baseline gap-x-2">
+    <ExternalRef href={schemeReference[scheme]} className="font-semibold"
+      label={schemeLabels[scheme] + ' — GS1 reference (opens in a new tab)'}>
+      {schemeLabels[scheme]}
+    </ExternalRef>
+    <span className="text-[.8rem] text-muted-foreground">{schemeDescriptions[scheme]}</span>
   </span>;
 }
 
@@ -161,22 +162,34 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
   const selected = eligible.find((classKey) => classKey.key === classKeyKey) ?? eligible[0];
   const detached = issuances.filter((issuance) =>
     !identifiers.some((identifier) => identifier.canonical === issuance.canonical));
+  // Nothing issuable means nothing to explain about issuing. Describing how
+  // issuance works, then a value that is no longer attached, and only then
+  // saying none of it is available, made a reader work through two paragraphs
+  // about a capability to reach the sentence telling them it is unavailable.
+  if (!available.length) {
+    return <Hint className="mt-0">{blocked.length
+      ? <>No identifiers can currently be issued for this Asset.{' '}
+        {blocked.map((entry) => `${entry.label}: ${entry.reason}.`).join(' ')}</>
+      : issued.size >= issuanceOptions.length
+        ? 'Kannabi has issued every identifier it can for this Asset.'
+        : namespaces.length === 0
+          ? <>No identifiers can currently be issued for this Asset: no collaborating Group you
+            belong to has an active GS1 Company Prefix. <Link to="/groups">Configure one under
+            Groups</Link>, then come back.</>
+          : <>No identifiers can currently be issued for this Asset. A serialised GRAI or an SGTIN
+            is issued under a managed class key, and this Asset’s prefixes have no active
+            one yet. <Link to="/groups">Allocate or adopt a class key under Groups</Link>, then
+            come back to issue from it.</>}</Hint>;
+  }
   return <>
+    {/* The lead belongs to this form rather than to the tab holding it, so the
+        form that knows whether issuing is possible is the one that decides
+        whether to describe it. */}
+    <Hint className="mt-0 mb-4">Issue an identifier under a GS1 Company Prefix namespace managed by
+      one of this Asset’s Groups.</Hint>
     {detached.map((issuance) => <Hint key={issuance.key}>Kannabi-issued <code>{issuance.canonical}</code> is
       not currently recorded on this Asset. It stays bound to this Asset in the issuance ledger and is never reissued elsewhere.</Hint>)}
-    {!available.length
-      ? <Hint>{blocked.length
-        ? <>No identifiers can currently be issued for this Asset.{' '}
-          {blocked.map((entry) => `${entry.label}: ${entry.reason}.`).join(' ')}</>
-        : issued.size >= issuanceOptions.length
-          ? 'Kannabi has issued every identifier it can for this Asset.'
-          : namespaces.length === 0
-            ? <>Kannabi can issue nothing for this Asset yet: no collaborating Group you belong to has an
-              active GS1 Company Prefix. <Link to="/groups">Configure one under Groups</Link>, then come back.</>
-            : <>A serialised GRAI or an SGTIN is issued under a managed class key, and this Asset’s
-              prefixes have no active one yet. <Link to="/groups">Allocate or adopt a class key under
-              Groups</Link>, then come back to issue from it.</>}</Hint>
-      : <fieldset disabled={busy} aria-busy={busy}>
+    <fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="issue-identifier" />
         <input type="hidden" name="scheme" value={scheme} />
         {available.length > 1
@@ -211,8 +224,8 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
             </Field>
           </>}
         {error && <p role="alert">{error}</p>}
-        <ActionRow><Button type="submit">{busy ? 'Issuing…' : 'Issue ' + option.label}</Button></ActionRow>
-      </fieldset>}
+      <ActionRow><Button type="submit">{busy ? 'Issuing…' : 'Issue ' + option.label}</Button></ActionRow>
+    </fieldset>
   </>;
 }
 
@@ -272,11 +285,9 @@ export function AddIdentifier({ issue, record }: { issue: ReactNode; record: Rea
           carries the distinction that used to need a paragraph: issuing
           exercises allocation authority Kannabi holds, recording states that
           another authority already assigned the value. */}
-      <TabsPanel value="issue">
-        <Hint className="mt-0 mb-4">Issue an identifier under a GS1 Company Prefix namespace
-          managed by one of this Asset’s Groups.</Hint>
-        {issue}
-      </TabsPanel>
+      {/* The issue panel carries no lead of its own: only the form knows
+          whether issuing is possible, so it owns that sentence. */}
+      <TabsPanel value="issue">{issue}</TabsPanel>
       <TabsPanel value="record">
         <Hint className="mt-0 mb-4">Record an identifier that has already been assigned outside
           Kannabi.</Hint>

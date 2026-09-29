@@ -36,24 +36,20 @@ test('an identifier card carries scheme, value and provenance, and nothing that 
   } finally { view.stop(); }
 });
 
-test('what a scheme identifies is available on demand beside its name', async () => {
+test('a scheme name is a reference to GS1, not a Kannabi explanation', () => {
   const view = list();
   try {
-    // The name stays plainly readable and the help is a control of its own,
-    // rather than the word itself being a trigger a reader has to discover.
-    const help = view.button('About GTIN');
-    assert.ok(help, 'the scheme carries its own help affordance');
-    assert.match(view.text(), /GTIN/, 'and the name is still just the name');
-    // Reachable without a mouse: a portal surface does not exist until opened.
-    await settle(() => help!.click());
-    await settle();
-    const explanation = document.querySelector('[data-slot="popover-content"]')?.textContent ?? '';
-    assert.match(explanation, /Trade item/);
-    // Once. The scheme description already states what it identifies, so
-    // appending the level said the same thing twice.
-    assert.equal(explanation.match(/describes what this Asset is/gi)?.length, 1, explanation);
-    assert.ok(!/Describes a class this Asset belongs to/.test(explanation),
-      'the level is already carried by the description');
+    // What a GS1 key is belongs to GS1. Kannabi's own help affordance is for
+    // Kannabi concepts, and wearing it here would claim the definition.
+    assert.equal(view.button('About GTIN'), null);
+    const link = [...document.querySelectorAll('a')]
+      .find((anchor) => anchor.textContent?.trim() === 'GTIN')!;
+    assert.ok(link, 'the name is the reference');
+    // AI 01 is the GTIN's own Application Identifier.
+    assert.equal(link.getAttribute('href'), 'https://ref.gs1.org/ai/01');
+    assert.match(link.getAttribute('aria-label') ?? '', /GS1 reference/);
+    // The orientation line stays beside it, once.
+    assert.match(view.text(), /Trade item — describes what this Asset is/);
   } finally { view.stop(); }
 });
 

@@ -78,18 +78,48 @@ export function HelpTip({ label, children, className }: {
   return <Popover>
     <PopoverTrigger
       render={<button type="button" aria-label={label} />}
-      // The glyph modifies the word before it, so it sits against that word
-      // rather than floating as a control of its own. The box is pulled in on
-      // both sides while the element keeps its full size, so the target stays
-      // as large as it was and only the space it appears to occupy shrinks.
-      className={cn('inline-flex size-7 shrink-0 items-center justify-center rounded-md',
-        '-mx-1 align-baseline text-muted-foreground transition-colors',
+      // The gap was never the margin, it was the padding: a 1.75rem box round
+      // a 1rem glyph leaves .375rem of air on each side before any gap is
+      // added, so the glyph read as a control standing apart from its label.
+      // The visible box is now the glyph's own size and the target is grown
+      // back past it with an inset pseudo-element, which keeps roughly 2rem of
+      // hit area without any of it being visible.
+      className={cn('relative inline-flex size-[1.15rem] shrink-0 items-center justify-center',
+        'rounded-[.3rem] align-[-.15em] text-muted-foreground transition-colors',
+        'before:absolute before:-inset-[.4rem] before:content-[""]',
         'hover:bg-muted hover:text-foreground',
-        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-4', className)}>
+        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-[1.15rem]', className)}>
       <Icon name="info" />
     </PopoverTrigger>
     <PopoverContent>{children}</PopoverContent>
   </Popover>;
+}
+
+/** A pointer at somebody else's definition.
+ *
+ * Kannabi explains Kannabi through `HelpTip`. What a GS1 key *is* belongs to
+ * GS1, and the two must not wear the same affordance: one opens a sentence
+ * Kannabi wrote, the other leaves for a standard Kannabi does not own. A link
+ * says that by being a link.
+ */
+export function ExternalRef({ href, children, label, className }: {
+  href: string;
+  children: ReactNode;
+  /** What the destination is, for a reader who cannot see the glyph. */
+  label: string;
+  className?: string;
+}) {
+  return <a href={href} target="_blank" rel="noreferrer noopener" aria-label={label}
+    className={cn('inline-flex items-center gap-[.15rem] no-underline hover:underline', className)}>
+    {children}
+    {/* Small, and outside the text's own weight: it says "this leaves" rather
+        than decorating the name. */}
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      className="size-[.7em] shrink-0 opacity-60">
+      <path d="M13 5h6v6 M19 5l-9 9 M17 14v5H5V7h5" />
+    </svg>
+  </a>;
 }
 
 /** An action carried by its glyph alone.

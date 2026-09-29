@@ -90,8 +90,9 @@ test('turning on Public access from a Digital Link page reaches the native Asset
   const restore = stubApi(calls);
   const view = renderAtDigitalLink();
   try {
-    // One boolean property, carried by a switch.
-    await settle(() => document.querySelector<HTMLInputElement>('input[name="isPublic"]')!.click());
+    // Publishing is a named, confirmed transition rather than a toggle.
+    await settle(() => view.button('Change visibility')!.click());
+    await settle(() => view.button('Make public')!.click());
 
     const patch = calls.find((call) => call.method === 'PATCH');
     assert.ok(patch, 'the visibility change was submitted');

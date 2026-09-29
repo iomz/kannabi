@@ -102,29 +102,63 @@ test('quoted source evidence still reads correctly once its section is opened', 
   } finally { view.stop(); }
 });
 
-test('visibility is one property carried by a switch, named by its label', () => {
+test('visibility reads as a word and changes only through a named confirmation', async () => {
   const view = render();
   try {
     const details = section('Details')!;
-    const toggle = details.querySelector('[role="switch"]');
-    assert.ok(toggle, 'changeable from where it is read');
-    // `isPublic` is one boolean property, which is what a switch is: the
-    // state is the control's own, announced rather than read off a colour.
-    assert.equal(toggle!.getAttribute('aria-checked'), 'false');
-    assert.match(details.textContent ?? '', /Public/, 'and the label names the property');
-    // Not a choice between two peer values, which is a different primitive.
-    assert.doesNotMatch(details.textContent ?? '', /Private — Group access|read access/);
+    // The state is text, not the position of a control.
+    assert.match(details.textContent ?? '', /Private/);
+    assert.ok(details.querySelector('[role="switch"]') === null,
+      'publishing is consequential, so it is not a one-click toggle');
+
+    await settle(() => view.button('Change visibility')!.click());
+    const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]')!;
+    assert.match(dialog.textContent ?? '', /Make this Asset public\?/);
+    assert.match(dialog.textContent ?? '', /Anyone with this Asset’s address will be able to read it/);
+    // It must not imply public editing.
+    assert.match(dialog.textContent ?? '', /editing stays with the Groups/);
+    // The action names the outcome rather than agreeing to an unnamed one.
+    assert.ok(view.button('Make public'), 'the confirming action names the transition');
+    assert.ok(view.button('Cancel'));
     // Publishing is a property of the Asset, not a Group association.
-    assert.equal(section('Manage Groups')!.querySelector('[role="switch"]'), null);
+    assert.ok(section('Manage Groups')!.textContent?.includes('Change visibility') !== true);
   } finally { view.stop(); }
 });
 
-test('a public Asset reports the opposite switch state', () => {
+test('a public Asset offers the opposite transition, also named', async () => {
   const view = render({ isPublic: true });
   try {
-    const details = section('Details')!;
-    assert.equal(details.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
+    assert.match(section('Details')!.textContent ?? '', /Public/);
+    await settle(() => view.button('Change visibility')!.click());
+    const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]')!;
+    assert.match(dialog.textContent ?? '', /Make this Asset private\?/);
+    assert.ok(view.button('Make private'));
   } finally { view.stop(); }
+});
+
+test('the visibility transition sends only isPublic, once confirmed', async () => {
+  const calls: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    calls.push({ path: String(input), method: init?.method, body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ asset: {} }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const router = createMemoryRouter([{
+    path: '/assets/:id',
+    element: createElement(AssetPage, { loaderData: loaderData() } as never),
+    action: (args) => assetAction(args as never),
+  }], { initialEntries: [`/assets/${id}`] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    await settle(() => view.button('Change visibility')!.click());
+    assert.deepEqual(calls, [], 'nothing happens until it is confirmed');
+    await settle(() => view.button('Make public')!.click());
+    await settle();
+    assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } }]);
+  } finally {
+    view.stop();
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Owner is an unfinished note rather than a fact or a disabled control', () => {
@@ -145,7 +179,7 @@ test('a reader who cannot edit is offered neither control', () => {
   const view = render({ sourceRecord }, { canEdit: false });
   try {
     assert.match(section('Details')!.textContent ?? '', /Private/);
-    assert.ok(section('Details')!.querySelector('[role="switch"]') === null);
+    assert.equal(view.button('Change visibility'), null);
     assert.equal(view.button(/^Rename/), null);
     assert.equal(section('Manage Groups'), null);
   } finally { view.stop(); }
@@ -166,18 +200,36 @@ test('the Asset name is edited in place, and cancelling restores it', async () =
     assert.equal(field.value, 'Inspection camera');
 
     field.value = 'Changed my mind';
-    // Leaving the field abandons the edit: a small inline rename should not
-    // hold somebody in a decision, and must not save what they walked away
-    // from.
+    // Leaving the field abandons the edit, but not silently when there is
+    // something to lose: what was typed is the only copy of it.
     // React delivers onBlur through focusout, which is the bubbling one.
     await settle(() => field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    assert.match(document.querySelector('[role="alertdialog"], [role="dialog"]')?.textContent ?? '',
+      /Discard this name\?/);
+    assert.ok(view.field('input[name="name"]'), 'and the edit is still there to keep');
+    await settle(() => view.button('Discard')!.click());
     assert.ok(document.querySelector('input[name="name"]') === null, 'the field is gone');
     assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/,
       'cancelling restores the current value rather than keeping the typed one');
   } finally { view.stop(); }
 });
 
-test('Escape cancels an in-place rename', async () => {
+test('Escape on an untouched rename closes it silently', async () => {
+  const view = render();
+  try {
+    await settle(() => view.button('Rename Inspection camera')!.click());
+    const field = view.field('input[name="name"]')!;
+    // Nothing typed, so nothing to lose and nothing to ask about.
+    await settle(() => field.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    assert.ok(document.querySelector('[role="alertdialog"], [role="dialog"]') === null,
+      'an untouched field must not ask about discarding');
+    assert.ok(document.querySelector('input[name="name"]') === null);
+    assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/);
+  } finally { view.stop(); }
+});
+
+test('Escape on a changed rename asks before discarding, and can be kept', async () => {
   const view = render();
   try {
     await settle(() => view.button('Rename Inspection camera')!.click());
@@ -185,8 +237,14 @@ test('Escape cancels an in-place rename', async () => {
     field.value = 'Abandoned';
     await settle(() => field.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
-    assert.equal(document.querySelector('input[name="name"]'), null);
-    assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/);
+    const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]');
+    assert.match(dialog?.textContent ?? '', /Discard this name\?/);
+    // It names what the Asset would keep, so the choice is between two known
+    // values rather than between "discard" and an unstated alternative.
+    assert.match(dialog?.textContent ?? '', /Inspection camera/);
+    // Keeping it returns the reader to what they typed rather than losing it.
+    await settle(() => view.button('Keep editing')!.click());
+    assert.equal(view.field('input[name="name"]')?.value, 'Abandoned');
   } finally { view.stop(); }
 });
 
@@ -196,7 +254,7 @@ test('a rename that changes nothing closes the editor without a mutation', async
     await settle(() => view.button('Rename Inspection camera')!.click());
     view.field('input[name="name"]')!.value = '   ';
     await settle(() => view.button('Save name')!.click());
-    assert.equal(document.querySelector('input[name="name"]'), null,
+    assert.ok(document.querySelector('input[name="name"]') === null,
       'an empty name closes the editor rather than sending a mutation the domain would refuse');
     assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/);
   } finally { view.stop(); }
@@ -315,60 +373,28 @@ test('contextual help opens on a click and stays, and is reachable by keyboard',
   } finally { view.stop(); }
 });
 
-test('each scheme states its meaning once', async () => {
-  const gtin = { key: 'i1', scheme: 'sgtin' as const, canonical: '(01)00614141123452(21)1',
+test('a scheme name points at GS1 rather than at a Kannabi explanation', async () => {
+  const sgtin = { key: 'i1', scheme: 'sgtin' as const, canonical: '(01)00614141123452(21)1',
     level: 'individual' as const,
     components: { gtin: '00614141123452', serial: '1' }, policyVersion: 'x' };
-  const view = render({ identifiers: [gtin] });
+  const view = render({ identifiers: [sgtin] });
   try {
-    await settle(() => view.button('About SGTIN')!.click());
-    const help = document.querySelector('[data-slot="popover-content"]')?.textContent ?? '';
-    assert.match(help, /Serialised trade item/);
-    // The scheme description already says what it identifies, so appending the
-    // level said it twice.
-    assert.equal(help.match(/identifies this Asset/gi)?.length, 1, help);
-  } finally { view.stop(); }
-});
-
-test('issuing offers only what Kannabi could actually issue for this Asset', async () => {
-  // The Asset is already an instance of one trade item, and the only managed
-  // GTIN names a different one. Serialising it would be refused at the
-  // boundary, so it is never offered.
-  const carried = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
-    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
-  const view = render({ identifiers: [carried] }, {
-    namespaces: [],
-    classKeys: [{ key: 'k', namespaceKey: 'n', gcp: '9520123', scheme: 'gtin' as const,
-      canonical: '(01)09520123000004' }],
-  });
-  try {
-    const add = [...document.querySelectorAll('summary')]
-      .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
-    await settle(() => add.querySelector('summary')!.click());
-    const panel = add.querySelector('[role="tabpanel"]')!;
-    // No selector offering something that cannot work, and no submit.
-    assert.ok(panel.querySelector('button[type="submit"]') === null,
-      'a choice that cannot succeed is not presented and then refused');
-    assert.match(panel.textContent ?? '', /No identifiers can currently be issued for this Asset/);
-    // The reason comes from the boundary rather than being worded again here.
-    assert.match(panel.textContent ?? '', /conflicting GTINs/);
-  } finally { view.stop(); }
-});
-
-test('the same managed GTIN the Asset already carries stays issuable', async () => {
-  const carried = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
-    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
-  const view = render({ identifiers: [carried] }, {
-    namespaces: [],
-    classKeys: [{ key: 'k', namespaceKey: 'n', gcp: '0614141', scheme: 'gtin' as const,
-      canonical: '(01)00614141123452' }],
-  });
-  try {
-    const add = [...document.querySelectorAll('summary')]
-      .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
-    await settle(() => add.querySelector('summary')!.click());
-    const panel = add.querySelector('[role="tabpanel"]')!;
-    assert.ok(panel.querySelector('button[type="submit"]'), 'serialising its own GTIN is offered');
-    assert.ok(!/No identifiers can currently be issued/.test(panel.textContent ?? ''));
+    // What an SGTIN is belongs to GS1, so it is a link out, not Kannabi's own
+    // help affordance.
+    assert.equal(view.button('About SGTIN'), null,
+      'a GS1 key definition is not a Kannabi concept');
+    const link = [...document.querySelectorAll('a')]
+      .find((anchor) => anchor.textContent?.trim() === 'SGTIN')!;
+    assert.ok(link, 'the scheme name is the reference');
+    // AI 21 is the association that makes a GTIN serialised; AI 01 alone is a
+    // GTIN, so this is the AI that distinguishes the scheme.
+    assert.equal(link.getAttribute('href'), 'https://ref.gs1.org/ai/21');
+    assert.equal(link.getAttribute('target'), '_blank');
+    assert.match(link.getAttribute('rel') ?? '', /noopener/);
+    assert.match(link.getAttribute('aria-label') ?? '', /GS1 reference/);
+    // The one-line orientation stays, stated once.
+    const card = link.closest('li')!;
+    assert.match(card.textContent ?? '', /Serialised trade item/);
+    assert.equal(card.textContent?.match(/identifies this Asset/gi)?.length, 1);
   } finally { view.stop(); }
 });

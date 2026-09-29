@@ -46,7 +46,10 @@ test('a Digital Link appears only on identifiers Kannabi also dereferences', () 
   digitalLinks: { individual: 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D' },
   showPolicyVersion: false, canEdit: false, busy: false, onDetach: () => {} }));
   try {
-    const links = [...document.querySelectorAll('a')];
+    // Scheme names are now links to GS1's own reference, so narrow to the
+    // Digital Link rather than counting every anchor on the card.
+    const links = [...document.querySelectorAll('a')]
+      .filter((anchor) => !anchor.href.startsWith('https://ref.gs1.org/'));
     assert.equal(links.length, 1);
     // The accessible name is the URI itself, which distinguishes the cards.
     assert.equal(links[0].textContent, 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D');

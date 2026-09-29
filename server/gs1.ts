@@ -740,6 +740,25 @@ export const schemeDescriptions: Readonly<Record<IdentifierScheme, string>> = {
   grai: 'Returnable asset — identifies this Asset when serialised',
   giai: 'Individual asset — identifies this Asset',
 };
+/** Where GS1 itself defines each scheme.
+ *
+ * Kannabi explains Kannabi; what an SGTIN or a GIAI *is* belongs to GS1, and
+ * pointing at the standard is more honest than paraphrasing it. These are
+ * GS1's own Application Identifier reference pages, which is the right
+ * granularity because a scheme here is exactly one AI element string.
+ *
+ * Each scheme links to the AI that distinguishes it rather than to its primary
+ * key: AI 01 alone is a GTIN, so a serialised GTIN is identified by AI 21,
+ * which is the association that makes it one. GS1 publishes no key page for a
+ * serialised GTIN — "SGTIN" is the common name for that association, not a GS1
+ * key — so there is nothing more specific to point at.
+ */
+export const schemeReference: Readonly<Record<IdentifierScheme, string>> = {
+  gtin: 'https://ref.gs1.org/ai/01',
+  sgtin: 'https://ref.gs1.org/ai/21',
+  grai: 'https://ref.gs1.org/ai/8003',
+  giai: 'https://ref.gs1.org/ai/8004',
+};
 export const levelLabels: Readonly<Record<IdentifierLevel, string>> = {
   individual: 'Identifies this Asset',
   class: 'Describes a class this Asset belongs to',

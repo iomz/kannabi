@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Icon } from './icon';
 import { IconButton } from './ui';
 
@@ -11,6 +14,11 @@ import { IconButton } from './ui';
  * It is not a general inline-edit framework: one field, one existing mutation,
  * no new authorization. A reader without edit access sees the heading and no
  * affordance at all.
+ *
+ * The field is the heading with a line under it rather than a box. A bordered
+ * input at heading size reads as a form having replaced the title, which is
+ * the opposite of editing in place; an underline marks the text as live
+ * without changing what the line looks like.
  */
 export function AssetName({ name, canEdit, busy, error, onSave }: {
   name: string;
@@ -22,6 +30,7 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
   onSave: (name: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   /** The commit control, so leaving the field to press it is not "leaving". */
@@ -38,11 +47,16 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
     if (returnFocus) { trigger.current?.focus(); setReturnFocus(false); }
   }, [returnFocus]);
 
-  function close() { setEditing(false); setReturnFocus(true); }
-  function save() {
-    const value = input.current?.value.trim() ?? '';
-    if (value && value !== name) onSave(value); else close();
-  }
+  const typed = () => input.current?.value.trim() ?? '';
+  const changed = () => typed() !== '' && typed() !== name;
+
+  function close() { setEditing(false); setDiscarding(false); setReturnFocus(true); }
+  function save() { if (changed()) onSave(typed()); else close(); }
+  /** Abandoning the edit. Silent when there is nothing to lose, and asks when
+   * there is: Escape and a stray click elsewhere are both easy to do by
+   * accident, and what was typed is the only copy of it. An explicit save
+   * never reaches here. */
+  function abandon() { if (changed()) setDiscarding(true); else close(); }
 
   if (!canEdit) return <>{name}</>;
   if (!editing) {
@@ -55,33 +69,46 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
         onClick={() => setEditing(true)}><Icon name="pencil" /></IconButton>
     </span>;
   }
-  // Sized from the text it holds plus room to type, floored so a short name
-  // is still comfortable and capped so a long one stops at the heading region.
-  // Not a fixed width: the point is that it looks like the title becoming
-  // editable, not like a form appearing where the title was.
-  const width = Math.min(Math.max(name.length + 8, 24), 60);
+  // Sized from the text it holds plus room to type, floored so a short name is
+  // still comfortable and capped so a long one stops at the heading region.
+  const width = Math.min(Math.max(name.length + 6, 18), 52);
   return <span className="inline-flex max-w-full items-baseline gap-1">
     <input ref={input} name="name" defaultValue={name} required disabled={busy} size={width}
       aria-label="Asset name"
-      // Inherits the heading it stands in, so renaming looks like editing the
-      // title rather than filling in a form that happens to be up here.
-      className="min-w-0 max-w-full rounded-md border bg-card px-2 py-0.5 font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit]"
-      // Leaving the field abandons the edit. A small inline rename should not
-      // hold somebody in a decision, and it must not save what they walked
-      // away from; the checkmark and Enter are the only ways to commit.
+      // Inherits the heading entirely and adds one line: no box, no fill, no
+      // radius. The line takes the focus colour so the live field is obvious
+      // without becoming a control of a different size.
+      className="min-w-0 max-w-full border-0 border-b-2 border-control-border bg-transparent px-0 pb-[.05em] font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit] outline-none focus:border-focus"
       onBlur={(event) => {
-        if (!commit.current?.contains(event.relatedTarget as Node)) close();
+        if (!commit.current?.contains(event.relatedTarget as Node)) abandon();
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') { event.preventDefault(); close(); }
+        if (event.key === 'Escape') { event.preventDefault(); abandon(); }
         if (event.key === 'Enter') { event.preventDefault(); save(); }
       }} />
     <span ref={commit} className="inline-flex items-center">
       <IconButton label="Save name" disabled={busy}
         className="translate-y-[-.1em] hover:bg-brand/10 hover:text-brand-text"
+        // Pressing the checkmark must not read as leaving the field first.
         onMouseDown={(event) => event.preventDefault()}
         onClick={save}><Icon name="check" /></IconButton>
     </span>
     {error && <span role="alert" className="ml-2 self-center text-[.875rem] font-normal tracking-normal">{error}</span>}
+
+    <AlertDialog open={discarding} onOpenChange={(next) => { if (!next) setDiscarding(false); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard this name?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This Asset will keep the name <strong>{name}</strong>.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          {/* Keeping the edit is the safe answer, so it rests under focus. */}
+          <AlertDialogCancel onClick={() => input.current?.focus()}>Keep editing</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={close}>Discard</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </span>;
 }

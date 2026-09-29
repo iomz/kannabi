@@ -93,10 +93,10 @@ test('Asset name and visibility submit independently through their own fetchers'
     await settle(() => view.button('Save name')!.click());
     await settle();
     assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After' } }]);
-    // Visibility is a switch whose state is also written out beside it. Use
-    // the native checkbox underneath: happy-dom does not implement checkbox
-    // activation for the constructed PointerEvent Base UI forwards to it.
-    await settle(() => view.field('input[name="isPublic"]')!.click());
+    // Publishing is consequential, so it is named and confirmed rather than
+    // toggled.
+    await settle(() => view.button('Change visibility')!.click());
+    await settle(() => view.button('Make public')!.click());
     await settle();
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());

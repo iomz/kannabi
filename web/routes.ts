@@ -15,6 +15,10 @@ export default [
   route('01/:gtin/21/:serial', 'routes/digital-link.tsx', { id: 'digital-link-sgtin' }),
   route('8003/:grai', 'routes/digital-link.tsx', { id: 'digital-link-grai' }),
   route('8004/:giai', 'routes/digital-link.tsx', { id: 'digital-link-giai' }),
+  // A design bench for open Asset-detail visual questions, reachable only by
+  // address and deliberately absent from navigation. It mutates nothing and is
+  // meant to be deleted once the questions it holds are closed.
+  route('asset-detail-lab', 'routes/asset-detail-lab.tsx'),
   route('lookup', 'routes/lookup.tsx'),
   route('groups', 'routes/groups.tsx'),
   route('profile', 'routes/profile.tsx'),
