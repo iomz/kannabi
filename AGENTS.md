@@ -111,6 +111,10 @@ System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.
 
+GitHub Issue titles are concise plain-language imperative or problem statements, such as `Preserve detached identifier history` or `Decide whether identity lookup answers anonymous callers`.
+Do not give an Issue a Conventional Commit prefix or scope such as `feat(...)`, `fix(...)`, `refactor(...)` or `test(...)`; an Issue names a problem or an outcome, not a commit.
+Branches and commits keep their own conventional prefixes, and pull request naming follows the existing repository convention rather than this rule.
+
 Private working context — conversations, research notes, and the examples used in them — is not automatically publishable.
 Before creating or editing a public Issue or Issue comment, remove incidental personal and private detail, and prefer fictional or anonymized examples wherever a real identity is not technically necessary.
 Keep concrete empirical evidence whose specificity the engineering or research record genuinely depends on, and minimize unrelated personal information around it rather than weakening the evidence.

@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { Hint, Panel } from './ui';
+import { Hint, Section } from './ui';
 
 type Group = { key: string; name: string };
 
@@ -12,9 +12,10 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
   if (!canEdit) return null;
   // Closed by default. Which Groups collaborate is already stated in Details
   // above; this is the occasional act of changing it, so it asks for the
-  // reader's attention only when they come looking for it.
-  return <Panel><details className="[&>summary]:cursor-pointer [&[open]>summary]:mb-4">
-    <summary><h2 className="mb-0 inline text-[1.05rem]">Manage collaboration</h2></summary>
+  // reader's attention only when they come looking for it. It folds through
+  // the same Section every other part of the page uses, so one heading does
+  // not behave differently from its neighbours.
+  return <Section title="Manage collaboration">
     <Hint>Members of every collaboration Group can read and edit this Asset. Sharing requires membership and control in an existing collaboration Group and control of the receiving Group.</Hint>
     <ul>{groups.map((group) => <li key={group.key} className="my-3 flex items-center gap-3">
       <span>{group.name}</span>
@@ -27,5 +28,5 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
       <div key={group.key} className="my-3"><Button type="button" disabled={busy}
         onClick={() => onChange(group.key, true)}>Grant {group.name} collaboration</Button></div>)}
     {error && <p role="alert">{error}</p>}
-  </details></Panel>;
+  </Section>;
 }

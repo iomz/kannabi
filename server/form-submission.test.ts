@@ -60,7 +60,7 @@ test('every existing Group form submits its intended API mutation on click', asy
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
-test('Asset Save changes submits both name and public visibility through its fetcher', async () => {
+test('Asset name and visibility submit independently through their own fetchers', async () => {
   const id = newAssetId();
   const originalFetch = globalThis.fetch;
   const calls: { path: string; method: string; body: unknown }[] = [];
@@ -86,14 +86,16 @@ test('Asset Save changes submits both name and public visibility through its fet
     // governs both and this Asset has no Digital Link to surface instead.
     assert.equal([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'), false,
       'native Asset URI follows the Kannabi ID setting');
+    // Renaming happens on the heading itself. Each control sends only its own
+    // field, so neither can write back a value the person never touched.
+    await settle(() => view.button('Rename Before')!.click());
     view.field('input[name="name"]')!.value = 'After';
-    // Use the switch's native checkbox: happy-dom does not implement checkbox
-    // activation for the constructed PointerEvent Base UI forwards to it.
-    await settle(() => view.field('input[name="isPublic"]')!.click());
-    assert.equal(document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
-    await settle(() => view.button('Save changes')!.click());
+    await settle(() => view.button('Save')!.click());
     await settle();
-    assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After', isPublic: true } }]);
+    assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After' } }]);
+    await settle(() => view.button('Make public')!.click());
+    await settle();
+    assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
     view.field('input[name="gtin"]')!.value = '00614141123452';

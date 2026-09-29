@@ -25,6 +25,33 @@ export function Hint({ className, ...props }: ComponentProps<'p'>) {
   return <p {...props} className={cn('text-[.8rem] text-muted-foreground [overflow-wrap:anywhere]', className)} />;
 }
 
+/** A Panel whose body folds away, with its heading as the control.
+ *
+ * The Asset page grows a section per capability, and a reader who came for one
+ * of them should not have to scroll past the rest. Which sections start open is
+ * a judgement about what a page is usually for, so each caller states it.
+ *
+ * `<details>` rather than a scripted disclosure: the browser already gives the
+ * summary a role, keyboard operation and an expanded state, and nothing here
+ * needs behaviour it does not have. The open state is presentation and lives
+ * only in the DOM — it is deliberately not persisted, because a fold is not a
+ * preference a reader set.
+ */
+export function Section({ title, defaultOpen, children, className }: {
+  title: ReactNode;
+  /** Open on arrival. Omitted means folded. */
+  defaultOpen?: boolean;
+  children?: ReactNode;
+  className?: string;
+}) {
+  return <Panel className={className}>
+    <details open={defaultOpen} className="[&>summary]:cursor-pointer [&[open]>summary]:mb-4">
+      <summary><h2 className="mb-0 inline text-[1.05rem]">{title}</h2></summary>
+      {children}
+    </details>
+  </Panel>;
+}
+
 /** A small caps label naming what kind of thing this page is about. */
 export function Eyebrow({ className, ...props }: ComponentProps<'p'>) {
   return <p {...props} className={cn('mb-2 text-[.65rem] font-[650] tracking-[.15em] uppercase text-muted-foreground', className)} />;

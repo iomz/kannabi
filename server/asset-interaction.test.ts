@@ -26,15 +26,22 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     });
   };
   try {
-    const edit = new FormData();
-    edit.set('intent', 'edit');
-    edit.set('name', 'Updated Asset');
-    edit.set('isPublic', 'on');
-    const editResult = await clientAction({
-      request: new Request(assetUrl, { method: 'POST', body: identify(edit) }),
+    const rename = new FormData();
+    rename.set('intent', 'rename');
+    rename.set('name', 'Updated Asset');
+    const renameResult = await clientAction({
+      request: new Request(assetUrl, { method: 'POST', body: identify(rename) }),
     } as never);
-    assert.deepEqual(editResult, { kind: 'edit', saved: true, error: null, photoKey: null });
-    assert.equal(editResult instanceof Response, false);
+    assert.deepEqual(renameResult, { kind: 'rename', saved: true, error: null, photoKey: null });
+    assert.equal(renameResult instanceof Response, false);
+
+    const publish = new FormData();
+    publish.set('intent', 'visibility');
+    publish.set('isPublic', 'true');
+    const publishResult = await clientAction({
+      request: new Request(assetUrl, { method: 'POST', body: identify(publish) }),
+    } as never);
+    assert.deepEqual(publishResult, { kind: 'visibility', saved: true, error: null, photoKey: null });
 
     const photo = new FormData();
     photo.set('intent', 'photo');
@@ -54,10 +61,13 @@ test('Asset edit and photo actions return fetcher data instead of redirects', as
     assert.deepEqual(deletionResult, { kind: 'delete-photo', saved: true, error: null, photoKey: 'new-photo' });
     assert.equal(deletionResult instanceof Response, false);
 
-    assert.deepEqual(requests.map((request) => request.method), ['PATCH', 'POST', 'DELETE']);
+    // Two PATCHes: renaming and publishing are separate mutations now, each
+    // carrying only its own field.
+    assert.deepEqual(requests.map((request) => request.method), ['PATCH', 'PATCH', 'POST', 'DELETE']);
     // Every Asset-scoped call addresses the native Asset id, never an external identifier.
     assert.deepEqual(requests.map((request) => new URL(request.url, assetUrl).pathname), [
-      `/api/assets/${id}`, `/api/assets/${id}/photos`, `/api/assets/${id}/photos/new-photo`,
+      `/api/assets/${id}`, `/api/assets/${id}`,
+      `/api/assets/${id}/photos`, `/api/assets/${id}/photos/new-photo`,
     ]);
     assert.ok(requests.every((request) => !new URL(request.url, assetUrl).search));
   } finally {

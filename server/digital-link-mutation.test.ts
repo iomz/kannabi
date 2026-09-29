@@ -90,14 +90,13 @@ test('turning on Public access from a Digital Link page reaches the native Asset
   const restore = stubApi(calls);
   const view = renderAtDigitalLink();
   try {
-    await settle(() => view.field('input[name="isPublic"]')!.click());
-    await settle(() => view.button('Save changes')!.click());
+    await settle(() => view.button('Make public')!.click());
 
     const patch = calls.find((call) => call.method === 'PATCH');
     assert.ok(patch, 'the visibility change was submitted');
     // Addressed by the native identity, never by the Digital Link.
     assert.equal(patch.path, `/api/assets/${id}`);
-    assert.deepEqual(patch.body, { name: 'Test CSET82', isPublic: true });
+    assert.deepEqual(patch.body, { isPublic: true });
     // The identity the page carried is not smuggled into the payload.
     assert.equal(Object.keys(patch.body as object).includes('assetId'), false);
     assert.equal(Object.keys(patch.body as object).includes('at'), false);
@@ -117,11 +116,12 @@ test('a name change from a Digital Link page addresses the native Asset', async 
   const restore = stubApi(calls);
   const view = renderAtDigitalLink();
   try {
+    await settle(() => view.button('Rename Test CSET82')!.click());
     view.field('input[name="name"]')!.value = 'Renamed';
-    await settle(() => view.button('Save changes')!.click());
+    await settle(() => view.button('Save')!.click());
     const patch = calls.find((call) => call.method === 'PATCH');
     assert.equal(patch?.path, `/api/assets/${id}`);
-    assert.deepEqual(patch?.body, { name: 'Renamed', isPublic: false });
+    assert.deepEqual(patch?.body, { name: 'Renamed' });
     assert.doesNotMatch(view.text(), /Asset unavailable/);
   } finally {
     view.stop();

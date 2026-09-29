@@ -9,15 +9,15 @@ import { surfacedAssetPath, surfacedTransition, type SurfaceableIdentifier } fro
 import { ReporterAttribution } from './reporter-attribution';
 import { publicShellHandle } from './anonymous-shell';
 import { AssetUri } from './asset-uri';
+import { AssetName } from './asset-name';
 import { AssetCollaboration } from './asset-collaboration';
-import { Switch } from './switch';
 import { Icon } from './icon';
 import { PhotoDeleteConfirmation } from './photo-delete-confirmation';
 import { notify } from './notify';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ActionRow, Field, Hint, PageHeading, Panel } from './ui';
+import { ActionRow, Field, Hint, PageHeading, Section } from './ui';
 import { IdentifierForm, IdentifierList, IssueIdentifier } from './asset-identifiers';
 
 
@@ -133,7 +133,8 @@ export async function submitAsset(request: Request) {
     : intent === 'delete-photo' ? 'delete-photo' as const
       : intent === 'attach-identifier' ? 'attach-identifier' as const
         : intent === 'detach-identifier' ? 'detach-identifier' as const
-          : intent === 'issue-identifier' ? 'issue-identifier' as const : 'edit' as const;
+          : intent === 'issue-identifier' ? 'issue-identifier' as const
+            : intent === 'visibility' ? 'visibility' as const : 'rename' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
     if (kind === 'photo') {
@@ -190,9 +191,13 @@ export async function submitAsset(request: Request) {
       return transition(asset, 'Identifier issued', at)
         ?? { kind, saved: true as const, error: null, photoKey: null, issued };
     }
-    await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
-      name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
-    } }));
+    // One field per request. Name and visibility are edited from two places
+    // now, and a PATCH carrying both would let either control write back a
+    // value the person never touched, from whatever the page last rendered.
+    await unwrap(await api.assets[':id'].$patch({ param: { id },
+      json: kind === 'visibility'
+        ? { isPublic: data.get('isPublic') === 'true' }
+        : { name: String(data.get('name') ?? '') } }));
     return { kind, saved: true as const, error: null, photoKey: null };
   } catch (error) {
     return { kind, saved: false as const,
@@ -212,6 +217,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const collaboration = useFetcher<typeof submitAsset>();
   const upload = useFetcher<typeof submitAsset>();
   const edit = useFetcher<typeof submitAsset>();
+  const visibility = useFetcher<typeof submitAsset>();
   const deletePhoto = useFetcher<typeof submitAsset>();
   const identifiers = useFetcher<typeof submitAsset>();
   // The row passes the complete location it was shown in, so going back returns
@@ -238,7 +244,9 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
   const uploadResult = upload.data?.kind === 'photo' ? upload.data : null;
-  const editResult = edit.data?.kind === 'edit' ? edit.data : null;
+  const editResult = edit.data?.kind === 'rename' ? edit.data : null;
+  const visibilityResult = visibility.data?.kind === 'visibility' ? visibility.data : null;
+  const visibilityBusy = visibility.state !== 'idle';
   const deleteResult = deletePhoto.data?.kind === 'delete-photo' ? deletePhoto.data : null;
   const identifierResult = identifiers.data?.kind === 'attach-identifier'
     || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
@@ -254,8 +262,11 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     if (uploadResult?.saved) { uploadForm.current?.reset(); notify('Photo uploaded'); }
   }, [uploadResult]);
   useEffect(() => {
-    if (editResult?.saved) notify('Asset changes saved');
+    if (editResult?.saved) notify('Asset renamed');
   }, [editResult]);
+  useEffect(() => {
+    if (visibilityResult?.saved) notify(asset.isPublic ? 'Asset is public' : 'Asset is private');
+  }, [visibilityResult]);
   useEffect(() => {
     // The photo has left the grid and the dialog that asked has closed, so
     // there is nothing left on screen to put the confirmation beside.
@@ -273,7 +284,9 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   }, [collaboration.data]);
   return <>
     {authenticated && <Link to={back} className="mb-6 inline-block text-[.85rem]">{back.startsWith('/lookup') ? '← Lookup' : '← Assets'}</Link>}
-    <PageHeading eyebrow="Asset" title={asset.name}>
+    <PageHeading eyebrow="Asset" title={<AssetName name={asset.name} canEdit={canEdit}
+      busy={editBusy} error={editResult?.error ?? null}
+      onSave={(name) => edit.submit({ ...identity, intent: 'rename', name }, { method: 'post' })} />}>
       {authenticated ? <Badge variant={asset.isPublic ? 'brand' : 'secondary'}>{asset.isPublic ? 'Public' : 'Group access'}</Badge>
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
@@ -281,7 +294,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         here under that heading was mostly access and provenance metadata,
         which is worth reading once; the identifiers are the material a person
         comes to this page for, so they no longer wait below it. */}
-    <Panel><h2>Identifiers</h2>
+    <Section title="Identifiers" defaultOpen>
       <AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
         showNativeUri={settings.showAssetId} />
       <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
@@ -301,12 +314,25 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         <IdentifierForm busy={identifierBusy}
           error={identifierResult?.error ?? null} />
       </identifiers.Form>}
-    </Panel>
+    </Section>
     {/* Access and provenance, compressed to one line per fact. It is context
         for the identifiers above rather than the subject of the page. */}
-    <Panel><h2>Details</h2>
+    <Section title="Details">
       <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
-        <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
+        {/* The state is the text, not the control: a reader must be able to
+            tell a public Asset from a private one without interpreting the
+            appearance of a switch. Visibility is a property of the Asset, so
+            it is changed here and never under Manage collaboration, which
+            grants Groups access rather than publishing. */}
+        <dt>Visibility</dt>
+        <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</span>
+          {canEdit && <Button type="button" variant="outline" size="xs" disabled={visibilityBusy}
+            onClick={() => visibility.submit({ ...identity, intent: 'visibility',
+              isPublic: String(!asset.isPublic) }, { method: 'post' })}>
+            {visibilityBusy ? 'Saving…' : asset.isPublic ? 'Make private' : 'Make public'}</Button>}
+          {visibilityResult?.error && <span role="alert">{visibilityResult.error}</span>}
+        </dd>
         <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
         <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
         <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
@@ -315,7 +341,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           {' '}({settings.displayTimezone})</dd>
         {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
       </dl>
-    </Panel>
+      {canEdit && <Hint className="mt-4 mb-0">A public Asset is readable by anyone with its address, including the information shown on this page. Publishing never grants edit access, which stays with the collaborating Groups.</Hint>}
+    </Section>
     {/* Quoted evidence, in a panel of its own.
         It cannot share the Details list above: set beside "Reported", a source
         record's own time and recorder read as Kannabi's, which is the one
@@ -323,8 +350,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         sentence and every label repeat whose statement this is, because a
         reader who skims sees a date and a name and has to be told, twice,
         where they came from. */}
-    {asset.sourceRecord && <Panel>
-      <h2>Source record</h2>
+    {asset.sourceRecord && <Section title="Source record">
       <Hint className="mb-4">Quoted from the pre-existing record this Asset was created
         from. Kannabi holds that the source states this — not that it is true, and not as
         its own reporting of the Asset.</Hint>
@@ -339,14 +365,14 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         <dd>{asset.sourceRecord.recordedBy ?? 'Not stated by the source'}</dd>
         <dt>Source reference</dt><dd><code>{asset.sourceRecord.reference}</code></dd>
       </dl>
-    </Panel>}
+    </Section>}
     {/* Below the identifiers and closed by default: managing who collaborates
         is an occasional administrative act, not what the page is about. */}
     <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
       busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
       onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
-    <Panel><h2>Photos</h2>
+    <Section title="Photos">
       {!asset.photos.length && <p>No photos yet.</p>}
       <div className="mb-6 flex flex-wrap gap-4">{asset.photos.map((photo, index) => <div key={photo.key}
         className={'relative w-80 max-w-full' + (uploadResult?.saved && uploadResult.photoKey === photo.key
@@ -371,7 +397,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         </fieldset>
       </upload.Form>
       </>}
-    </Panel>
+    </Section>
     {canEdit && <PhotoDeleteConfirmation open={photoToDelete !== null} busy={deleteBusy}
       error={deleteResult?.error && deleteResult.photoKey === photoToDelete ? deleteResult.error : null}
       onClose={() => setPhotoToDelete(null)} onConfirm={() => {
@@ -379,19 +405,6 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           deletePhoto.submit({ ...identity, intent: 'delete-photo', photoKey: photoToDelete }, { method: 'post' });
         }
       }} />}
-    {canEdit && <Panel><h2>Edit Asset</h2>
-      <edit.Form method="post" key={JSON.stringify([asset.name, asset.isPublic])}>
-        {identityFields}
-        <fieldset disabled={editBusy} aria-busy={editBusy}>
-          <input type="hidden" name="intent" value="edit" />
-          <Field label="Asset name"><Input name="name" defaultValue={asset.name} required /></Field>
-          <Switch name="isPublic" defaultChecked={asset.isPublic} label="Public access" />
-          <Hint className="mb-4">Anyone with access to this public page can view the information exposed here. Only Group members can edit.</Hint>
-          {editResult?.error && <p role="alert">{editResult.error}</p>}
-          <ActionRow><Button type="submit">{editBusy ? 'Saving…' : 'Save changes'}</Button></ActionRow>
-        </fieldset>
-      </edit.Form>
-    </Panel>}
   </>;
 }
 
