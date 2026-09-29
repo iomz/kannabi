@@ -13,7 +13,9 @@ import { cn } from "cn"
  * than from hand-written ARIA.
  *
  * The visual language deliberately matches the Inventory strip: an underline
- * on the active item, so two controls that look alike behave alike. */
+ * on the active item, so two controls that look alike behave alike. The active
+ * state is `data-active`, which is what this primitive sets; `data-selected`
+ * silently matches nothing and leaves every tab looking inactive. */
 
 function Tabs({ className, ...props }: TabsPrimitive.Root.Props) {
   return (
@@ -40,7 +42,7 @@ function TabsTab({ className, ...props }: TabsPrimitive.Tab.Props) {
     <TabsPrimitive.Tab
       data-slot="tabs-tab"
       className={cn(
-        "-mb-px cursor-pointer border-b-2 border-transparent px-4 py-2 text-[.85rem] whitespace-nowrap text-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50 data-selected:border-selected-indicator data-selected:font-semibold data-selected:text-selected-text",
+        "-mb-px cursor-pointer border-b-2 border-transparent px-4 py-2 text-[.85rem] whitespace-nowrap text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 data-active:border-selected-indicator data-active:bg-selected-surface data-active:font-semibold data-active:text-selected-text",
         className
       )}
       {...props}

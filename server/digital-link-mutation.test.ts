@@ -90,7 +90,7 @@ test('turning on Public access from a Digital Link page reaches the native Asset
   const restore = stubApi(calls);
   const view = renderAtDigitalLink();
   try {
-    // The switch carries the change; the words beside it carry the state.
+    // One boolean property, carried by a switch.
     await settle(() => document.querySelector<HTMLInputElement>('input[name="isPublic"]')!.click());
 
     const patch = calls.find((call) => call.method === 'PATCH');
@@ -119,7 +119,7 @@ test('a name change from a Digital Link page addresses the native Asset', async 
   try {
     await settle(() => view.button('Rename Test CSET82')!.click());
     view.field('input[name="name"]')!.value = 'Renamed';
-    await settle(() => view.button('Save')!.click());
+    await settle(() => view.button('Save name')!.click());
     const patch = calls.find((call) => call.method === 'PATCH');
     assert.equal(patch?.path, `/api/assets/${id}`);
     assert.deepEqual(patch?.body, { name: 'Renamed' });

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
-  identifierSchemes, schemeDescriptions, schemeInputs, schemeLabels,
+  classKeyConflictReason, identifierSchemes, schemeDescriptions, schemeInputs, schemeLabels,
   type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
@@ -131,14 +131,32 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
   busy: boolean; error: string | null;
 }) {
   const issued = new Map(issuances.map((issuance) => [issuance.scheme, issuance]));
+  // A class key this Asset could actually be serialised under. An Asset is an
+  // instance of at most one trade item and a member of at most one GRAI
+  // asset-type series, so a key naming a different one would be refused at the
+  // boundary; asking the boundary in advance is what stops the UI offering a
+  // choice it already knows cannot succeed.
+  const usable = (classKey: IssuableClassKey) =>
+    classKeyConflictReason(classKey, identifiers) === null;
   const available = issuanceOptions.filter((option) => !issued.has(option.scheme)
     && (option.classScheme === null
       ? namespaces.length > 0
-      : classKeys.some((classKey) => classKey.scheme === option.classScheme)));
+      : classKeys.some((classKey) => classKey.scheme === option.classScheme && usable(classKey))));
   const [scheme, setScheme] = useState(available[0]?.scheme ?? 'giai');
   const option = issuanceOptions.find((entry) => entry.scheme === scheme) ?? issuanceOptions[0];
   const eligible = option.classScheme === null ? []
-    : classKeys.filter((classKey) => classKey.scheme === option.classScheme);
+    : classKeys.filter((classKey) => classKey.scheme === option.classScheme && usable(classKey));
+  // Why a scheme that has a managed class key is still not on offer, taken
+  // from the boundary rather than worded again here.
+  const blocked = issuanceOptions.flatMap((entry) => {
+    if (issued.has(entry.scheme) || entry.classScheme === null) return [];
+    if (available.some((offer) => offer.scheme === entry.scheme)) return [];
+    const conflict = classKeys
+      .filter((classKey) => classKey.scheme === entry.classScheme)
+      .map((classKey) => classKeyConflictReason(classKey, identifiers))
+      .find((reason) => reason !== null);
+    return conflict ? [{ label: entry.label, reason: conflict }] : [];
+  });
   const [classKeyKey, setClassKeyKey] = useState(eligible[0]?.key ?? '');
   const selected = eligible.find((classKey) => classKey.key === classKeyKey) ?? eligible[0];
   const detached = issuances.filter((issuance) =>
@@ -147,14 +165,17 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
     {detached.map((issuance) => <Hint key={issuance.key}>Kannabi-issued <code>{issuance.canonical}</code> is
       not currently recorded on this Asset. It stays bound to this Asset in the issuance ledger and is never reissued elsewhere.</Hint>)}
     {!available.length
-      ? <Hint>{issued.size >= issuanceOptions.length
-        ? 'Kannabi has issued every identifier it can for this Asset.'
-        : namespaces.length === 0
-          ? <>Kannabi can issue nothing for this Asset yet: no collaborating Group you belong to has an
-            active GS1 Company Prefix. <Link to="/groups">Configure one under Groups</Link>, then come back.</>
-          : <>A serialised GRAI or an SGTIN is issued under a managed class key, and this Asset’s
-            prefixes have no active one yet. <Link to="/groups">Allocate or adopt a class key under
-            Groups</Link>, then come back to issue from it.</>}</Hint>
+      ? <Hint>{blocked.length
+        ? <>No identifiers can currently be issued for this Asset.{' '}
+          {blocked.map((entry) => `${entry.label}: ${entry.reason}.`).join(' ')}</>
+        : issued.size >= issuanceOptions.length
+          ? 'Kannabi has issued every identifier it can for this Asset.'
+          : namespaces.length === 0
+            ? <>Kannabi can issue nothing for this Asset yet: no collaborating Group you belong to has an
+              active GS1 Company Prefix. <Link to="/groups">Configure one under Groups</Link>, then come back.</>
+            : <>A serialised GRAI or an SGTIN is issued under a managed class key, and this Asset’s
+              prefixes have no active one yet. <Link to="/groups">Allocate or adopt a class key under
+              Groups</Link>, then come back to issue from it.</>}</Hint>
       : <fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="issue-identifier" />
         <input type="hidden" name="scheme" value={scheme} />

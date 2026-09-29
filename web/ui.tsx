@@ -78,9 +78,14 @@ export function HelpTip({ label, children, className }: {
   return <Popover>
     <PopoverTrigger
       render={<button type="button" aria-label={label} />}
+      // The glyph modifies the word before it, so it sits against that word
+      // rather than floating as a control of its own. The box is pulled in on
+      // both sides while the element keeps its full size, so the target stays
+      // as large as it was and only the space it appears to occupy shrinks.
       className={cn('inline-flex size-7 shrink-0 items-center justify-center rounded-md',
-        'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-[1.05rem]', className)}>
+        '-mx-1 align-baseline text-muted-foreground transition-colors',
+        'hover:bg-muted hover:text-foreground',
+        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-4', className)}>
       <Icon name="info" />
     </PopoverTrigger>
     <PopoverContent>{children}</PopoverContent>

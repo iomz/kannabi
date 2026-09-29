@@ -431,6 +431,47 @@ export function canonicalIdentifiers(value: unknown): ExternalIdentifier[] {
  * `assertAiAssociations`. Only these three rules are Kannabi's, and all are
  * about the Asset rather than about AI syntax.
  */
+const conflictingGtins = 'Identifiers claim conflicting GTINs for one Asset';
+const conflictingAssetTypes = 'Identifiers claim conflicting GRAI asset types for one Asset';
+
+/** The trade item or asset-type series an Asset is already committed to, by
+ * the component that names it. Requires nothing but the identifiers it is
+ * given, and answers null when they commit to nothing. */
+function committedComponent(
+  identifiers: readonly ExternalIdentifier[], component: 'gtin' | 'assetType'): string | null {
+  for (const identifier of identifiers) {
+    const value = identifier.components[component];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
+
+/** Why issuing under this class key would be refused for an Asset already
+ * carrying these identifiers, or null when it would be accepted.
+ *
+ * This is `assertCompatible` asked in advance rather than a second rule. An
+ * Asset is an instance of at most one trade item and a member of at most one
+ * GRAI asset-type series, so a serial minted under a class key naming a
+ * different one would be refused at the boundary; knowing that before the
+ * value is allocated is the difference between not offering a choice and
+ * offering one that cannot succeed.
+ *
+ * The messages are shared with `assertCompatible` so the answer given in
+ * advance and the answer given on submission can never drift apart. A scheme
+ * with no class key — a GIAI comes straight from the prefix — shares no
+ * component with anything and so never conflicts.
+ */
+export function classKeyConflictReason(
+  classKey: { scheme: ClassKeyScheme; canonical: string } | null,
+  identifiers: readonly ExternalIdentifier[]): string | null {
+  if (!classKey) return null;
+  const component = classKey.scheme === 'gtin' ? 'gtin' : 'assetType';
+  const key = definition(classKey.scheme).parse(classKey.canonical)[component];
+  const committed = committedComponent(identifiers, component);
+  if (typeof key !== 'string' || committed === null || committed === key) return null;
+  return component === 'gtin' ? conflictingGtins : conflictingAssetTypes;
+}
+
 export function assertCompatible(identifiers: readonly ExternalIdentifier[]): void {
   const seen = new Set<string>();
   for (const identifier of identifiers) {
@@ -443,7 +484,7 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
   // — alone as a GTIN or inside an SGTIN — must name the same trade item.
   const gtins = new Set(identifiers.flatMap((identifier) =>
     typeof identifier.components.gtin === 'string' ? [identifier.components.gtin] : []));
-  if (gtins.size > 1) throw new ValidationError('Identifiers claim conflicting GTINs for one Asset');
+  if (gtins.size > 1) throw new ValidationError(conflictingGtins);
   // The same rule one scheme along. A GRAI asset type names a series of
   // identical returnable assets, so an Asset belongs to at most one: carrying
   // two would claim it is a member of one series and an instance within
@@ -451,9 +492,7 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
   // about which other schemes may sit beside it.
   const assetTypes = new Set(identifiers.flatMap((identifier) =>
     typeof identifier.components.assetType === 'string' ? [identifier.components.assetType] : []));
-  if (assetTypes.size > 1) {
-    throw new ValidationError('Identifiers claim conflicting GRAI asset types for one Asset');
-  }
+  if (assetTypes.size > 1) throw new ValidationError(conflictingAssetTypes);
 }
 
 /** A GS1 Company Prefix as a Kannabi namespace configures it.

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { Icon } from './icon';
 import { IconButton } from './ui';
 
@@ -25,6 +24,8 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
   const [editing, setEditing] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  /** The commit control, so leaving the field to press it is not "leaving". */
+  const commit = useRef<HTMLSpanElement>(null);
   // Leaving edit mode has to put focus somewhere deliberate, or it falls to the
   // document and a keyboard reader loses their place on the page.
   const [returnFocus, setReturnFocus] = useState(false);
@@ -38,6 +39,10 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
   }, [returnFocus]);
 
   function close() { setEditing(false); setReturnFocus(true); }
+  function save() {
+    const value = input.current?.value.trim() ?? '';
+    if (value && value !== name) onSave(value); else close();
+  }
 
   if (!canEdit) return <>{name}</>;
   if (!editing) {
@@ -50,31 +55,33 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
         onClick={() => setEditing(true)}><Icon name="pencil" /></IconButton>
     </span>;
   }
-  // The field takes the width the title had. Editing in place means the line
-  // keeps its size and position; a short input under a large heading reads as
-  // the heading having been replaced by a form.
-  return <span className="block w-full">
-    <input ref={input} name="name" defaultValue={name} required disabled={busy}
+  // Sized from the text it holds plus room to type, floored so a short name
+  // is still comfortable and capped so a long one stops at the heading region.
+  // Not a fixed width: the point is that it looks like the title becoming
+  // editable, not like a form appearing where the title was.
+  const width = Math.min(Math.max(name.length + 8, 24), 60);
+  return <span className="inline-flex max-w-full items-baseline gap-1">
+    <input ref={input} name="name" defaultValue={name} required disabled={busy} size={width}
       aria-label="Asset name"
       // Inherits the heading it stands in, so renaming looks like editing the
       // title rather than filling in a form that happens to be up here.
-      className="block w-full rounded-md border bg-card px-2 py-1 font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit]"
+      className="min-w-0 max-w-full rounded-md border bg-card px-2 py-0.5 font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit]"
+      // Leaving the field abandons the edit. A small inline rename should not
+      // hold somebody in a decision, and it must not save what they walked
+      // away from; the checkmark and Enter are the only ways to commit.
+      onBlur={(event) => {
+        if (!commit.current?.contains(event.relatedTarget as Node)) close();
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); close(); }
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          const value = input.current?.value.trim() ?? '';
-          if (value && value !== name) onSave(value); else close();
-        }
+        if (event.key === 'Enter') { event.preventDefault(); save(); }
       }} />
-    <span className="mt-2 flex items-center gap-2 text-[1rem] font-normal tracking-normal">
-      <Button type="button" size="sm" disabled={busy} onClick={() => {
-        const value = input.current?.value.trim() ?? '';
-        if (value && value !== name) onSave(value); else close();
-      }}>{busy ? 'Saving…' : 'Save'}</Button>
-      <Button type="button" variant="outline" size="sm" disabled={busy}
-        onClick={close}>Cancel</Button>
+    <span ref={commit} className="inline-flex items-center">
+      <IconButton label="Save name" disabled={busy}
+        className="translate-y-[-.1em] hover:bg-brand/10 hover:text-brand-text"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={save}><Icon name="check" /></IconButton>
     </span>
-    {error && <span role="alert" className="mt-2 block text-[.875rem] font-normal tracking-normal">{error}</span>}
+    {error && <span role="alert" className="ml-2 self-center text-[.875rem] font-normal tracking-normal">{error}</span>}
   </span>;
 }

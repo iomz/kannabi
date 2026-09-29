@@ -102,20 +102,18 @@ test('quoted source evidence still reads correctly once its section is opened', 
   } finally { view.stop(); }
 });
 
-test('visibility is a symmetric pair, with the state carried by the switch', () => {
+test('visibility is one property carried by a switch, named by its label', () => {
   const view = render();
   try {
     const details = section('Details')!;
-    // Both ends are named, so neither state is described in terms the other is
-    // not: "Public — read access" against "Private — Group access" named two
-    // different things and did not read as one binary.
-    assert.match(details.textContent ?? '', /Private/);
-    assert.match(details.textContent ?? '', /Public/);
-    assert.doesNotMatch(details.textContent ?? '', /read access|Group access/);
     const toggle = details.querySelector('[role="switch"]');
-    assert.ok(toggle, 'and changeable from the same place');
-    assert.equal(toggle!.getAttribute('aria-checked'), 'false',
-      'the state is the control\u2019s own, not read off a colour');
+    assert.ok(toggle, 'changeable from where it is read');
+    // `isPublic` is one boolean property, which is what a switch is: the
+    // state is the control's own, announced rather than read off a colour.
+    assert.equal(toggle!.getAttribute('aria-checked'), 'false');
+    assert.match(details.textContent ?? '', /Public/, 'and the label names the property');
+    // Not a choice between two peer values, which is a different primitive.
+    assert.doesNotMatch(details.textContent ?? '', /Private — Group access|read access/);
     // Publishing is a property of the Asset, not a Group association.
     assert.equal(section('Manage Groups')!.querySelector('[role="switch"]'), null);
   } finally { view.stop(); }
@@ -147,7 +145,7 @@ test('a reader who cannot edit is offered neither control', () => {
   const view = render({ sourceRecord }, { canEdit: false });
   try {
     assert.match(section('Details')!.textContent ?? '', /Private/);
-    assert.equal(section('Details')!.querySelector('[role="switch"]'), null);
+    assert.ok(section('Details')!.querySelector('[role="switch"]') === null);
     assert.equal(view.button(/^Rename/), null);
     assert.equal(section('Manage Groups'), null);
   } finally { view.stop(); }
@@ -168,8 +166,12 @@ test('the Asset name is edited in place, and cancelling restores it', async () =
     assert.equal(field.value, 'Inspection camera');
 
     field.value = 'Changed my mind';
-    await settle(() => view.button('Cancel')!.click());
-    assert.equal(document.querySelector('input[name="name"]'), null, 'the field is gone');
+    // Leaving the field abandons the edit: a small inline rename should not
+    // hold somebody in a decision, and must not save what they walked away
+    // from.
+    // React delivers onBlur through focusout, which is the bubbling one.
+    await settle(() => field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    assert.ok(document.querySelector('input[name="name"]') === null, 'the field is gone');
     assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/,
       'cancelling restores the current value rather than keeping the typed one');
   } finally { view.stop(); }
@@ -193,7 +195,7 @@ test('a rename that changes nothing closes the editor without a mutation', async
   try {
     await settle(() => view.button('Rename Inspection camera')!.click());
     view.field('input[name="name"]')!.value = '   ';
-    await settle(() => view.button('Save')!.click());
+    await settle(() => view.button('Save name')!.click());
     assert.equal(document.querySelector('input[name="name"]'), null,
       'an empty name closes the editor rather than sending a mutation the domain would refuse');
     assert.match(document.querySelector('h1')?.textContent ?? '', /Inspection camera/);
@@ -214,7 +216,7 @@ test('a refused rename keeps the field open, says why, and does not pretend it s
   try {
     await settle(() => view.button('Rename Inspection camera')!.click());
     view.field('input[name="name"]')!.value = 'Taken name';
-    await settle(() => view.button('Save')!.click());
+    await settle(() => view.button('Save name')!.click());
     await settle();
 
     const field = view.field('input[name="name"]');
@@ -325,5 +327,48 @@ test('each scheme states its meaning once', async () => {
     // The scheme description already says what it identifies, so appending the
     // level said it twice.
     assert.equal(help.match(/identifies this Asset/gi)?.length, 1, help);
+  } finally { view.stop(); }
+});
+
+test('issuing offers only what Kannabi could actually issue for this Asset', async () => {
+  // The Asset is already an instance of one trade item, and the only managed
+  // GTIN names a different one. Serialising it would be refused at the
+  // boundary, so it is never offered.
+  const carried = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
+    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
+  const view = render({ identifiers: [carried] }, {
+    namespaces: [],
+    classKeys: [{ key: 'k', namespaceKey: 'n', gcp: '9520123', scheme: 'gtin' as const,
+      canonical: '(01)09520123000004' }],
+  });
+  try {
+    const add = [...document.querySelectorAll('summary')]
+      .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
+    await settle(() => add.querySelector('summary')!.click());
+    const panel = add.querySelector('[role="tabpanel"]')!;
+    // No selector offering something that cannot work, and no submit.
+    assert.ok(panel.querySelector('button[type="submit"]') === null,
+      'a choice that cannot succeed is not presented and then refused');
+    assert.match(panel.textContent ?? '', /No identifiers can currently be issued for this Asset/);
+    // The reason comes from the boundary rather than being worded again here.
+    assert.match(panel.textContent ?? '', /conflicting GTINs/);
+  } finally { view.stop(); }
+});
+
+test('the same managed GTIN the Asset already carries stays issuable', async () => {
+  const carried = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
+    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
+  const view = render({ identifiers: [carried] }, {
+    namespaces: [],
+    classKeys: [{ key: 'k', namespaceKey: 'n', gcp: '0614141', scheme: 'gtin' as const,
+      canonical: '(01)00614141123452' }],
+  });
+  try {
+    const add = [...document.querySelectorAll('summary')]
+      .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
+    await settle(() => add.querySelector('summary')!.click());
+    const panel = add.querySelector('[role="tabpanel"]')!;
+    assert.ok(panel.querySelector('button[type="submit"]'), 'serialising its own GTIN is offered');
+    assert.ok(!/No identifiers can currently be issued/.test(panel.textContent ?? ''));
   } finally { view.stop(); }
 });

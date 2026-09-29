@@ -90,7 +90,7 @@ test('Asset name and visibility submit independently through their own fetchers'
     // field, so neither can write back a value the person never touched.
     await settle(() => view.button('Rename Before')!.click());
     view.field('input[name="name"]')!.value = 'After';
-    await settle(() => view.button('Save')!.click());
+    await settle(() => view.button('Save name')!.click());
     await settle();
     assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After' } }]);
     // Visibility is a switch whose state is also written out beside it. Use

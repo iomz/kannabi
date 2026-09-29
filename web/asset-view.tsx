@@ -332,24 +332,24 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         for the identifiers above rather than the subject of the page. */}
     <Section title="Details">
       <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
-        {/* A symmetric pair. "Public — read access" against "Private — Group
-            access" named two different things — what may be read, and how
-            authorization is derived — so the two states did not read as one
-            binary. Both ends are now labelled, the active one is the switch's
-            own state, and the consequence moved into the help. */}
+        {/* `isPublic` is one boolean property of the Asset, which is exactly
+            what a switch is for: the enabled state of one thing, announced as
+            "Public, switch, on". Presenting it as Private/Public either side of
+            the control read as a choice between two peer values and made the
+            switch look like a segmented selector, which is a different
+            primitive for a different shape of data. The label names the
+            property; the switch carries the state, by position rather than by
+            colour; the consequence is in the help. */}
         <dt className="flex items-center gap-1">Visibility
           <HelpTip label="About visibility">Public Assets can be read by anyone with their
             address. Editing still requires Group access.</HelpTip>
         </dt>
-        <dd className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {canEdit ? <>
-            <span className={asset.isPublic ? 'text-muted-foreground' : 'font-[550]'}>Private</span>
-            <Switch name="isPublic" checked={asset.isPublic} disabled={visibilityBusy}
-              label="Public" labelHidden
+        <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {canEdit
+            ? <Switch name="isPublic" checked={asset.isPublic} disabled={visibilityBusy}
+              label="Public" className="mb-0"
               onCheckedChange={(next) => visibility.submit({ ...identity, intent: 'visibility',
                 isPublic: String(next) }, { method: 'post' })} />
-            <span className={asset.isPublic ? 'font-[550]' : 'text-muted-foreground'}>Public</span>
-          </>
             : <span>{asset.isPublic ? 'Public' : 'Private'}</span>}
           {visibilityResult?.error && <span role="alert">{visibilityResult.error}</span>}
         </dd>
