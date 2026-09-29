@@ -111,8 +111,12 @@ test('an identifier mutation leaves an address that no longer serves the Asset',
   const sgtinPath = '/01/00614141123452/21/A1B2';
 
   /** Every mutation answers with the Asset as it stands afterwards. */
-  const respondWith = (identifiers: unknown[]) => {
-    globalThis.fetch = async () => new Response(JSON.stringify({ asset: { id, identifiers } }),
+  // Mutation responses carry issuances as well as identifiers, because the
+  // real endpoints do and the issuance branch reads them to name what it just
+  // produced.
+  const respondWith = (identifiers: unknown[], issuances: unknown[] = []) => {
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ asset: { id, identifiers, issuances } }),
       { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   const detach = () => {

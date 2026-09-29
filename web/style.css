@@ -107,6 +107,16 @@
   --animate-photo-reveal: photo-reveal .2s ease-out;
   @keyframes photo-reveal { from { opacity: 0; } to { opacity: 1; } }
 
+  /* Something that has just been created, where the reader was already
+     looking. It settles rather than persisting, because the highlight says
+     "this is the new one" and then stops saying anything. */
+  --animate-arrival: arrival 1.6s ease-out;
+  @keyframes arrival {
+    from { opacity: 0; transform: translateY(-.35rem); }
+    15% { opacity: 1; transform: translateY(0); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

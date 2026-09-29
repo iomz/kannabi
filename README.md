@@ -174,7 +174,7 @@ A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GS1 id
 Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
 General Specifications 26.0 §1.5 states that a licensed GS1 Company Prefix entitles its holder to allocate any GS1 identification key, which is why one namespace serves all three schemes below.
 
-Four operations stay permanently distinct:
+Four operations stay permanently distinct, and the UI keeps them distinct too — each has its own control, because collapsing two of them into one form where an empty field meant "allocate" hid exactly the difference the domain protects:
 
 ```text
 record existing identifier   an observation. No authority required, none claimed, none conferred.
@@ -344,6 +344,9 @@ Selection is Kannabi presentation policy rather than GS1 policy: the standard ex
 
 Detaching the surfaced identifier changes the surfaced URI and nothing else.
 
+The Asset page leads with its identifiers, because that is the identity the page is about; access and provenance follow under **Details**, and collaboration below them.
+Each card shows the scheme, the value and its provenance, with what the scheme identifies available from the scheme name rather than spelled out beside the provenance badge, where two statements of different kinds read as one.
+
 The native Asset URI is shown on the Asset page only when **Show Kannabi ID** is enabled in `/admin/settings`, because it is the UUIDv7 spelled as a URL and one setting governs both.
 Hiding it is presentation alone: the address still resolves, still redirects, and remains what internal references and the API use.
 A surfaced Digital Link URI is unaffected by the setting.
@@ -455,7 +458,7 @@ An administrator can identify Groups with no controller through `GET /api/admin/
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
 An Asset can have several collaboration Groups while keeping one Asset ID and one inventory entry.
-On the Asset page, **Manage collaboration** lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
+On the Asset page, **Manage collaboration** — a disclosure below the identifiers, closed until it is asked for, because changing who collaborates is an occasional act while the Groups themselves are already stated in **Details** — lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
 Control of the receiving Group supplies its consent; belonging to both Groups alone is insufficient.
 This bounded workflow requires one User with both control authorities; there is no invitation/acceptance workflow between separate controllers.
 A controller with current Group-derived Asset access can remove the Group they control, including the Group initially selected when reporting.

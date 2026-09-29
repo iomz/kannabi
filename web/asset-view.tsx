@@ -79,7 +79,8 @@ export async function loadAsset(id: string, request: Request) {
 const submissionFields = new Set(['intent', 'assetId', 'at']);
 
 /** An Asset as a mutation response returns it, which is all a transition needs. */
-type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[] };
+type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[];
+  issuances: readonly { scheme: string; canonical: string }[] };
 
 /** Leave an address that no longer serves this Asset.
  *
@@ -181,8 +182,13 @@ export async function submitAsset(request: Request) {
           : scheme === 'sgtin'
             ? await api.assets[':id'].sgtin.$post({ param: { id }, json: { namespaceKey, classKeyKey } })
             : await api.assets[':id'].giai.$post({ param: { id }, json: { namespaceKey } }));
+      // Which value this issuance produced, so the card for it can be picked
+      // out where the reader was already looking. Only meaningful when the
+      // viewer stays: a transition is a navigation, and the page it lands on
+      // shows the identifiers directly under the header anyway.
+      const issued = asset.issuances.find((issuance) => issuance.scheme === scheme)?.canonical ?? null;
       return transition(asset, 'Identifier issued', at)
-        ?? { kind, saved: true as const, error: null, photoKey: null };
+        ?? { kind, saved: true as const, error: null, photoKey: null, issued };
     }
     await unwrap(await api.assets[':id'].$patch({ param: { id }, json: {
       name: String(data.get('name') ?? ''), isPublic: data.get('isPublic') === 'on',
@@ -238,6 +244,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
   const identifierBusy = identifiers.state !== 'idle';
   const issueResult = issue.data?.kind === 'issue-identifier' ? issue.data : null;
+  // The value just issued, while it is still the newest thing on the page.
+  const justIssued = issueResult?.saved ? issueResult.issued ?? null : null;
   const issueBusy = issue.state !== 'idle';
   const uploadBusy = upload.state !== 'idle';
   const editBusy = edit.state !== 'idle';
@@ -269,23 +277,15 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       {authenticated ? <Badge variant={asset.isPublic ? 'brand' : 'secondary'}>{asset.isPublic ? 'Public' : 'Group access'}</Badge>
         : <Button render={<Link to="/signin" />}>Sign in</Button>}
     </PageHeading>
-    <Panel><h2>Asset identity</h2><dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-[.2rem_0]">
-      {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
-      <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
-      <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
-      <dt>Collaboration Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
-      <dt>Reported by</dt><dd><ReporterAttribution reporter={asset.reportedBy}
-        link={canViewReporterProfile} /></dd>
-      <dt>Reported at</dt><dd><time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time> ({settings.displayTimezone})</dd>
-    </dl><AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
-      showNativeUri={settings.showAssetId} /></Panel>
-    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
-      busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
-      onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
-        intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
+    {/* Identity first, and identity means the identifiers. What used to sit
+        here under that heading was mostly access and provenance metadata,
+        which is worth reading once; the identifiers are the material a person
+        comes to this page for, so they no longer wait below it. */}
     <Panel><h2>Identifiers</h2>
+      <AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
+        showNativeUri={settings.showAssetId} />
       <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
-        digitalLinks={digitalLinks}
+        digitalLinks={digitalLinks} justIssued={justIssued}
         showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
         onDetach={(key) => identifiers.submit({ ...identity, intent: 'detach-identifier', identifierKey: key },
           { method: 'post' })} />
@@ -302,6 +302,26 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           error={identifierResult?.error ?? null} />
       </identifiers.Form>}
     </Panel>
+    {/* Access and provenance, compressed to one line per fact. It is context
+        for the identifiers above rather than the subject of the page. */}
+    <Panel><h2>Details</h2>
+      <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
+        <dt>Visibility</dt><dd>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</dd>
+        <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
+        <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
+        <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
+          link={canViewReporterProfile} />{' · '}
+        <time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time>
+          {' '}({settings.displayTimezone})</dd>
+        {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
+      </dl>
+    </Panel>
+    {/* Below the identifiers and closed by default: managing who collaborates
+        is an occasional administrative act, not what the page is about. */}
+    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
+      busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
+      onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
+        intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />
     <Panel><h2>Photos</h2>
       {!asset.photos.length && <p>No photos yet.</p>}
       <div className="mb-6 flex flex-wrap gap-4">{asset.photos.map((photo, index) => <div key={photo.key}

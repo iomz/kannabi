@@ -1,17 +1,44 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import {
   identifierSchemes, levelLabels, schemeDescriptions, schemeInputs, schemeLabels,
-  type IdentifierScheme,
+  type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
 import { Icon } from './icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ActionRow, Field, Hint, NativeSelect } from './ui';
 
-export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, onDetach }: {
+/** The scheme, with what it identifies available on demand.
+ *
+ * The level is what a reader needs occasionally and never needs twice, so it
+ * sits behind the scheme name instead of beside the provenance badge. Both
+ * were sentences of different kinds — what this identifier means, and where it
+ * came from — and set side by side they read as one run-on phrase.
+ *
+ * A tooltip rather than `title`: Base UI opens it on focus as well as hover,
+ * so the explanation is reachable by keyboard, and the trigger keeps an
+ * accessible name of its own.
+ */
+function SchemeName({ scheme, level }: { scheme: IdentifierScheme; level: IdentifierLevel }) {
+  return <Tooltip>
+    <TooltipTrigger
+      className="cursor-help font-semibold underline decoration-dotted decoration-from-font underline-offset-[.2em]"
+      render={<span />}>
+      {schemeLabels[scheme]}
+    </TooltipTrigger>
+    <TooltipContent>{schemeDescriptions[scheme]}. {levelLabels[level]}.</TooltipContent>
+  </Tooltip>;
+}
+
+export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, justIssued, onDetach }: {
   identifiers: readonly AttachedIdentifier[];
+  /** The canonical form of an identifier issued a moment ago, highlighted so a
+   * successful issuance is visible where the reader was already looking. */
+  justIssued?: string | null;
   /** Kannabi's own issuance records for this Asset, at most one per scheme.
    * An identifier is Kannabi-issued when one of these carries its canonical
    * form — never because its digits fall inside a managed prefix. */
@@ -32,13 +59,15 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
     // form, so nothing here compares a scheme-specific component.
     const issued = issuances.find((issuance) => issuance.canonical === identifier.canonical) ?? null;
     return <li key={identifier.key}
-      className="relative rounded-lg border bg-muted py-[.85rem] pr-12 pl-4">
+      className={'relative rounded-lg border bg-muted py-[.85rem] pr-12 pl-4'
+        + (justIssued === identifier.canonical
+          ? ' animate-arrival ring-2 ring-brand/45 motion-reduce:animate-none' : '')}>
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <strong>{schemeLabels[identifier.scheme]}</strong>
-        <Badge variant={identifier.level === 'individual' ? 'brand' : 'secondary'}>
-          {levelLabels[identifier.level]}
-        </Badge>
+        {/* The scheme carries its own explanation rather than spelling the
+            level out beside the provenance badge, where two sentences of
+            different kinds ran together. */}
+        <SchemeName scheme={identifier.scheme} level={identifier.level} />
         <Badge variant={issued ? 'brand' : 'outline'}>
           {issued ? 'Issued by Kannabi' : 'Recorded existing'}</Badge>
       </div>
@@ -115,9 +144,14 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
     {detached.map((issuance) => <Hint key={issuance.key}>Kannabi-issued <code>{issuance.canonical}</code> is
       not currently recorded on this Asset. It stays bound to this Asset in the issuance ledger and is never reissued elsewhere.</Hint>)}
     {!available.length
-      ? <Hint>Kannabi has nothing further to issue for this Asset. A prefix must be managed by a
-        collaborating Group you belong to and be active, and a serialised GRAI or an SGTIN also needs
-        an active managed class key in it. Manage prefixes and class keys from Groups.</Hint>
+      ? <Hint>{issued.size >= issuanceOptions.length
+        ? 'Kannabi has issued every identifier it can for this Asset.'
+        : namespaces.length === 0
+          ? <>Kannabi can issue nothing for this Asset yet: no collaborating Group you belong to has an
+            active GS1 Company Prefix. <Link to="/groups">Configure one under Groups</Link>, then come back.</>
+          : <>A serialised GRAI or an SGTIN is issued under a managed class key, and this Asset’s
+            prefixes have no active one yet. <Link to="/groups">Allocate or adopt a class key under
+            Groups</Link>, then come back to issue from it.</>}</Hint>
       : <fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="issue-identifier" />
         <input type="hidden" name="scheme" value={scheme} />

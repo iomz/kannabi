@@ -8,7 +8,7 @@ import type { Route } from './+types/groups';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Field, Hint, NativeSelect, PageHeading, Panel, StatusPill } from '../ui';
+import { ActionRow, Field, Hint, NativeSelect, PageHeading, Panel, StatusPill } from '../ui';
 
 /** A class key together with the namespace it belongs to, which the flat list
  * the loader returns needs in order to group them again. */
@@ -33,7 +33,10 @@ export async function clientLoader() {
   return { user, groups, controlledGroups, namespaces, classKeys };
 }
 type GroupAction = { intent: string; groupKey: string | null;
-  status: 'added' | 'already-member' | 'error'; message: string };
+  status: 'added' | 'already-member' | 'error' | 'saved'; message: string;
+  /** The record this submission created, so the row for it can be picked out
+   * where the reader was already working. */
+  createdKey?: string };
 
 export async function clientAction({ request }: Route.ClientActionArgs): Promise<Response | GroupAction> {
   const data = await request.formData();
@@ -63,19 +66,25 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
           json: { gcp: text('gcp'), giaiExclusions: parseExclusionRanges(text('giaiExclusions')) } }));
         notify('GS1 Company Prefix configured');
         break;
-      case 'class-key': {
-        // Supplying a value is what makes this an adoption. Leaving it empty
-        // asks Kannabi to allocate the next reference, and the record it
-        // writes says which of the two happened.
+      // Allocating and adopting are separate intents, because they are
+      // separate assertions: one asks Kannabi to produce a reference, the
+      // other tells it that this Group already produced one elsewhere. The
+      // API is a single operation whose recorded provenance says which
+      // happened; the two intents keep the choice explicit rather than
+      // inferring it from whether a field was left blank.
+      case 'class-key-allocate':
+      case 'class-key-adopt': {
         const scheme = text('scheme');
+        const adopting = intent === 'class-key-adopt';
         const existing = text('value');
-        await unwrap(await api['gs1-namespaces'][':key']['class-keys'].$post({
+        if (adopting && !existing) throw new Error('Enter the key this Group already allocated');
+        const { classKey } = await unwrap(await api['gs1-namespaces'][':key']['class-keys'].$post({
           param: { key: text('namespaceKey') },
           json: { scheme,
-            ...(existing ? scheme === 'gtin' ? { gtin: existing } : { assetType: existing } : {}),
+            ...(adopting ? scheme === 'gtin' ? { gtin: existing } : { assetType: existing } : {}),
             serialExclusions: parseExclusionRanges(text('serialExclusions')) } }));
-        notify(existing ? 'Class key adopted' : 'Class key allocated');
-        break;
+        notify(adopting ? 'Class key adopted' : 'Class key allocated');
+        return { intent, groupKey, status: 'saved', message: '', createdKey: classKey.key };
       }
       case 'class-key-active':
         await unwrap(await api['gs1-namespaces'][':key']['class-keys'][':classKeyKey'].$patch({
@@ -91,7 +100,12 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
 
       default: throw new Error('Unknown action');
     }
-    return redirect('/groups');
+    // Data rather than a redirect. A redirect is a second navigation, and it
+    // discards the form's own `preventScrollReset`, which is what threw the
+    // reader back to the top of a long Groups page after every change.
+    // Returning data still revalidates this route's loader, so the lists below
+    // refresh in place.
+    return { intent, groupKey, status: 'saved', message: '' };
   } catch (error) {
     return { intent, groupKey, status: 'error',
       message: error instanceof Error ? error.message : 'Group update failed' };
@@ -101,6 +115,8 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
   const busy = useNavigation().state !== 'idle';
   const controlledKeys = new Set(controlledGroups.map((group) => group.key));
   const controlledOnly = controlledGroups.filter((group) => !groups.some((memberGroup) => memberGroup.key === group.key));
+  // The class key this submission just created, while it is still the newest.
+  const justAdded = actionData?.status === 'saved' ? actionData.createdKey ?? null : null;
   return <>
     <PageHeading eyebrow="Collaboration" title="Groups"
       description="Manage the people you share Asset access with." />
@@ -108,7 +124,7 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
       <Panel>
         <h2>Your Groups</h2>
         <Hint className="mb-4">Your member key: <code>{user.key}</code>. Share it with a Group controller to be added.</Hint>
-        <Form method="post" className={inlineForm}><input type="hidden" name="intent" value="group" />
+        <Form method="post" preventScrollReset className={inlineForm}><input type="hidden" name="intent" value="group" />
           <Field label="New Group name"><Input name="name" required /></Field>
           <Button type="submit" disabled={busy}>Create Group</Button>
         </Form>
@@ -117,9 +133,9 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
           className="mt-5 border-t pt-5 [&>summary]:mb-4 [&>summary]:cursor-pointer [&>summary]:font-semibold">
           <summary>{group.name}</summary>
           {controlledKeys.has(group.key) && <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />}
-          <Gs1Namespaces groupKey={group.key} busy={busy} classKeys={classKeys}
+          <Gs1Namespaces groupKey={group.key} busy={busy} classKeys={classKeys} justAdded={justAdded}
             namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
-          <Form method="post"><input type="hidden" name="groupKey" value={group.key} />
+          <Form method="post" preventScrollReset><input type="hidden" name="groupKey" value={group.key} />
             <Hint className="mb-3">Leaving removes your access to this Group’s private Assets, including those you reported.</Hint>
             <Button type="submit" name="intent" value="leave" disabled={busy} variant="outline">Leave Group</Button>
           </Form>
@@ -140,7 +156,7 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   const form = useRef<HTMLFormElement>(null);
   const result = actionData?.intent === 'member' && actionData.groupKey === groupKey ? actionData : null;
   useEffect(() => { if (result?.status === 'added') form.current?.reset(); }, [result]);
-  return <Form ref={form} method="post" className={inlineForm}>
+  return <Form ref={form} method="post" preventScrollReset className={inlineForm}>
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
     <Field label="Member key" hint="Adding a member lets them view and edit this Group’s private Assets and currently grants namespace access.">
       <Input name="userKey" required /></Field>
@@ -152,8 +168,9 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   </Form>;
 }
 
-function Gs1Namespaces({ groupKey, namespaces, classKeys, busy }: {
+function Gs1Namespaces({ groupKey, namespaces, classKeys, busy, justAdded }: {
   groupKey: string; namespaces: Gs1Namespace[]; classKeys: ManagedClassKey[]; busy: boolean;
+  justAdded: string | null;
 }) {
   return <div className="my-4">
     <h3 className="mt-0 mb-1 text-[.95rem]">GS1 Company Prefixes</h3>
@@ -181,17 +198,17 @@ function Gs1Namespaces({ groupKey, namespaces, classKeys, busy }: {
                 + ` · next ${namespace.gtinFormat} item reference ${namespace.counters.gtinItem.nextSequence}`
               : ' · too long for a class reference, so GIAI only'}</Hint>}
         </div>
-        <Form method="post">
+        <Form method="post" preventScrollReset>
           <input type="hidden" name="intent" value="namespace-active" />
           <input type="hidden" name="namespaceKey" value={namespace.key} />
           <input type="hidden" name="active" value={namespace.active ? 'false' : 'true'} />
           <Button type="submit" variant="outline" size="sm" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</Button>
         </Form>
         {namespace.classKeyIssuable
-          && <ClassKeys namespaceKey={namespace.key} classKeys={classKeys
+          && <ClassKeys namespaceKey={namespace.key} justAdded={justAdded} classKeys={classKeys
             .filter((classKey) => classKey.namespaceKey === namespace.key)} busy={busy} />}
       </li>)}</ul>}
-    <Form method="post" className={inlineForm}>
+    <Form method="post" preventScrollReset className={inlineForm}>
       <input type="hidden" name="intent" value="namespace" />
       <input type="hidden" name="groupKey" value={groupKey} />
       <Field label="GS1 Company Prefix"
@@ -213,8 +230,10 @@ function Gs1Namespaces({ groupKey, namespaces, classKeys, busy }: {
  * allocation record and nothing more — Kannabi holds no product data for it,
  * and giving it a label would make it look like master data it is not.
  */
-function ClassKeys({ namespaceKey, classKeys, busy }: {
+function ClassKeys({ namespaceKey, classKeys, busy, justAdded }: {
   namespaceKey: string; classKeys: ManagedClassKey[]; busy: boolean;
+  /** The key added a moment ago, highlighted where the reader was working. */
+  justAdded: string | null;
 }) {
   return <div className="basis-full">
     <Hint className="mb-2">Class keys under this prefix. Kannabi issues SGTIN serials under a managed
@@ -222,7 +241,9 @@ function ClassKeys({ namespaceKey, classKeys, busy }: {
       is not managed here and cannot be serialised.</Hint>
     {!classKeys.length ? <p className="my-2 text-[.85rem]">None yet.</p>
       : <ul className="my-2 grid gap-2">{classKeys.map((classKey) => <li key={classKey.key}
-        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-[.7rem] py-[.5rem]">
+        className={'flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-[.7rem] py-[.5rem]'
+          + (justAdded === classKey.key
+            ? ' animate-arrival ring-2 ring-brand/45 motion-reduce:animate-none' : '')}>
         <div className="flex flex-wrap items-center gap-2">
           <code>{classKey.canonical}</code>
           <Badge variant="secondary">{classKey.scheme === 'gtin' ? 'GTIN' : 'GRAI asset type'}</Badge>
@@ -234,7 +255,7 @@ function ClassKeys({ namespaceKey, classKeys, busy }: {
             {classKey.serial.exclusions.length
               ? ` · existing use ${formatExclusionRanges(classKey.serial.exclusions)}` : ''}</Hint>
         </div>
-        <Form method="post">
+        <Form method="post" preventScrollReset>
           <input type="hidden" name="intent" value="class-key-active" />
           <input type="hidden" name="namespaceKey" value={namespaceKey} />
           <input type="hidden" name="classKeyKey" value={classKey.key} />
@@ -243,21 +264,44 @@ function ClassKeys({ namespaceKey, classKeys, busy }: {
             {classKey.active ? 'Deactivate' : 'Reactivate'}</Button>
         </Form>
       </li>)}</ul>}
-    <Form method="post" className={inlineForm}>
-      <input type="hidden" name="intent" value="class-key" />
-      <input type="hidden" name="namespaceKey" value={namespaceKey} />
-      <Field label="Class key"><NativeSelect name="scheme">
-        <option value="gtin">GTIN — a trade item this Group allocates for</option>
-        <option value="grai">GRAI asset type — a series of identical returnable assets</option>
-      </NativeSelect></Field>
-      <Field label="Existing value (optional)"
-        hint="Leave empty and Kannabi allocates the next reference from this prefix. Enter a value this Group already allocated elsewhere to adopt it instead, so Kannabi may issue serials under it; adoption records that Kannabi did not allocate it.">
-        <Input name="value" inputMode="numeric" /></Field>
-      <Field label="Already-used serials"
-        hint="Optional. Decimal serials already issued under this class key elsewhere.">
-        <Input name="serialExclusions" placeholder="1-100" /></Field>
-      <Button type="submit" disabled={busy}>Add class key</Button>
-    </Form>
+    {/* Two actions, because they are two assertions. Allocating asks Kannabi
+        to produce the next reference from this prefix. Adopting tells Kannabi
+        that this Group already produced one elsewhere, and hands it only the
+        serial space underneath. Collapsing them into one form where an empty
+        field meant "allocate" hid exactly the distinction the domain keeps. */}
+    <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <Form method="post" preventScrollReset
+        className="rounded-lg border border-dashed p-4 [&_label]:m-0">
+        <input type="hidden" name="intent" value="class-key-allocate" />
+        <input type="hidden" name="namespaceKey" value={namespaceKey} />
+        <h5 className="mt-0 mb-1 text-[.85rem] font-semibold">Allocate a new key</h5>
+        <Hint className="mb-3">Kannabi takes the next reference from this prefix and records that it
+          allocated it.</Hint>
+        <Field label="Kind"><NativeSelect name="scheme">
+          <option value="gtin">GTIN — a trade item this Group allocates for</option>
+          <option value="grai">GRAI asset type — a series of identical returnable assets</option>
+        </NativeSelect></Field>
+        <ActionRow><Button type="submit" disabled={busy}>Allocate</Button></ActionRow>
+      </Form>
+      <Form method="post" preventScrollReset
+        className="rounded-lg border border-dashed p-4 [&_label]:m-0">
+        <input type="hidden" name="intent" value="class-key-adopt" />
+        <input type="hidden" name="namespaceKey" value={namespaceKey} />
+        <h5 className="mt-0 mb-1 text-[.85rem] font-semibold">Adopt a key you already allocated</h5>
+        <Hint className="mb-3">For a key this Group allocated elsewhere. Kannabi records that it did
+          not allocate it and manages only its serials.</Hint>
+        <Field label="Kind"><NativeSelect name="scheme">
+          <option value="gtin">GTIN</option>
+          <option value="grai">GRAI asset type</option>
+        </NativeSelect></Field>
+        <Field label="Its value" hint="Must lie inside this prefix.">
+          <Input name="value" inputMode="numeric" required /></Field>
+        <Field label="Serials already used"
+          hint="Optional. Decimal serials issued under it elsewhere, which Kannabi must never repeat.">
+          <Input name="serialExclusions" placeholder="1-100" /></Field>
+        <ActionRow><Button type="submit" variant="outline" disabled={busy}>Adopt</Button></ActionRow>
+      </Form>
+    </div>
   </div>;
 }
 

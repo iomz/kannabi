@@ -155,14 +155,89 @@ test('explicit submit buttons preserve validation, submitter data, and non-submi
   } finally { view.stop(); }
 });
 
-test('issuance empty state describes actor eligibility rather than a single Asset Group', () => {
-  const view = mount(createElement(IssueIdentifier, { namespaces: [], classKeys: [],
-    issuances: [], identifiers: [], busy: false, error: null }));
+/** The empty state links to where the missing thing is created, so it needs a
+ * router. Rendered through one rather than avoiding the link: a first-time
+ * reader should not have to discover Groups on their own. */
+function issuanceState(props: Parameters<typeof IssueIdentifier>[0]) {
+  return createMemoryRouter([{ path: '/', element: createElement(IssueIdentifier, props) }],
+    { initialEntries: ['/'] });
+}
+
+test('allocating and adopting a class key stay separate assertions in the UI', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { path: string; method: string; body: unknown }[] = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ path: String(input), method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response(JSON.stringify({ classKey: { key: 'created' } }),
+      { headers: { 'Content-Type': 'application/json' } });
+  };
+  const router = createMemoryRouter([{ path: '/groups',
+    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
+      controlledGroups: [group], namespaces: [namespaces[0]], classKeys: [] } } as never),
+    action: (args) => groupAction(args as never),
+  }], { initialEntries: ['/groups'] });
+  const view = mount(createElement(RouterProvider, { router }));
   try {
-    assert.match(view.text(), /Kannabi has nothing further to issue for this Asset/);
-    assert.match(view.text(), /collaborating Group you belong to/);
-    assert.equal(view.button('Issue GIAI'), null);
-  } finally { view.stop(); }
+    document.querySelector('details')!.open = true;
+    await settle();
+    // Two distinct controls, not one form whose meaning turns on an empty field.
+    const allocate = view.button('Allocate');
+    const adopt = view.button('Adopt');
+    assert.ok(allocate, 'allocation is its own action');
+    assert.ok(adopt, 'adoption is its own action');
+    assert.notEqual(allocate!.form, adopt!.form, 'and they are separate forms');
+
+    // Allocating asks Kannabi to produce a reference: it sends no value.
+    await settle(() => allocate!.click());
+    await settle();
+    assert.deepEqual(calls.at(-1), { path: '/api/gs1-namespaces/active/class-keys', method: 'POST',
+      body: { scheme: 'gtin', serialExclusions: [] } });
+
+    // Adopting asserts a key this Group already allocated: it sends the value,
+    // and the scheme decides which field of the GS1 boundary it lands in.
+    const value = adopt!.form!.querySelector<HTMLInputElement>('[name="value"]')!;
+    value.value = '0614141000012';
+    await settle(() => adopt!.click());
+    await settle();
+    assert.deepEqual(calls.at(-1), { path: '/api/gs1-namespaces/active/class-keys', method: 'POST',
+      body: { scheme: 'gtin', gtin: '0614141000012', serialExclusions: [] } });
+
+    // Adoption without a value never reaches the API. The browser's own
+    // validation stops it, which is the right control for a missing required
+    // field; the action keeps a guard of its own for callers that are not a
+    // browser form.
+    const before = calls.length;
+    value.value = '';
+    assert.equal(value.required, true);
+    assert.equal(value.validity.valueMissing, true);
+    await settle(() => adopt!.click());
+    await settle();
+    assert.equal(calls.length, before, 'no request for an adoption with nothing to adopt');
+  } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
+});
+
+test('the issuance empty state says what is missing and links to where it is created', () => {
+  // No prefix at all: the Group has nothing to issue from.
+  const noPrefix = issuanceState({ namespaces: [], classKeys: [],
+    issuances: [], identifiers: [], busy: false, error: null });
+  const first = mount(createElement(RouterProvider, { router: noPrefix }));
+  try {
+    assert.match(first.text(), /no collaborating Group you belong to has an\s+active GS1 Company Prefix/);
+    assert.equal(document.querySelector('a[href="/groups"]')?.textContent,
+      'Configure one under Groups');
+    assert.equal(first.button('Issue GIAI'), null);
+  } finally { first.stop(); noPrefix.dispose(); }
+
+  // A prefix but no class key: GIAI is offered, and the class-level schemes
+  // say where their prerequisite comes from instead of silently vanishing.
+  const noClassKey = issuanceState({ namespaces: [{ key: 'eligible', gcp: '0614141' }],
+    classKeys: [], issuances: [], identifiers: [], busy: false, error: null });
+  const second = mount(createElement(RouterProvider, { router: noClassKey }));
+  try {
+    assert.ok(second.button('Issue GIAI'), 'a GIAI needs no class key');
+    assert.doesNotMatch(second.text(), /Allocate or adopt a class key/);
+  } finally { second.stop(); noClassKey.dispose(); }
 });
 
 test('generic identifier form explicitly records existing external identifiers only', async () => {
