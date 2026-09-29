@@ -183,14 +183,19 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.asset, expected);
-      // The native Asset id, issuance provenance and change provenance all
-      // belong to the legitimate public representation: allocation provenance
-      // is ledger-derived, so no identifier carries an origin flag of its own,
-      // and change provenance is attribution of the same kind as reportedBy.
-      // Publication is a whole-Asset decision, so none of it is filtered here.
+      // The native Asset id, issuance provenance, change provenance and the
+      // source record all belong to the legitimate public representation:
+      // allocation provenance is ledger-derived, so no identifier carries an
+      // origin flag of its own; change provenance is attribution of the same
+      // kind as reportedBy; and a source record is attribution too, quoted
+      // rather than Kannabi's own. Publication is a whole-Asset decision, so
+      // none of it is filtered here. A deployment that would not publish what
+      // a source record quotes chooses that when it publishes the Asset, and
+      // the reference grammar keeps prose, secrets and personal data out of
+      // the reference itself.
       assert.deepEqual(Object.keys(result.asset).sort(),
         ['groups', 'id', 'identifiers', 'isPublic', 'issuances', 'name', 'owner', 'photos',
-          'provenance', 'reportedAt', 'reportedBy']);
+          'provenance', 'reportedAt', 'reportedBy', 'sourceRecord']);
       assert.equal('email' in result.asset.provenance.acceptedBy, false);
       assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);

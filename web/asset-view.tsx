@@ -316,6 +316,30 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
       </dl>
     </Panel>
+    {/* Quoted evidence, in a panel of its own.
+        It cannot share the Details list above: set beside "Reported", a source
+        record's own time and recorder read as Kannabi's, which is the one
+        reading this whole capability exists to prevent. The heading, the lead
+        sentence and every label repeat whose statement this is, because a
+        reader who skims sees a date and a name and has to be told, twice,
+        where they came from. */}
+    {asset.sourceRecord && <Panel>
+      <h2>Source record</h2>
+      <Hint className="mb-4">Quoted from the pre-existing record this Asset was created
+        from. Kannabi holds that the source states this — not that it is true, and not as
+        its own reporting of the Asset.</Hint>
+      <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dd]:break-all [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
+        <dt>Source states recorded</dt>
+        <dd>{asset.sourceRecord.recordedAt
+          ? <><time dateTime={asset.sourceRecord.recordedAt}>
+            {displayInstant(asset.sourceRecord.recordedAt, settings.displayTimezone)}</time>
+            {' '}({settings.displayTimezone})</>
+          : 'Not stated by the source'}</dd>
+        <dt>Source states recorded by</dt>
+        <dd>{asset.sourceRecord.recordedBy ?? 'Not stated by the source'}</dd>
+        <dt>Source reference</dt><dd><code>{asset.sourceRecord.reference}</code></dd>
+      </dl>
+    </Panel>}
     {/* Below the identifiers and closed by default: managing who collaborates
         is an occasional administrative act, not what the page is about. */}
     <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
