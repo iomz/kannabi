@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
   identifierSchemes, levelLabels, schemeDescriptions, schemeInputs, schemeLabels,
@@ -9,29 +9,22 @@ import { Icon } from './icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { ActionRow, Field, Hint, NativeSelect } from './ui';
+import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
 
 /** The scheme, with what it identifies available on demand.
  *
- * The level is what a reader needs occasionally and never needs twice, so it
- * sits behind the scheme name instead of beside the provenance badge. Both
- * were sentences of different kinds — what this identifier means, and where it
- * came from — and set side by side they read as one run-on phrase.
- *
- * A tooltip rather than `title`: Base UI opens it on focus as well as hover,
- * so the explanation is reachable by keyboard, and the trigger keeps an
- * accessible name of its own.
+ * The name is the fact and stays plainly readable; what the scheme means and
+ * what level it identifies at is the explanation, and goes where every other
+ * explanation on this page goes. It used to hang off a dotted underline on the
+ * name itself, which asked a reader to discover that the word was also a
+ * control.
  */
 function SchemeName({ scheme, level }: { scheme: IdentifierScheme; level: IdentifierLevel }) {
-  return <Tooltip>
-    <TooltipTrigger
-      className="cursor-help font-semibold underline decoration-dotted decoration-from-font underline-offset-[.2em]"
-      render={<span />}>
-      {schemeLabels[scheme]}
-    </TooltipTrigger>
-    <TooltipContent>{schemeDescriptions[scheme]}. {levelLabels[level]}.</TooltipContent>
-  </Tooltip>;
+  return <span className="inline-flex items-center gap-1">
+    <span className="font-semibold">{schemeLabels[scheme]}</span>
+    <HelpTip label={'About ' + schemeLabels[scheme]}>
+      {schemeDescriptions[scheme]}. {levelLabels[level]}.</HelpTip>
+  </span>;
 }
 
 export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, justIssued, onDetach }: {
@@ -51,9 +44,7 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
   canEdit: boolean; busy: boolean;
   onDetach: (key: string) => void;
 }) {
-  if (!identifiers.length) {
-    return <p>No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>;
-  }
+  if (!identifiers.length) return null;
   return <ul className="mb-6 grid gap-3">{identifiers.map((identifier) => {
     // One rule for every scheme: the ledger row carries the whole canonical
     // form, so nothing here compares a scheme-specific component.
@@ -90,10 +81,13 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
           : <> as reference <code>{issued.sequence}</code>.</>}</p>}
       {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>}
     </div>
-    {canEdit && <Button type="button" variant="outline" size="icon-sm" disabled={busy}
-      className="absolute top-[.6rem] right-[.6rem] bg-card text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive [&_.icon]:size-4"
-      aria-label={'Detach ' + schemeLabels[identifier.scheme] + ' ' + identifier.canonical}
-      onClick={() => onDetach(identifier.key)}><Icon name="trash" /></Button>}
+    {/* An identifier is identity, not a mutable label, so the way to remove one
+        does not sit beside it wearing a destructive box. The warning arrives on
+        hover and focus, and the act itself asks first. */}
+    {canEdit && <IconButton tone="destructive" disabled={busy}
+      className="absolute top-[.5rem] right-[.5rem]"
+      label={'Detach ' + schemeLabels[identifier.scheme] + ' ' + identifier.canonical}
+      onClick={() => onDetach(identifier.key)}><Icon name="trash" /></IconButton>}
     </li>;
   })}</ul>;
 }
@@ -104,7 +98,13 @@ export type IssuableClassKey = {
   key: string; namespaceKey: string; gcp: string; scheme: 'grai' | 'gtin'; canonical: string;
 };
 
-/** What each issuance scheme needs before Kannabi can produce a value. */
+/** What each issuance scheme needs before Kannabi can produce a value.
+ *
+ * Each `hint` describes its own scheme and nothing else. The GIAI sentence
+ * used to stand alone above the control with no stated referent, where it read
+ * as a claim about issuance in general; allocation straight from the company
+ * prefix is true of a GIAI and of neither of the others.
+ */
 const issuanceOptions = [
   { scheme: 'giai' as const, label: 'GIAI', classScheme: null,
     hint: 'Allocated straight from the company prefix. Identifies this Asset as an individual asset.' },
@@ -155,14 +155,19 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
       : <fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="issue-identifier" />
         <input type="hidden" name="scheme" value={scheme} />
-        {available.length > 1 && <Field label="Identifier to issue" hint={option.hint}>
-          <NativeSelect value={scheme} onChange={(event) =>
-            setScheme(event.target.value as typeof scheme)}>
-            {available.map((entry) =>
-              <option key={entry.scheme} value={entry.scheme}>{entry.label}</option>)}
-          </NativeSelect>
-        </Field>}
-        {available.length === 1 && <Hint>{option.hint}</Hint>}
+        {available.length > 1
+          ? <Field label={<>Choose the identifier scheme
+            <HelpTip label={'About issuing a ' + option.label}>{option.hint}</HelpTip></>}>
+            <NativeSelect value={scheme} onChange={(event) =>
+              setScheme(event.target.value as typeof scheme)}>
+              {available.map((entry) =>
+                <option key={entry.scheme} value={entry.scheme}>{entry.label}</option>)}
+            </NativeSelect>
+          </Field>
+          : <p className="mt-0 mb-4 flex items-center gap-1 text-[.875rem]">
+            {option.label}
+            <HelpTip label={'About issuing a ' + option.label}>{option.hint}</HelpTip>
+          </p>}
         {option.classScheme === null ? (namespaces.length === 1
           ? <input type="hidden" name="namespaceKey" value={namespaces[0].key} />
           : <Field label="GS1 Company Prefix"><NativeSelect name="namespaceKey">
@@ -193,8 +198,11 @@ export function IdentifierForm({ busy, error }: {
   const [scheme, setScheme] = useState<IdentifierScheme>('sgtin');
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="attach-identifier" />
-    <Hint>Record an existing identifier already assigned by an external authority. This form never issues identifiers. Use **Issue GIAI** above to have Kannabi issue a GIAI under an eligible managed prefix.</Hint>
-    <Field label="Identifier scheme">
+    {/* One sentence. That this never issues anything is now said by where the
+        control is rather than by a paragraph repeating it: issuing and
+        recording are two choices a reader picks between. */}
+    <Hint>Record an existing identifier already assigned by an external authority.</Hint>
+    <Field label="Choose the identifier scheme">
       <NativeSelect name="scheme" value={scheme} onChange={(event) => setScheme(event.target.value as IdentifierScheme)}>
         {identifierSchemes.map((value) =>
           <option key={value} value={value}>{schemeLabels[value]} — {schemeDescriptions[value]}</option>)}
@@ -206,6 +214,44 @@ export function IdentifierForm({ busy, error }: {
         inputMode={input.numeric ? 'numeric' : undefined} />
     </Field>)}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button type="submit">{busy ? 'Recording…' : 'Record existing identifier'}</Button></ActionRow>
+    <ActionRow><Button type="submit">{busy ? 'Recording…' : 'Record existing'}</Button></ActionRow>
   </fieldset>;
+}
+
+/** The two ways an identifier arrives, behind one folded heading.
+ *
+ * Both forms used to stand open under the recorded identifiers, so a page
+ * opened to read one Asset presented two sets of fields nobody had asked for.
+ * They are operations, and they wait until somebody wants to perform one.
+ *
+ * The choice comes before either form because the two are not variants of one
+ * act: issuing exercises allocation authority Kannabi holds, recording states
+ * that some other authority already assigned a value. Showing both at once
+ * invited reading them as one form with two submit buttons, and the separation
+ * is what now carries a distinction that used to need a paragraph.
+ *
+ * Radios rather than tabs: this is a choice between two named things, the
+ * browser already groups and labels them, and the selected one is announced.
+ */
+export function AddIdentifier({ issue, record }: { issue: ReactNode; record: ReactNode }) {
+  const [mode, setMode] = useState<'issue' | 'record'>('issue');
+  return <details className="mt-6 [&>summary]:cursor-pointer [&[open]>summary]:mb-4">
+    <summary><SubHeading className="mt-0 mb-0 inline">Add identifier</SubHeading></summary>
+    <fieldset className="mb-5">
+      <legend className="mb-2 text-[.875rem]">How should this identifier be added?</legend>
+      <div className="flex flex-wrap gap-x-5 gap-y-2">
+        {([
+          ['issue', 'Issue new', 'Kannabi allocates a new value under a prefix a collaborating Group manages.'],
+          ['record', 'Record existing', 'A value another authority already assigned to this Asset.'],
+        ] as const).map(([value, label, hint]) => <label key={value}
+          className="flex items-center gap-2 text-[.875rem]">
+          <input type="radio" name="add-identifier-mode" value={value}
+            checked={mode === value} onChange={() => setMode(value)} />
+          {label}
+          <HelpTip label={'About ' + label}>{hint}</HelpTip>
+        </label>)}
+      </div>
+    </fieldset>
+    {mode === 'issue' ? issue : record}
+  </details>;
 }

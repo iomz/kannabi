@@ -61,7 +61,7 @@ test('the page arrives showing what it is for and folds the rest away', () => {
   try {
     // Identity is why someone opens an Asset, so it is the one thing waiting.
     assert.equal(section('Identifiers')?.open, true);
-    for (const folded of ['Details', 'Photos', 'Source record', 'Manage collaboration']) {
+    for (const folded of ['Details', 'Photos', 'Source record', 'Manage Groups']) {
       assert.equal(section(folded)?.open ?? 'missing', false, `${folded} should arrive folded`);
     }
   } finally { view.stop(); }
@@ -108,18 +108,23 @@ test('visibility states itself in words and is changed where it is read', () => 
     const details = section('Details')!;
     assert.match(details.textContent ?? '', /Private — Group access/,
       'the state must be readable as text, not only as the look of a control');
-    assert.ok(view.button('Make public'), 'and changeable from the same place');
-    // Publishing is a property of the Asset, not a Group grant, so the control
-    // does not belong to collaboration management.
-    assert.equal(section('Manage collaboration')!.textContent?.includes('Make public'), false);
+    // A switch carries the change; the words carry the state, so neither has
+    // to be read off the other.
+    const toggle = details.querySelector('[role="switch"]');
+    assert.ok(toggle, 'and changeable from the same place');
+    assert.equal(toggle!.getAttribute('aria-checked'), 'false');
+    // Publishing is a property of the Asset, not a Group association, so the
+    // control does not belong to Group management.
+    assert.equal(section('Manage Groups')!.querySelector('[role="switch"]'), null);
   } finally { view.stop(); }
 });
 
 test('a public Asset offers the opposite change, still in words', () => {
   const view = render({ isPublic: true });
   try {
-    assert.match(section('Details')!.textContent ?? '', /Public — read access/);
-    assert.ok(view.button('Make private'));
+    const details = section('Details')!;
+    assert.match(details.textContent ?? '', /Public — read access/);
+    assert.equal(details.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
   } finally { view.stop(); }
 });
 
@@ -127,9 +132,9 @@ test('a reader who cannot edit is offered neither control', () => {
   const view = render({ sourceRecord }, { canEdit: false });
   try {
     assert.match(section('Details')!.textContent ?? '', /Private — Group access/);
-    assert.equal(view.button('Make public'), null);
+    assert.equal(section('Details')!.querySelector('[role="switch"]'), null);
     assert.equal(view.button(/^Rename/), null);
-    assert.equal(section('Manage collaboration'), null);
+    assert.equal(section('Manage Groups'), null);
   } finally { view.stop(); }
 });
 
@@ -208,4 +213,65 @@ test('a refused rename keeps the field open, says why, and does not pretend it s
     view.stop();
     globalThis.fetch = originalFetch;
   }
+});
+
+test('adding an identifier is folded away, and is a choice before it is a form', async () => {
+  const view = render({}, { namespaces: [{ key: 'n', gcp: '0614141' }] });
+  try {
+    const add = [...document.querySelectorAll('summary')]
+      .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
+    assert.equal(add.open, false, 'operations wait until somebody wants to perform one');
+
+    await settle(() => add.querySelector('summary')!.click());
+    // The choice comes first, because issuing and recording are different
+    // acts with different authority rather than one form with two buttons.
+    assert.match(add.textContent ?? '', /How should this identifier be added\?/);
+    const modes = [...add.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
+    assert.deepEqual(modes.map((radio) => radio.value), ['issue', 'record']);
+    assert.equal(modes[0].checked, true);
+
+    // Only the selected operation's form is present.
+    assert.ok(view.button(/^Issue /), 'issuing is offered');
+    assert.equal(view.field('select[name="scheme"]'), null, 'recording is not also open');
+
+    await settle(() => modes[1].click());
+    assert.ok(view.field('select[name="scheme"]'), 'recording is offered once chosen');
+    assert.equal(view.button(/^Issue /), null, 'and issuing is no longer also open');
+  } finally { view.stop(); }
+});
+
+test('an identifier is not detached until the consequence has been accepted', async () => {
+  const gtin = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
+    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
+  const view = render({ identifiers: [gtin] });
+  try {
+    assert.match(document.body.textContent ?? '', /Recorded IDs/,
+      'identifiers are headed once there are some');
+    await settle(() => view.button(/^Detach GTIN/)!.click());
+    const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]');
+    assert.ok(dialog, 'removing an identity asks first');
+    assert.match(dialog!.textContent ?? '', /will no longer identify this Asset/);
+    assert.ok(view.button('Cancel'), 'and the safe answer is offered');
+  } finally { view.stop(); }
+});
+
+test('an Asset with no identifiers heads no empty group', () => {
+  const view = render();
+  try {
+    assert.doesNotMatch(document.body.textContent ?? '', /Recorded IDs/);
+    assert.match(document.body.textContent ?? '', /No identifiers recorded/);
+  } finally { view.stop(); }
+});
+
+test('explanations are reachable without a mouse rather than standing on the page', async () => {
+  const view = render();
+  try {
+    // The rule about what publishing does is worth reading once.
+    assert.doesNotMatch(document.body.textContent ?? '', /Publishing never grants edit access/);
+    const help = view.button('About visibility')!;
+    assert.ok(help, 'the explanation has an affordance of its own');
+    await settle(() => help.focus());
+    await settle();
+    assert.match(document.body.textContent ?? '', /Publishing never grants edit access/);
+  } finally { view.stop(); }
 });

@@ -36,15 +36,16 @@ test('an identifier card carries scheme, value and provenance, and nothing that 
   } finally { view.stop(); }
 });
 
-test('what a scheme identifies is available on demand from its name', async () => {
+test('what a scheme identifies is available on demand beside its name', async () => {
   const view = list();
   try {
-    // The scheme name is the trigger, and it keeps its own accessible name.
-    const trigger = [...document.querySelectorAll('[data-slot="tooltip-trigger"]')]
-      .find((node) => node.textContent?.trim() === 'GTIN') as HTMLElement | undefined;
-    assert.ok(trigger, 'the scheme name is the affordance');
-    // A portal surface does not exist until it is opened, so open it.
-    await settle(() => trigger!.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    // The name stays plainly readable and the help is a control of its own,
+    // rather than the word itself being a trigger a reader has to discover.
+    const help = view.button('About GTIN');
+    assert.ok(help, 'the scheme carries its own help affordance');
+    assert.match(view.text(), /GTIN/, 'and the name is still just the name');
+    // Reachable without a mouse: a portal surface does not exist until opened.
+    await settle(() => help!.focus());
     await settle();
     const explanation = document.querySelector('[data-slot="tooltip-content"]')?.textContent ?? '';
     assert.match(explanation, /Trade item/);

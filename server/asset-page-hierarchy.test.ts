@@ -50,20 +50,22 @@ test('identifiers come before the access and provenance detail they are read aga
     // The metadata that used to head the page now follows the identifiers.
     assert.ok(at('Details') > at('Identifiers'),
       `expected Details after Identifiers, got ${headings.join(' | ')}`);
-    assert.ok(at('Manage collaboration') > at('Identifiers'));
+    assert.ok(at('Manage Groups') > at('Identifiers'));
     assert.ok(at('Photos') > at('Identifiers'));
   } finally { view.stop(); router.dispose(); }
 });
 
-test('managing collaboration is closed until it is asked for, and the Groups stay readable without it', () => {
+test('managing Groups is closed until it is asked for, and the Groups stay readable without it', () => {
   const { view, router } = render();
   try {
     const details = [...document.querySelectorAll('details')].find((node) =>
-      node.querySelector('summary')?.textContent?.includes('Manage collaboration'));
-    assert.ok(details, 'collaboration is a disclosure rather than an open panel');
+      node.querySelector('summary')?.textContent?.includes('Manage Groups'));
+    assert.ok(details, 'Group management is a disclosure rather than an open panel');
     assert.equal(details.open, false, 'closed by default');
-    // Which Groups collaborate is still stated without opening anything: the
-    // disclosure hides the act of changing them, not the fact.
+    // Which Groups this Asset is associated with is still stated without
+    // opening anything: the disclosure hides the act of changing them, not the
+    // fact. Details itself is folded, so this reads the term rather than the
+    // rendered page text.
     const detailTerms = [...document.querySelectorAll('dt')].map((node) => node.textContent?.trim());
     assert.ok(detailTerms.includes('Groups'));
     assert.match(view.text(), /Workshop/);

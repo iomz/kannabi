@@ -1,5 +1,8 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { cn } from 'cn';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Icon } from './icon';
 
 /** The few compositions that repeat across every screen.
  *
@@ -52,6 +55,65 @@ export function Section({ title, defaultOpen, children, className }: {
   </Panel>;
 }
 
+/** Explanation, on request.
+ *
+ * A page that states a rule beside every fact reads as documentation with
+ * controls embedded in it. The fact or the control is the normal state; the
+ * paragraph explaining it waits behind this.
+ *
+ * Base UI opens a tooltip on focus as well as hover, and the trigger is a real
+ * button with its own accessible name, so the explanation is reachable by
+ * keyboard and announced rather than being a mouse-only flourish.
+ */
+export function HelpTip({ label, children, className }: {
+  /** Names what is being explained, e.g. "About GS1 Digital Link". */
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return <Tooltip>
+    <TooltipTrigger
+      render={<button type="button" aria-label={label} />}
+      className={cn('inline-flex size-7 shrink-0 cursor-help items-center justify-center rounded-md',
+        'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        '[&_.icon]:size-[1.05rem]', className)}>
+      <Icon name="info" />
+    </TooltipTrigger>
+    <TooltipContent className="max-w-80">{children}</TooltipContent>
+  </Tooltip>;
+}
+
+/** An action carried by its glyph alone.
+ *
+ * Reading is the page's normal state, and a bordered button beside every fact
+ * competes with the fact. The chrome arrives on hover and focus instead, so
+ * the control stays discoverable without being loud. The hit target does not
+ * shrink with the border: the visible box goes, the clickable one stays.
+ *
+ * `label` is required rather than optional — an icon with no accessible name
+ * is a button nobody can read.
+ */
+export function IconButton({ label, tone, className, ...props }: ComponentProps<typeof Button> & {
+  label: string;
+  /** `destructive` keeps its warning for hover and focus rather than wearing
+   * it while somebody is only reading. */
+  tone?: 'destructive';
+}) {
+  return <Button type="button" variant="ghost" size="icon-sm" aria-label={label}
+    className={cn('text-muted-foreground [&_.icon]:size-[1.05rem]',
+      tone === 'destructive' && 'hover:bg-destructive/10 hover:text-destructive', className)}
+    {...props} />;
+}
+
+/** A heading inside a Section, for a group that is part of one subject rather
+ * than a subject of its own. */
+export function SubHeading({ className, children, ...props }: ComponentProps<'h3'>) {
+  return <h3 {...props}
+    className={cn('mt-6 mb-3 flex items-center gap-1 text-[.8rem] font-[650] tracking-[.08em] uppercase text-muted-foreground first:mt-0', className)}>
+    {children}
+  </h3>;
+}
+
 /** A small caps label naming what kind of thing this page is about. */
 export function Eyebrow({ className, ...props }: ComponentProps<'p'>) {
   return <p {...props} className={cn('mb-2 text-[.65rem] font-[650] tracking-[.15em] uppercase text-muted-foreground', className)} />;
@@ -68,7 +130,10 @@ export function PageHeading({ eyebrow, title, description, children, className }
   className?: string;
 }) {
   return <div className={cn('mb-8 flex items-center justify-between gap-6', className)}>
-    <div className="min-w-0">
+    {/* The title column takes the width that is going spare, so a title which
+        becomes an editable field fills the line it already occupied rather
+        than shrinking to its content. */}
+    <div className="min-w-0 flex-1">
       {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
       <h1>{title}</h1>
       {description ? <p className="mt-[.65rem] mb-0 text-[.9rem] text-muted-foreground">{description}</p> : null}

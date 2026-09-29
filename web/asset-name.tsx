@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Icon } from './icon';
+import { IconButton } from './ui';
 
 /** The Asset's name, editable where it is read.
  *
@@ -40,21 +41,24 @@ export function AssetName({ name, canEdit, busy, error, onSave }: {
 
   if (!canEdit) return <>{name}</>;
   if (!editing) {
-    return <span className="inline-flex items-baseline gap-2">
+    // The glyph carries the action on its own. A bordered button beside the
+    // title reads as a second heading-sized element and competes with the name
+    // it edits, so the chrome waits for hover and focus.
+    return <span className="inline-flex items-baseline gap-1">
       {name}
-      <Button ref={trigger} type="button" variant="outline" size="icon-sm"
-        className="translate-y-[-.1em] [&_.icon]:size-4"
-        aria-label={'Rename ' + name} onClick={() => setEditing(true)}>
-        <Icon name="pencil" />
-      </Button>
+      <IconButton ref={trigger} label={'Rename ' + name} className="translate-y-[-.1em]"
+        onClick={() => setEditing(true)}><Icon name="pencil" /></IconButton>
     </span>;
   }
-  return <span className="block">
+  // The field takes the width the title had. Editing in place means the line
+  // keeps its size and position; a short input under a large heading reads as
+  // the heading having been replaced by a form.
+  return <span className="block w-full">
     <input ref={input} name="name" defaultValue={name} required disabled={busy}
       aria-label="Asset name"
       // Inherits the heading it stands in, so renaming looks like editing the
       // title rather than filling in a form that happens to be up here.
-      className="w-full rounded-md border bg-card px-2 py-1 font-[inherit] text-[inherit] tracking-[inherit]"
+      className="block w-full rounded-md border bg-card px-2 py-1 font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit]"
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); close(); }
         if (event.key === 'Enter') {

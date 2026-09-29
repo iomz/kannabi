@@ -1,5 +1,5 @@
 import { CopyField } from './copy-field';
-import { Hint } from './ui';
+import { HelpTip, SubHeading } from './ui';
 
 type ClipboardWriter = Pick<Clipboard, 'writeText'>;
 
@@ -27,20 +27,36 @@ export function AssetUri({ surfacedUri, nativeUri, showNativeUri }: {
 }) {
   if (surfacedUri === nativeUri) {
     return showNativeUri
-      ? <CopyField className="mt-5" id="asset-uri" value={nativeUri} label="Asset URI"
-        copyLabel="Copy Asset URI" copiedLabel="Asset URI copied" />
+      ? <div className="grid gap-3">
+        <SubHeading className="mb-0">Asset URI
+          <HelpTip label="About the Asset URI">Kannabi’s stable address for this Asset.
+            This Asset carries no GS1 identity Kannabi surfaces, so this is the address to
+            take away.</HelpTip>
+        </SubHeading>
+        <CopyField id="asset-uri" value={nativeUri} hiddenLabel="Asset URI"
+          copyLabel="Copy Asset URI" copiedLabel="Asset URI copied" />
+      </div>
       : null;
   }
-  return <div className="mt-5 grid gap-3">
-    <CopyField id="asset-uri" value={surfacedUri} label="GS1 Digital Link URI"
+  // The standing explanation moved behind the heading's own help: what a
+  // reader wants here is the address, and what Kannabi does and does not claim
+  // about it is worth reading once rather than every visit.
+  return <div className="grid gap-3">
+    <SubHeading className="mb-0">GS1 Digital Link
+      <HelpTip label="About GS1 Digital Link">Derived from this Asset’s GS1 identity.
+        Kannabi resolves this URI to this Asset. It is not a canonical GS1 Digital Link URI;
+        the standard reserves that term for the <code>id.gs1.org</code> form, which Kannabi
+        never emits.</HelpTip>
+    </SubHeading>
+    <CopyField id="asset-uri" value={surfacedUri} hiddenLabel="GS1 Digital Link URI"
       copyLabel="Copy GS1 Digital Link URI" copiedLabel="GS1 Digital Link URI copied" />
-    <Hint className="mb-0">Derived from this Asset’s GS1 identity. Kannabi resolves it to this Asset;
-      it is not a canonical GS1 Digital Link URI, which the standard reserves for <code>id.gs1.org</code>.</Hint>
     {showNativeUri && <>
-      <CopyField id="native-asset-uri" value={nativeUri} label="Kannabi Asset URI"
+      <SubHeading className="mt-3 mb-0">Kannabi Asset URI
+        <HelpTip label="About the Kannabi Asset URI">Kannabi’s stable address for this Asset.
+          It never changes and stays valid even if the identifier above is detached.</HelpTip>
+      </SubHeading>
+      <CopyField id="native-asset-uri" value={nativeUri} hiddenLabel="Kannabi Asset URI"
         copyLabel="Copy Kannabi Asset URI" copiedLabel="Kannabi Asset URI copied" />
-      <Hint className="mb-0">Kannabi’s stable address for this Asset. It never changes and stays valid
-        even if the identifier above is detached.</Hint>
     </>}
   </div>;
 }

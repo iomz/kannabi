@@ -90,7 +90,8 @@ test('turning on Public access from a Digital Link page reaches the native Asset
   const restore = stubApi(calls);
   const view = renderAtDigitalLink();
   try {
-    await settle(() => view.button('Make public')!.click());
+    // The switch carries the change; the words beside it carry the state.
+    await settle(() => document.querySelector<HTMLInputElement>('input[name="isPublic"]')!.click());
 
     const patch = calls.find((call) => call.method === 'PATCH');
     assert.ok(patch, 'the visibility change was submitted');
@@ -135,6 +136,8 @@ test('an identifier mutation from a Digital Link page addresses the native Asset
   const view = renderAtDigitalLink();
   try {
     await settle(() => view.button(/^Detach SGTIN/)!.click());
+    // Detaching an identity asks first, so the mutation follows the answer.
+    await settle(() => view.button('Detach')!.click());
     const deleted = calls.find((call) => call.method === 'DELETE');
     assert.ok(deleted, 'the identifier was detached');
     assert.match(deleted.path, new RegExp(`^/api/assets/${id}/identifiers/`));

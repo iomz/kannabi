@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { AssetUri, copyAssetUri } from '../web/asset-uri.js';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri.js';
 import { newAssetId } from './asset-id.js';
-import { mount } from './dom-render.js';
+import { mount, settle } from './dom-render.js';
 
 const origin = 'https://kannabi.example';
 
@@ -31,7 +31,7 @@ test('an Asset with no Digital Link identity shows one URI, labelled plainly', (
   } finally { view.stop(); }
 });
 
-test('a surfaced Digital Link is offered first and the native URI stays reachable', () => {
+test('a surfaced Digital Link is offered first and the native URI stays reachable', async () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
   const surfacedUri = `${origin}/8004/0614141ASSET-001`;
   const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true }));
@@ -39,14 +39,26 @@ test('a surfaced Digital Link is offered first and the native URI stays reachabl
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri, nativeUri]);
     // Each is copyable under its own accessible name.
-    const copies = [...document.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'));
+    const copies = [...document.querySelectorAll('button')]
+      .map((button) => button.getAttribute('aria-label'))
+      .filter((label) => label?.startsWith('Copy'));
     assert.deepEqual(copies, ['Copy GS1 Digital Link URI', 'Copy Kannabi Asset URI']);
     // The word the standard reserves for the id.gs1.org form is never
     // claimed for either of these.
     assert.doesNotMatch(view.text(), /canonical Asset URI|canonical GS1 Digital Link URI for/);
-    assert.match(view.text(), /not a canonical GS1 Digital Link URI/);
+    // What Kannabi does and does not claim about the address is worth reading
+    // once, so it waits behind the heading's help rather than standing under
+    // every visit. It has to be reachable without a mouse.
+    const help = view.button('About GS1 Digital Link')!;
+    assert.ok(help, 'the explanation has an affordance of its own');
+    await settle(() => help.focus());
+    assert.match(document.body.textContent ?? '', /not a canonical GS1 Digital Link URI/);
+    await settle(() => help.blur());
+
+    const native = view.button('About the Kannabi Asset URI')!;
+    await settle(() => native.focus());
     // The native URI is described as durable rather than as a fallback.
-    assert.match(view.text(), /never changes and stays valid/);
+    assert.match(document.body.textContent ?? '', /never changes and stays valid/);
   } finally { view.stop(); }
 });
 
@@ -65,7 +77,7 @@ test('the native Asset URI follows the instance Kannabi ID setting', () => {
     // The Digital Link is surfaced exactly as before.
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri]);
-    assert.match(view.text(), /GS1 Digital Link URI/);
+    assert.match(view.text(), /GS1 Digital Link/);
     // The UUIDv7 does not appear anywhere, which is the point of the setting.
     assert.doesNotMatch(view.text(), /Kannabi Asset URI/);
     assert.equal(view.text().includes(nativeUri), false);

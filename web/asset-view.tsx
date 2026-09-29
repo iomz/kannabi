@@ -11,14 +11,16 @@ import { publicShellHandle } from './anonymous-shell';
 import { AssetUri } from './asset-uri';
 import { AssetName } from './asset-name';
 import { AssetCollaboration } from './asset-collaboration';
+import { DetachIdentifierConfirmation } from './detach-identifier-confirmation';
 import { Icon } from './icon';
+import { Switch } from './switch';
 import { PhotoDeleteConfirmation } from './photo-delete-confirmation';
 import { notify } from './notify';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ActionRow, Field, Hint, PageHeading, Section } from './ui';
-import { IdentifierForm, IdentifierList, IssueIdentifier } from './asset-identifiers';
+import { ActionRow, Field, HelpTip, Hint, PageHeading, Section, SubHeading } from './ui';
+import { AddIdentifier, IdentifierForm, IdentifierList, IssueIdentifier } from './asset-identifiers';
 
 
 export async function loadAsset(id: string, request: Request) {
@@ -242,6 +244,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   </>;
   const issue = useFetcher<typeof submitAsset>();
   const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
+  const [identifierToDetach, setIdentifierToDetach] = useState<string | null>(null);
   const uploadForm = useRef<HTMLFormElement>(null);
   const uploadResult = upload.data?.kind === 'photo' ? upload.data : null;
   const editResult = edit.data?.kind === 'rename' ? edit.data : null;
@@ -274,7 +277,12 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   }, [deleteResult]);
   useEffect(() => {
     if (identifiers.data?.kind === 'attach-identifier' && identifiers.data.saved) notify('Identifier recorded');
-    if (identifiers.data?.kind === 'detach-identifier' && identifiers.data.saved) notify('Identifier detached');
+    if (identifiers.data?.kind === 'detach-identifier' && identifiers.data.saved) {
+      // The identifier has left the list and there is nothing left on screen
+      // for the dialog to be about.
+      setIdentifierToDetach(null);
+      notify('Identifier detached');
+    }
   }, [identifiers.data]);
   useEffect(() => {
     if (issueResult?.saved) notify('Identifier issued');
@@ -297,23 +305,28 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     <Section title="Identifiers" defaultOpen>
       <AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
         showNativeUri={settings.showAssetId} />
-      <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
-        digitalLinks={digitalLinks} justIssued={justIssued}
-        showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
-        onDetach={(key) => identifiers.submit({ ...identity, intent: 'detach-identifier', identifierKey: key },
-          { method: 'post' })} />
-      {canEdit && <issue.Form method="post" className="mb-6"
-        key={asset.issuances.map((issuance) => issuance.key).join()}>
-        {identityFields}
-        <IssueIdentifier namespaces={namespaces} classKeys={classKeys}
-          issuances={asset.issuances} identifiers={asset.identifiers}
-          busy={issueBusy} error={issueResult?.error ?? null} />
-      </issue.Form>}
-      {canEdit && <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
-        {identityFields}
-        <IdentifierForm busy={identifierBusy}
-          error={identifierResult?.error ?? null} />
-      </identifiers.Form>}
+      {/* Only when there is something to head. An empty subsection heading
+          announces a group that is not there. */}
+      {asset.identifiers.length > 0 && <>
+        <SubHeading>Recorded IDs</SubHeading>
+        <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
+          digitalLinks={digitalLinks} justIssued={justIssued}
+          showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
+          onDetach={(key) => setIdentifierToDetach(key)} />
+      </>}
+      {!asset.identifiers.length && <p className="mt-5 mb-0 text-[.875rem]">
+        No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>}
+      {canEdit && <AddIdentifier
+        issue={<issue.Form method="post" key={asset.issuances.map((issuance) => issuance.key).join()}>
+          {identityFields}
+          <IssueIdentifier namespaces={namespaces} classKeys={classKeys}
+            issuances={asset.issuances} identifiers={asset.identifiers}
+            busy={issueBusy} error={issueResult?.error ?? null} />
+        </issue.Form>}
+        record={<identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
+          {identityFields}
+          <IdentifierForm busy={identifierBusy} error={identifierResult?.error ?? null} />
+        </identifiers.Form>} />}
     </Section>
     {/* Access and provenance, compressed to one line per fact. It is context
         for the identifiers above rather than the subject of the page. */}
@@ -321,19 +334,27 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
         {/* The state is the text, not the control: a reader must be able to
             tell a public Asset from a private one without interpreting the
-            appearance of a switch. Visibility is a property of the Asset, so
-            it is changed here and never under Manage collaboration, which
+            position or colour of a switch. Visibility is a property of the
+            Asset, so it is changed here and never under Manage Groups, which
             grants Groups access rather than publishing. */}
-        <dt>Visibility</dt>
+        <dt className="flex items-center gap-1">Visibility
+          <HelpTip label="About visibility">A public Asset is readable by anyone with its
+            address, including the information shown on this page. Publishing never grants
+            edit access, which stays with the collaborating Groups.</HelpTip>
+        </dt>
         <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</span>
-          {canEdit && <Button type="button" variant="outline" size="xs" disabled={visibilityBusy}
-            onClick={() => visibility.submit({ ...identity, intent: 'visibility',
-              isPublic: String(!asset.isPublic) }, { method: 'post' })}>
-            {visibilityBusy ? 'Saving…' : asset.isPublic ? 'Make private' : 'Make public'}</Button>}
+          {canEdit && <Switch name="isPublic" checked={asset.isPublic} disabled={visibilityBusy}
+            label="Public access" labelHidden
+            onCheckedChange={(next) => visibility.submit({ ...identity, intent: 'visibility',
+              isPublic: String(next) }, { method: 'post' })} />}
           {visibilityResult?.error && <span role="alert">{visibilityResult.error}</span>}
         </dd>
-        <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not specified'}</dd>
+        {/* Owner is a party of record the domain already models, but nothing
+            can create or choose one yet (#64). Saying "Not specified" would
+            describe an Asset whose owner was left blank, which is not what is
+            true: there is no way to specify one. */}
+        <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not implemented yet'}</dd>
         <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
         <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
           link={canViewReporterProfile} />{' · '}
@@ -341,7 +362,6 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           {' '}({settings.displayTimezone})</dd>
         {settings.showAssetId && <><dt>Kannabi ID</dt><dd><code>{asset.id}</code></dd></>}
       </dl>
-      {canEdit && <Hint className="mt-4 mb-0">A public Asset is readable by anyone with its address, including the information shown on this page. Publishing never grants edit access, which stays with the collaborating Groups.</Hint>}
     </Section>
     {/* Quoted evidence, in a panel of its own.
         It cannot share the Details list above: set beside "Reported", a source
@@ -398,6 +418,15 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       </upload.Form>
       </>}
     </Section>
+    {canEdit && <DetachIdentifierConfirmation
+      identifier={asset.identifiers.find((i) => i.key === identifierToDetach)?.canonical ?? null}
+      issued={asset.issuances.some((issuance) => issuance.canonical
+        === asset.identifiers.find((i) => i.key === identifierToDetach)?.canonical)}
+      busy={identifierBusy}
+      error={identifierResult?.kind === 'detach-identifier' ? identifierResult.error : null}
+      onClose={() => setIdentifierToDetach(null)}
+      onConfirm={() => identifiers.submit({ ...identity, intent: 'detach-identifier',
+        identifierKey: identifierToDetach! }, { method: 'post' })} />}
     {canEdit && <PhotoDeleteConfirmation open={photoToDelete !== null} busy={deleteBusy}
       error={deleteResult?.error && deleteResult.photoKey === photoToDelete ? deleteResult.error : null}
       onClose={() => setPhotoToDelete(null)} onConfirm={() => {

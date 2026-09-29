@@ -93,14 +93,21 @@ test('Asset name and visibility submit independently through their own fetchers'
     await settle(() => view.button('Save')!.click());
     await settle();
     assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After' } }]);
-    await settle(() => view.button('Make public')!.click());
+    // Visibility is a switch whose state is also written out beside it. Use
+    // the native checkbox underneath: happy-dom does not implement checkbox
+    // activation for the constructed PointerEvent Base UI forwards to it.
+    await settle(() => view.field('input[name="isPublic"]')!.click());
     await settle();
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
+    // Issuing and recording are a choice, not two forms standing open, so the
+    // recording form exists only once somebody has asked for it.
+    assert.equal(view.field('input[name="gtin"]'), null, 'recording is not offered until chosen');
+    await settle(() => view.field('input[value="record"]')!.click());
     view.field('input[name="gtin"]')!.value = '00614141123452';
     view.field('input[name="serial"]')!.value = 'fixture-1';
-    await settle(() => view.button('Record existing identifier')!.click());
+    await settle(() => view.button('Record existing')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'sgtin', gtin: '00614141123452', serial: 'fixture-1' } });
     const scheme = view.field('select[name="scheme"]')!;
@@ -110,7 +117,7 @@ test('Asset name and visibility submit independently through their own fetchers'
     });
     assert.match(view.text(), /GIAI value \(AI 8004\)/);
     view.field('input[name="assetReference"]')!.value = '024';
-    await settle(() => view.button('Record existing identifier')!.click());
+    await settle(() => view.button('Record existing')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'giai', assetReference: '024' } });
     assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
@@ -133,7 +140,11 @@ test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI'
   try {
     assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'));
     assert.ok([...document.querySelectorAll('dd code')].some((node) => node.textContent === id));
-    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'));
+    // Named by a heading now rather than a form label, and still named for
+    // assistive technology by the field's own accessible name.
+    assert.ok([...document.querySelectorAll('h3')].some((node) => node.textContent?.startsWith('Asset URI')));
+    assert.ok([...document.querySelectorAll('input')]
+      .some((field) => field.getAttribute('aria-label') === 'Asset URI'));
   } finally { view.stop(); router.dispose(); }
 });
 
@@ -246,7 +257,9 @@ test('generic identifier form explicitly records existing external identifiers o
   const view = mount(createElement(IdentifierForm, { busy: false, error: null }));
   try {
     assert.match(view.text(), /Record an existing identifier already assigned by an external authority/);
-    assert.match(view.text(), /never issues identifiers/);
+    // That this never issues anything is now carried by the choice a reader
+    // made to get here, rather than by a paragraph repeating it.
+    assert.doesNotMatch(view.text(), /never issues identifiers/);
     assert.equal(view.field('input[name="assetReference"]'), null, 'SGTIN starts selected');
     const select = view.field('select[name="scheme"]')!;
     select.value = 'giai';
