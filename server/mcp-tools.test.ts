@@ -33,7 +33,17 @@ const issuedGiai = canonicalIdentifier({ scheme: 'giai', assetReference: gcp + '
 /** Textually under the managed prefix, but never issued by Kannabi. */
 const lookalikeGiai = canonicalIdentifier({ scheme: 'giai', assetReference: gcp + 'DEMO-004' });
 
+/** What a pre-existing record says about itself. The quoted instant is years
+ * before `reportedAt`, and the quoted name matches no User, so a projection
+ * that confused either with Kannabi's own would be visible. */
+const quoted = {
+  reference: 'legacy:asset:1483',
+  recordedAt: '2019-04-12T09:30:00.000Z',
+  recordedBy: 'A. Rivera',
+};
+
 const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera · Bench 001', {
+  sourceRecord: quoted,
   identifiers: [{ key: 'i1', ...cameraGtin }, { key: 'i2', ...issuedGiai }],
   issuances: [{
     key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
@@ -80,7 +90,9 @@ function recordingStore(calls: Call[]) {
     },
     async getAsset(id: string, audience: AudienceInput): Promise<Asset | null> {
       calls.push({ method: 'getAsset', audience, request: id });
-      return id === camera.id ? camera : null;
+      // Both, so a projection can be checked against an Asset quoted from
+      // elsewhere and one that originated in Kannabi.
+      return [camera, microscope].find((candidate) => candidate.id === id) ?? null;
     },
     async listGroups(audience: AudienceInput) {
       calls.push({ method: 'listGroups', audience });
@@ -236,6 +248,23 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.deepEqual(missing, { found: false, asset: null });
   });
 
+  await t.test('an Asset quoted from elsewhere carries that record, distinct from Kannabi\'s own', async () => {
+    const found = structured(await client.callTool({ name: 'get_asset',
+      arguments: { assetId: camera.id } }));
+    const detail = found.asset as Record<string, unknown>;
+    assert.deepEqual(detail.sourceRecord, quoted, 'the quoted record reaches an agent unchanged');
+    // The two facts stay separable: the quoted instant is not the chronology,
+    // and the quoted name is not the reporter.
+    assert.notEqual(detail.reportedAt, quoted.recordedAt);
+    assert.equal((detail.reportedBy as { name: string }).name, reporter.name);
+    assert.notEqual((detail.reportedBy as { name: string }).name, quoted.recordedBy);
+
+    // An Asset that originated in Kannabi says so rather than omitting the field.
+    const native = structured(await client.callTool({ name: 'get_asset',
+      arguments: { assetId: microscope.id } }));
+    assert.equal((native.asset as Record<string, unknown>).sourceRecord, null);
+  });
+
   await t.test('a malformed Asset ID never reaches the store', async () => {
     const before = calls.filter((call) => call.method === 'getAsset').length;
     const rejected = await client.callTool({ name: 'get_asset',
@@ -385,6 +414,8 @@ const mustBeDocumented = [
   ['search_assets', 'assets[].owner'], ['search_assets', 'assets[].photoCount'],
   ['resolve_external_identifier', 'identity.levelMeaning'], ['resolve_external_identifier', 'assets'],
   ['get_asset', 'found'], ['get_asset', 'asset.issuances'],
+  ['get_asset', 'asset.sourceRecord'], ['get_asset', 'asset.sourceRecord.recordedAt'],
+  ['get_asset', 'asset.sourceRecord.recordedBy'], ['get_asset', 'asset.sourceRecord.reference'],
   ['list_gs1_namespaces', 'namespaces[].counters'],
   ['list_gs1_issuances', 'entries[].stillAttached'], ['list_gs1_issuances', 'matching'],
   ['list_gs1_issuances', 'entries[].issuance.canonical'],
@@ -431,6 +462,39 @@ test('the interface stays composable and self-describing', async (t) => {
     }
   });
 
+  await t.test('quoted source evidence is described so it cannot be read as Kannabi\'s own', () => {
+    // Being documented is asserted by `mustBeDocumented`; what is asserted here
+    // is that the descriptions carry the distinctions themselves, since a
+    // plausible-sounding description that omits them is the actual risk.
+    const at = (path: string) => String(schemaAt(tool('get_asset').outputSchema, path)?.description ?? '');
+
+    const record = at('asset.sourceRecord');
+    assert.match(record, /quoted/i, 'the attribution never says whose statement it is');
+    assert.match(record, /not that it is true/i, 'it never says what Kannabi is not claiming');
+    assert.match(record, /immutable/i);
+    assert.match(record, /basis/i, 'it never separates itself from the mutable latest-change basis');
+
+    const recordedAt = at('asset.sourceRecord.recordedAt');
+    assert.match(recordedAt, /not reportedAt/i, 'a quoted instant could be read as the chronology');
+    assert.match(recordedAt, /reportedAt is the only Asset chronology/i);
+
+    const recordedBy = at('asset.sourceRecord.recordedBy');
+    assert.match(recordedBy, /not a Kannabi User/i, 'a quoted name could be read as an identity');
+    assert.match(recordedBy, /no identity and no authorization semantics/i);
+    assert.match(recordedBy, /resolves to nobody/i);
+
+    assert.match(at('asset.sourceRecord.reference'),
+      /never parses, dereferences or interprets it/i);
+
+    // A quoted name is not a handle: nothing accepts it, so an agent cannot be
+    // tempted to pass it where a Group or Asset key belongs.
+    for (const name of ['get_asset', 'search_assets', 'list_groups']) {
+      const accepted = Object.keys(tool(name).inputSchema?.properties ?? {});
+      assert.ok(!accepted.some((field) => /source/i.test(field)),
+        `${name} accepts a source-record argument, making quoted evidence a query key`);
+    }
+  });
+
   await t.test('the server states what Kannabi does not know', () => {
     const stated = client.getInstructions() ?? '';
     assert.ok(stated.length > 400, 'the server offers no orientation at all');
@@ -439,6 +503,9 @@ test('the interface stays composable and self-describing', async (t) => {
       assert.ok(stated.includes(boundary), `the instructions never mention ${boundary}`);
     }
     assert.match(stated, /storing an identifier is not issuing it/i);
+    assert.match(stated, /what Kannabi observed is not what it was told/i,
+      'the instructions never separate Kannabi\'s own record from a quoted one');
+    assert.match(stated, /never order or date Assets by a quoted time/i);
     assert.match(stated, /not filtered by any Kannabi User's permissions/i);
     for (const forbidden of ['claude', 'chatgpt', 'levitate', 'openai', 'cypher']) {
       assert.ok(!stated.toLowerCase().includes(forbidden),

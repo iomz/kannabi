@@ -181,12 +181,32 @@ function detail(asset: Asset) {
       gs1PolicyVersion: identifier.policyVersion,
     })),
     issuances: asset.issuances,
+    sourceRecord: asset.sourceRecord,
     photos: asset.photos,
   };
 }
 
+/** Quoted evidence, described so an agent cannot read it as Kannabi's own.
+ *
+ * Every field here restates whose statement it is, because the two facts look
+ * alike — an instant and a name — and an agent that conflates them would
+ * report a source system's claim as something Kannabi observed.
+ *
+ * The object carries no description of its own: the field that uses it
+ * describes it, and a second one there would silently win and hide this. */
+const sourceRecordSchema = z.object({
+  reference: z.string()
+    .describe('An opaque reference to the source record, owned by whoever supplied it. Kannabi never parses, dereferences or interprets it, and it means nothing inside Kannabi; it is how a reader asks the source system for more than Kannabi holds.'),
+  recordedAt: z.string().nullable()
+    .describe('The instant the SOURCE RECORD states it recorded this Asset. This is not reportedAt and is not Kannabi chronology: Kannabi learned of this Asset at reportedAt, which is always later. Null means the source stated no time — never that it was recorded now. Never use it to order or date Assets; reportedAt is the only Asset chronology.'),
+  recordedBy: z.string().nullable()
+    .describe('The name the SOURCE RECORD states recorded this Asset. Display text only: it is not reportedBy, not a Kannabi User, and resolves to nobody. It has no identity and no authorization semantics, cannot be looked up or passed to any tool, and two identical names may be different people. Null means the source stated no name.'),
+});
+
 const detailSchema = summarySchema.extend({
   reportedBy: attributionSchema.describe('Who reported this Asset to Kannabi. Immutable provenance, never an access grant.'),
+  sourceRecord: sourceRecordSchema.nullable()
+    .describe('The pre-existing record this Asset was created from, as that record describes itself, or null when the Asset originated in Kannabi. Quoted evidence: Kannabi asserts only that the source says this — not that it is true, and not as its own account of the Asset. Never Kannabi\'s own chronology, authorship or current truth. It is immutable, fixed when the Asset was created and unaffected by later changes to it, and so is distinct from the mutable latest-change basis, which moves with every edit. It grants no access.'),
   identifiers: z.array(identifierSummarySchema.extend({
     gs1PolicyVersion: z.string()
       .describe('The version of Kannabi\'s GS1 policy that accepted this value. Historical provenance; stored identifiers are never revalidated.'),
@@ -309,6 +329,7 @@ export const instructions = `Kannabi is an Asset registry and an identity mediat
 
 Kannabi owns these facts, and this server can answer them:
 - the Asset itself: its name, when and by whom it was reported, its owner, the Groups that collaborate on it, and whether it is public;
+- for an Asset created from a record that already existed in another system, what that source record says about its own recording time and recorder — Kannabi owns the fact that the source says it, never the claim itself;
 - the native Kannabi Asset ID, which addresses an Asset inside Kannabi and carries no meaning in any other system;
 - the external GS1 identifiers attached to an Asset (GTIN, SGTIN, GRAI, GIAI), at individual or class level;
 - the GS1 Digital Link path each individual-level identity corresponds to, which a Kannabi deployment dereferences to that Asset;
@@ -330,9 +351,10 @@ Choosing a tool:
 - list_groups and list_gs1_namespaces supply the keys the other tools accept.
 Every Asset a tool returns carries its assetId, which is the stable handle get_asset takes.
 
-Three distinctions matter here and must not be collapsed:
+Four distinctions matter here and must not be collapsed:
 - Kannabi dereferences the Digital Link forms it supports; it is not a GS1-Conformant Resolver. It publishes no resolver description file, declares no supported primary keys, and answers no linkset, so do not describe a Kannabi address as conformant resolution or as a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org. A path here is also not a claim that anyone else resolves that identifier to this Asset.
 - individual identity is not class identity. A class-level identifier such as a GTIN describes a kind of thing, so several Assets are a correct answer rather than an ambiguity. An individual-level identifier resolves to at most one.
+- what Kannabi observed is not what it was told. An Asset's reportedAt and reportedBy are Kannabi's own record: when it learned of the Asset and which Kannabi User told it. An Asset's sourceRecord is quoted from a pre-existing record elsewhere, and its recordedAt and recordedBy are that record's statements about itself. Never present a quoted time as when the Asset was reported, never present a quoted name as a Kannabi User or as who reported it, and never order or date Assets by a quoted time. A quoted name resolves to nobody and grants nothing.
 - storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored identifier merely begins with a managed company prefix was not issued by Kannabi, and list_gs1_issuances is the only evidence of issuance. The same distinction one level up: a GTIN recorded on an Asset is an observation, while a GTIN in list_managed_class_keys is one a Group brought into a prefix it manages, and only the second can carry Kannabi-issued serials.
 
 Kannabi allocates identifiers; it is not a product catalogue. A managed GTIN here is a number Kannabi issued or was told about, with no name, description or other trade-item data attached, and communicating a trade item's characteristics to trading partners remains its allocator's responsibility in their own systems. Do not read a managed class key as product master data, and do not infer what a thing is from the fact that Kannabi allocated a GTIN for it.
