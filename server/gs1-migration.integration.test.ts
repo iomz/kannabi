@@ -136,6 +136,47 @@ test('the GIAI-only allocation schema upgrades without losing provenance', { ski
     assert.ok(withSgtin.issuances.some((issuance) => issuance.canonical === original.canonical));
   });
 
+  await t.test('a prefix the earlier policy allowed is reported, never repaired or fatal', async () => {
+    // The previous rules accepted any digit string and did not refuse
+    // restricted-circulation space, so a real database can hold a prefix such
+    // as 0455123 — GS1 Prefix 04, which issues RCNs. Kannabi keeps that
+    // namespace and its ledger readable and refuses only new issuance: the
+    // values already issued from it were accepted when they were issued, and a
+    // configuration value is not a reason to take a deployment offline or to
+    // rewrite a prefix somebody asserted.
+    const legacy = await query(`MATCH (g:Group {key: $groupKey})
+      CREATE (g)-[:MANAGES_NAMESPACE]->(n:GiaiNamespace {
+        key: 'legacy-namespace', gcp: '0455123', active: true, nextSequence: 3,
+        exclusionsFrom: [], exclusionsTo: [],
+        configuredAt: datetime(), configuredBy: $actorKey })
+      RETURN n.key AS key`, { groupKey: group.key, actorKey: owner.key });
+    assert.equal(legacy.records[0].get('key'), 'legacy-namespace');
+    await query("MATCH (m:Migration {key: 'gs1-allocation'}) DELETE m");
+
+    // Startup migrates it rather than failing closed on it.
+    const reopened = await IdentityStore.open(driver);
+    const migrated = (await reopened.listGs1Namespaces(owner.key))
+      .find((entry) => entry.gcp === '0455123')!;
+    assert.ok(migrated, 'the namespace survived migration');
+    assert.match(migrated.unissuableReason!, /Restricted Circulation Numbers/);
+    // Capability, not validity: the counter it carried is preserved exactly.
+    assert.equal(migrated.counters.giai.nextSequence, 3);
+    assert.equal(migrated.classKeyIssuable, false);
+
+    // Issuance refuses with that reason rather than an opaque failure from
+    // inside value construction.
+    const target = await reopened.reportAsset({ name: 'Under a legacy prefix' }, context);
+    await assert.rejects(reopened.issueKey(target.id, owner.key, 'giai',
+      { namespaceKey: 'legacy-namespace' }), (error: Error) =>
+      /can no longer issue/.test(error.message)
+        && /Restricted Circulation Numbers/.test(error.message));
+    await assert.rejects(reopened.manageClassKey(owner.key, 'legacy-namespace', { scheme: 'gtin' }),
+      /can no longer issue/);
+    // A conforming namespace beside it is unaffected.
+    assert.equal((await reopened.listGs1Namespaces(owner.key))
+      .find((entry) => entry.gcp === '0614141')!.unissuableReason, null);
+  });
+
   await t.test('migration is idempotent and safe to repeat', async () => {
     const again = await IdentityStore.open(driver);
     const reread = (await again.getAsset(asset.id, owner.key))!;

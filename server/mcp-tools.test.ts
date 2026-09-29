@@ -56,7 +56,7 @@ const namespace = Object.freeze({
     graiType: { nextSequence: 1, exclusions: [] },
     gtinItem: { nextSequence: 1, exclusions: [] },
   },
-  classKeyIssuable: true, gtinFormat: 'GTIN-12' as const,
+  classKeyIssuable: true, unissuableReason: null, gtinFormat: 'GTIN-12' as const,
   group: workshop, configuredAt: '2026-06-20T00:00:00.000Z',
   configuredBy: reporter.key,
 });
@@ -262,7 +262,8 @@ test('allocation provenance is reported from the issuance ledger', async (t) => 
     // digits are different keys and must not share a sequence.
     assert.deepEqual(Object.keys(counters).sort(), ['giai', 'graiType', 'gtinItem']);
     assert.deepEqual(Object.keys(namespaces[0]).sort(), ['active', 'classKeyIssuable',
-      'configuredAt', 'counters', 'gcp', 'group', 'gtinFormat', 'namespaceKey'].sort());
+      'configuredAt', 'counters', 'gcp', 'group', 'gtinFormat', 'namespaceKey',
+      'unissuableReason'].sort());
   });
 
   await t.test('the allocation counter is never presented as a count of issuances', async () => {

@@ -77,6 +77,31 @@ test('class keys carry the authority a serial is issued under', { skip: !uri || 
       { scheme: 'gtin', gtin: '0614141234561' }), DuplicateIdentityError);
   });
 
+  await t.test('an adopted key never blocks the counter that would reach it', async () => {
+    // Adoption records a key without moving the counter, because the Group
+    // allocated it rather than Kannabi. The counter can therefore walk into a
+    // position an adopted key already holds. That must be skipped: letting the
+    // uniqueness constraint reject the write would roll back the counter
+    // advance too, so every later allocation would recompute the same position
+    // and fail identically, with no API able to recover it.
+    const space = await store.configureGs1Namespace(owner.key, group.key, { gcp: '0771234' });
+    // Occupy exactly the position the next allocation would reach.
+    const next = allocatedGtin('0771234', 1);
+    const adopted = await store.manageClassKey(owner.key, space.key,
+      { scheme: 'gtin', gtin: next.components.gtin });
+    assert.equal(adopted.provenance, 'adopted');
+    assert.equal(adopted.canonical, next.canonical);
+
+    const allocated = await store.manageClassKey(owner.key, space.key, { scheme: 'gtin' });
+    assert.equal(allocated.provenance, 'allocated');
+    assert.notEqual(allocated.canonical, adopted.canonical);
+    assert.equal(allocated.sequence, 2, 'the occupied position was skipped, not retried');
+    // And the counter really advanced, so the next one does not repeat it.
+    const third = await store.manageClassKey(owner.key, space.key, { scheme: 'gtin' });
+    assert.equal(third.sequence, 3);
+    assert.notEqual(third.canonical, allocated.canonical);
+  });
+
   await t.test('a key outside the asserted prefix is refused, as is a non-member', async () => {
     // Containment is checked against the prefix this Group asserted. It is
     // not a licensing check, and it is the whole reason another company's

@@ -61,11 +61,15 @@ const restrictedPrefixes: readonly PrefixRange[] = Object.freeze([
  */
 export function restrictedPrefixReason(gcp: string): string | null {
   for (const range of restrictedPrefixes) {
+    // A prefix shorter than the range still reaches into it: every key issued
+    // from it extends the prefix, so compare the whole span those extensions
+    // could cover rather than only an equal-length slice. Without this, a
+    // four-digit prefix of `0000` would be accepted and would then issue keys
+    // squarely inside the seven-digit restricted ranges below it.
     const candidate = gcp.slice(0, range.from.length);
-    if (candidate.length === range.from.length
-      && candidate >= range.from && candidate <= range.to) {
-      return range.reason;
-    }
+    const lowest = candidate.padEnd(range.from.length, '0');
+    const highest = candidate.padEnd(range.from.length, '9');
+    if (lowest <= range.to && highest >= range.from) return range.reason;
   }
   return null;
 }

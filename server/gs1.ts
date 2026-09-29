@@ -475,19 +475,34 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
  */
 export const gcpLengths = { min: 4, max: 12 } as const;
 
-export function canonicalGcp(value: unknown): string {
+/** Why this prefix cannot be managed, or null when it can.
+ *
+ * Separate from `canonicalGcp` because the same question is asked in two
+ * situations that must answer differently. Configuring a namespace refuses a
+ * bad prefix outright. Reading one configured under an earlier, looser policy
+ * must not: that namespace exists, its issuance ledger is real, and a
+ * deployment holding one has to keep starting and keep reading its history.
+ * It simply cannot issue anything new, which is a reported capability rather
+ * than a reason to reject the record or refuse to boot.
+ */
+export function gcpRefusalReason(value: unknown): string | null {
   if (typeof value !== 'string' || !/^\d+$/.test(value)) {
-    throw new ValidationError('A GS1 Company Prefix is a string of digits');
+    return 'A GS1 Company Prefix is a string of digits';
   }
   if (value.length < gcpLengths.min || value.length > gcpLengths.max) {
-    throw new ValidationError(
-      `A GS1 Company Prefix is ${gcpLengths.min} to ${gcpLengths.max} digits`);
+    return `A GS1 Company Prefix is ${gcpLengths.min} to ${gcpLengths.max} digits`;
   }
   const restricted = restrictedPrefixReason(value);
   if (restricted) {
-    throw new ValidationError(`That GS1 Prefix ${restricted}, so it cannot be managed as a GS1 Company Prefix`);
+    return `That GS1 Prefix ${restricted}, so it cannot be managed as a GS1 Company Prefix`;
   }
-  return value;
+  return null;
+}
+
+export function canonicalGcp(value: unknown): string {
+  const refusal = gcpRefusalReason(value);
+  if (refusal) throw new ValidationError(refusal);
+  return value as string;
 }
 
 /** Digits left for a class-level reference inside a GCP, before the check

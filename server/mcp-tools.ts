@@ -216,6 +216,8 @@ const namespaceSchema = z.object({
     .describe('One independent counter per key type: giai for AI 8004 asset references, graiType for AI 8003 asset types, gtinItem for GTIN item references. They never share numbers, because a GTIN and a GRAI made of the same digits are different keys. Use list_gs1_issuances.matching for how many values Kannabi issued.'),
   classKeyIssuable: z.boolean()
     .describe('Whether this prefix leaves room for a twelve-digit class reference. False means it can still issue GIAIs but cannot allocate a GTIN or a GRAI asset type — a reduced capability, not an invalid namespace.'),
+  unissuableReason: z.string().nullable()
+    .describe('Why this namespace can issue nothing further, or null when it can. Set only for a prefix configured under an earlier, looser policy. Its already-issued values and its ledger stay valid and readable; only new issuance is refused.'),
   gtinFormat: z.enum(['GTIN-12', 'GTIN-13'])
     .describe('Which GTIN format this namespace\'s own allocations take, derived from the prefix. Presentation for whoever prints the symbol; the stored value is the same fourteen digits either way.'),
   configuredAt: z.string().describe('When a Group asserted this prefix. Kannabi cannot verify GS1 licensing.'),
@@ -236,6 +238,7 @@ function describeNamespace(namespace: Gs1Namespace) {
         .map((range) => ({ from: range.from, to: range.to })),
     }])),
     classKeyIssuable: namespace.classKeyIssuable,
+    unissuableReason: namespace.unissuableReason,
     gtinFormat: namespace.gtinFormat,
     configuredAt: namespace.configuredAt,
   };

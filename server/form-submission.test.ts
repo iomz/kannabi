@@ -17,7 +17,7 @@ const counter = { nextSequence: 1, exclusions: [] };
 const namespaces = [true, false].map((active) => ({ key: active ? 'active' : 'inactive',
   gcp: active ? '0614141' : '9521234', active,
   counters: { giai: counter, graiType: counter, gtinItem: counter },
-  classKeyIssuable: true, gtinFormat: 'GTIN-12', group }));
+  classKeyIssuable: true, unissuableReason: null, gtinFormat: 'GTIN-12', group }));
 
 /** Click the rendered control: calling a route action directly misses broken
  * submit semantics between Base UI, the browser form, and React Router. */

@@ -4,7 +4,7 @@ import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
   allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertCompatible,
   assertReversibleSchemes, canIssueClassKey, canonicalGcp, canonicalGtin, canonicalIdentifier,
-  canonicalIdentifiers, classKeyWithinGcp, gs1Policy, identifierSchemes, schemeInputs,
+  canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy, identifierSchemes, schemeInputs,
   storedIdentifier,
 } from './gs1.js';
 import {
@@ -209,8 +209,35 @@ test('a configured prefix is validated against published rules, never a GCP Leng
   for (const gcp of ['0000000', '0212345', '0412345', '2012345', '2912345', '0000050']) {
     assert.throws(() => canonicalGcp(gcp), ValidationError, gcp);
   }
+  // A prefix shorter than a restricted range still reaches into it: every key
+  // issued from `0000` extends it into the seven-digit ranges below, so the
+  // comparison spans what the extensions could cover rather than an
+  // equal-length slice.
+  for (const gcp of ['0000', '00000', '000000']) {
+    assert.throws(() => canonicalGcp(gcp), ValidationError, gcp);
+  }
+  // Its neighbours that do issue company prefixes are untouched.
+  for (const gcp of ['00001234', '0001234', '0019999']) {
+    assert.equal(canonicalGcp(gcp), gcp);
+  }
   // 952 is GS1's own demonstration and example range, so it stays usable.
   assert.equal(canonicalGcp('9521234'), '9521234');
+});
+
+test('a prefix an earlier policy accepted is reported, not repaired or hidden', () => {
+  // Configuring one is refused outright; reading one configured before these
+  // rules must still say what is wrong rather than throw, so a deployment
+  // holding one keeps starting and keeps its ledger readable.
+  assert.equal(gcpRefusalReason('0614141'), null);
+  assert.match(gcpRefusalReason('0455123')!, /Restricted Circulation Numbers/);
+  assert.match(gcpRefusalReason('061')!, /4 to 12 digits/);
+  assert.match(gcpRefusalReason('9'.repeat(20))!, /4 to 12 digits/);
+  assert.match(gcpRefusalReason('06141A1')!, /string of digits/);
+  // The two agree: whatever one refuses, the other refuses with that reason.
+  for (const gcp of ['0455123', '061', '06141A1']) {
+    assert.throws(() => canonicalGcp(gcp), (error: Error) =>
+      error instanceof ValidationError && error.message === gcpRefusalReason(gcp));
+  }
 });
 
 test('a prefix too long for a class reference stays valid for GIAI', () => {

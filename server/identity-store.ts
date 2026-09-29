@@ -17,7 +17,8 @@ import { externalIdentityKey } from './external-principal.js';
 import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
   allocatedGtinFormat, allocatedSgtin, assertCompatible, canIssueClassKey, canonicalGcp,
-  canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gs1Policy, issuanceClassScheme,
+  canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
+  issuanceClassScheme,
   storedIdentifier, type ClassKeyScheme, type ExternalIdentifier, type IdentifierLevel,
   type IdentifierScheme, type IssuanceScheme,
 } from './gs1.js';
@@ -132,6 +133,21 @@ const classKeyCounters: Readonly<Record<ClassKeyScheme, NamespaceCounter>> = {
 function classKeyCounter(scheme: ClassKeyScheme): NamespaceCounter {
   return classKeyCounters[scheme];
 }
+/** Refuse issuance from a prefix today's rules would not accept, saying why.
+ *
+ * Reachable only for a namespace configured under an earlier, looser policy.
+ * Checked at the top of every issuance path so the caller gets the actual
+ * reason rather than a validation error thrown from inside value
+ * construction, and so the refusal reads the same as the capability the
+ * namespace already reports.
+ */
+function refuseUnissuable(gcp: string): void {
+  const reason = gcpRefusalReason(gcp);
+  if (reason) {
+    throw new ValidationError(`This namespace can no longer issue: ${reason}. Its issued values and ledger are unchanged.`);
+  }
+}
+
 function classKeyScheme(value: unknown): ClassKeyScheme {
   if (value !== 'grai' && value !== 'gtin') {
     throw new ValidationError('A managed class key is a GTIN or a GRAI asset type');
@@ -150,6 +166,16 @@ export type Gs1Namespace = Readonly<{
    * too long for one stays fully valid for GIAI; this is reduced capability,
    * never an invalid namespace. */
   classKeyIssuable: boolean;
+  /** Why this namespace can issue nothing at all, or null when it can.
+   *
+   * Only ever set for a namespace configured under an earlier, looser policy —
+   * a prefix outside four to twelve digits, or in restricted-circulation
+   * space. Kannabi keeps the record and its whole issuance ledger readable and
+   * refuses new issuance, rather than rewriting the prefix or failing startup:
+   * the values already issued from it were accepted when they were issued, and
+   * a configuration value is not a reason to take a deployment offline.
+   */
+  unissuableReason: string | null;
   /** Which GTIN format this namespace's own allocations take, derived from
    * the prefix on every read. Presentation for whoever prints the symbol. */
   gtinFormat: 'GTIN-12' | 'GTIN-13';
@@ -265,18 +291,22 @@ const namespaceProjection = `n { .key, .gcp, .active, .configuredBy,
     `${counter}: ${counterProjection('n', counter)}`).join(', ')} },
   group: head([(n)<-[:MANAGES_NAMESPACE]-(g:Group) | g { .key, .name }]) }`;
 
-type StoredNamespace = Omit<Gs1Namespace, 'counters' | 'classKeyIssuable' | 'gtinFormat'>
+type StoredNamespace =
+  Omit<Gs1Namespace, 'counters' | 'classKeyIssuable' | 'gtinFormat' | 'unissuableReason'>
   & { counters: Record<NamespaceCounter, StoredCounter> };
 
 function namespaceFrom(stored: StoredNamespace): Gs1Namespace {
+  const unissuableReason = gcpRefusalReason(stored.gcp);
   return Object.freeze({
     ...stored,
     counters: Object.freeze(Object.fromEntries(namespaceCounters
       .map((counter) => [counter, counterFrom(stored.counters[counter])])) as
         Record<NamespaceCounter, AllocationCounter>),
-    // Both derived on every read from the prefix alone, never stored: what a
-    // prefix can issue and which GTIN format it yields follow from its digits.
-    classKeyIssuable: canIssueClassKey(stored.gcp),
+    // All three derived on every read from the prefix alone, never stored:
+    // what a prefix may issue, what it can still issue under today's rules,
+    // and which GTIN format it yields all follow from its digits.
+    classKeyIssuable: unissuableReason === null && canIssueClassKey(stored.gcp),
+    unissuableReason,
     gtinFormat: allocatedGtinFormat(stored.gcp),
   });
 }
@@ -1956,6 +1986,7 @@ export class IdentityStore {
       if (locked.records[0].get('active') !== true) {
         throw new ValidationError('That GS1 Company Prefix namespace is deactivated');
       }
+      refuseUnissuable(gcp);
       let identifier: ExternalIdentifier;
       let sequence: number | null = null;
       if (adopting) {
@@ -1970,9 +2001,28 @@ export class IdentityStore {
         }
       } else {
         const counter = counterFrom(locked.records[0].get('counter'));
-        sequence = allocatableSequence(counter.nextSequence, counter.exclusions);
-        identifier = scheme === 'grai'
-          ? allocatedGraiAssetType(gcp, sequence) : allocatedGtin(gcp, sequence);
+        // Adoption records a key at whatever position its reference happens to
+        // occupy, without moving the counter — the Group already allocated it,
+        // so Kannabi must not claim that position as its own issuance. The
+        // counter can therefore walk into a position an adopted key already
+        // holds. Skip those here rather than letting the uniqueness constraint
+        // reject the write: that rollback would undo the counter advance too,
+        // so every later allocation would recompute the same position and fail
+        // identically, with no way to recover through any API.
+        //
+        // Exclusions are still applied first, and `classReference` raises the
+        // exhaustion error once the skipping passes the reference width, so
+        // this terminates on a full namespace instead of spinning.
+        let candidate = counter.nextSequence;
+        for (;;) {
+          sequence = allocatableSequence(candidate, counter.exclusions);
+          identifier = scheme === 'grai'
+            ? allocatedGraiAssetType(gcp, sequence) : allocatedGtin(gcp, sequence);
+          const taken = await tx.run(`MATCH (c:Gs1ClassKeyAllocation {canonical: $canonical})
+            RETURN c.key AS key`, { canonical: identifier.canonical });
+          if (!taken.records.length) break;
+          candidate = sequence + 1;
+        }
         const property = counterProperties(classKeyCounter(scheme));
         await tx.run(`MATCH (n:Gs1Namespace {key: $key}) SET n.${property.nextSequence} = $next`,
           { key, next: int(sequence + 1) });
@@ -2069,6 +2119,7 @@ export class IdentityStore {
           throw new ValidationError('That GS1 Company Prefix namespace is deactivated');
         }
         const gcp = locked.records[0].get('gcp') as string;
+        refuseUnissuable(gcp);
 
         let identifier: ExternalIdentifier;
         let sequence: number;

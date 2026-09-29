@@ -169,13 +169,17 @@ function Gs1Namespaces({ groupKey, namespaces, classKeys, busy }: {
           {/* One counter per key type, because a GTIN and a GRAI asset type
               made of the same digits are different keys and never share
               numbers. */}
-          <Hint>Next GIAI reference {namespace.counters.giai.nextSequence}
+          {namespace.unissuableReason
+            ? <Hint>Configured before the current prefix rules and can no longer
+              issue: {namespace.unissuableReason.replace(/^A GS1 Company Prefix/, 'a GS1 Company Prefix')}.
+              Everything it already issued stays valid.</Hint>
+            : <Hint>Next GIAI reference {namespace.counters.giai.nextSequence}
             {namespace.counters.giai.exclusions.length
               ? ` (existing use ${formatExclusionRanges(namespace.counters.giai.exclusions)})` : ''}
             {namespace.classKeyIssuable
               ? ` · next GRAI asset type ${namespace.counters.graiType.nextSequence}`
                 + ` · next ${namespace.gtinFormat} item reference ${namespace.counters.gtinItem.nextSequence}`
-              : ' · too long for a class reference, so GIAI only'}</Hint>
+              : ' · too long for a class reference, so GIAI only'}</Hint>}
         </div>
         <Form method="post">
           <input type="hidden" name="intent" value="namespace-active" />
