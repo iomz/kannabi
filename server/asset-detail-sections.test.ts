@@ -102,36 +102,51 @@ test('quoted source evidence still reads correctly once its section is opened', 
   } finally { view.stop(); }
 });
 
-test('visibility states itself in words and is changed where it is read', () => {
+test('visibility is a symmetric pair, with the state carried by the switch', () => {
   const view = render();
   try {
     const details = section('Details')!;
-    assert.match(details.textContent ?? '', /Private — Group access/,
-      'the state must be readable as text, not only as the look of a control');
-    // A switch carries the change; the words carry the state, so neither has
-    // to be read off the other.
+    // Both ends are named, so neither state is described in terms the other is
+    // not: "Public — read access" against "Private — Group access" named two
+    // different things and did not read as one binary.
+    assert.match(details.textContent ?? '', /Private/);
+    assert.match(details.textContent ?? '', /Public/);
+    assert.doesNotMatch(details.textContent ?? '', /read access|Group access/);
     const toggle = details.querySelector('[role="switch"]');
     assert.ok(toggle, 'and changeable from the same place');
-    assert.equal(toggle!.getAttribute('aria-checked'), 'false');
-    // Publishing is a property of the Asset, not a Group association, so the
-    // control does not belong to Group management.
+    assert.equal(toggle!.getAttribute('aria-checked'), 'false',
+      'the state is the control\u2019s own, not read off a colour');
+    // Publishing is a property of the Asset, not a Group association.
     assert.equal(section('Manage Groups')!.querySelector('[role="switch"]'), null);
   } finally { view.stop(); }
 });
 
-test('a public Asset offers the opposite change, still in words', () => {
+test('a public Asset reports the opposite switch state', () => {
   const view = render({ isPublic: true });
   try {
     const details = section('Details')!;
-    assert.match(details.textContent ?? '', /Public — read access/);
     assert.equal(details.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
+  } finally { view.stop(); }
+});
+
+test('Owner is an unfinished note rather than a fact or a disabled control', () => {
+  const view = render();
+  try {
+    const details = section('Details')!;
+    const owner = [...details.querySelectorAll('dt')]
+      .find((node) => node.textContent?.trim() === 'Owner')!.nextElementSibling!;
+    assert.match(owner.textContent ?? '', /Not implemented yet/);
+    // Visibly demoted, and text rather than a control: nothing here is
+    // focusable, so it cannot read as something temporarily switched off.
+    assert.match(owner.querySelector('span')?.className ?? '', /text-muted-foreground/);
+    assert.equal(owner.querySelector('button, input, select, a'), null);
   } finally { view.stop(); }
 });
 
 test('a reader who cannot edit is offered neither control', () => {
   const view = render({ sourceRecord }, { canEdit: false });
   try {
-    assert.match(section('Details')!.textContent ?? '', /Private — Group access/);
+    assert.match(section('Details')!.textContent ?? '', /Private/);
     assert.equal(section('Details')!.querySelector('[role="switch"]'), null);
     assert.equal(view.button(/^Rename/), null);
     assert.equal(section('Manage Groups'), null);
@@ -215,7 +230,7 @@ test('a refused rename keeps the field open, says why, and does not pretend it s
   }
 });
 
-test('adding an identifier is folded away, and is a choice before it is a form', async () => {
+test('adding an identifier is folded away, and is two tabs before it is a form', async () => {
   const view = render({}, { namespaces: [{ key: 'n', gcp: '0614141' }] });
   try {
     const add = [...document.querySelectorAll('summary')]
@@ -223,20 +238,28 @@ test('adding an identifier is folded away, and is a choice before it is a form',
     assert.equal(add.open, false, 'operations wait until somebody wants to perform one');
 
     await settle(() => add.querySelector('summary')!.click());
-    // The choice comes first, because issuing and recording are different
-    // acts with different authority rather than one form with two buttons.
-    assert.match(add.textContent ?? '', /How should this identifier be added\?/);
-    const modes = [...add.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
-    assert.deepEqual(modes.map((radio) => radio.value), ['issue', 'record']);
-    assert.equal(modes[0].checked, true);
+    // Tabs rather than radios beside their own help buttons, which read as
+    // four similar round controls.
+    const tabs = [...add.querySelectorAll('[role="tab"]')] as HTMLElement[];
+    assert.deepEqual(tabs.map((tab) => tab.textContent?.trim()), ['Issue new', 'Record existing']);
+    assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+    assert.equal(add.querySelectorAll('input[type="radio"]').length, 0);
 
-    // Only the selected operation's form is present.
-    assert.ok(view.button(/^Issue /), 'issuing is offered');
-    assert.equal(view.field('select[name="scheme"]'), null, 'recording is not also open');
+    // One sentence for the active mode, and only its form. Read the live panel
+    // rather than the whole section: the inactive mode's name is still on its
+    // own tab, so a search across the section would find it either way.
+    const panel = () => add.querySelector('[role="tabpanel"]')!;
+    assert.match(panel().textContent ?? '', /Issue an identifier under a GS1 Company Prefix namespace/);
+    assert.ok(panel().querySelector('button[type="submit"]'), 'issuing is offered');
+    assert.ok(panel().querySelector('select[name="scheme"]') === null,
+      'recording is not also open');
 
-    await settle(() => modes[1].click());
-    assert.ok(view.field('select[name="scheme"]'), 'recording is offered once chosen');
-    assert.equal(view.button(/^Issue /), null, 'and issuing is no longer also open');
+    await settle(() => tabs[1].click());
+    assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
+    assert.match(panel().textContent ?? '', /already been assigned outside Kannabi/);
+    assert.ok(!/Issue an identifier under a GS1 Company Prefix/.test(panel().textContent ?? ''),
+      'the other mode\u2019s explanation went with its panel');
+    assert.ok(panel().querySelector('select[name="scheme"]'), 'recording is offered once chosen');
   } finally { view.stop(); }
 });
 
@@ -263,15 +286,44 @@ test('an Asset with no identifiers heads no empty group', () => {
   } finally { view.stop(); }
 });
 
-test('explanations are reachable without a mouse rather than standing on the page', async () => {
+test('contextual help opens on a click and stays, and is reachable by keyboard', async () => {
   const view = render();
   try {
     // The rule about what publishing does is worth reading once.
-    assert.doesNotMatch(document.body.textContent ?? '', /Publishing never grants edit access/);
+    assert.doesNotMatch(document.body.textContent ?? '', /Editing still requires Group access/);
     const help = view.button('About visibility')!;
     assert.ok(help, 'the explanation has an affordance of its own');
-    await settle(() => help.focus());
+    assert.equal(help.getAttribute('aria-expanded'), 'false');
+
+    // Clicking is what people do with a question mark, and it must open rather
+    // than dismiss: a tooltip closed again on click, which is why this is a
+    // popover.
+    await settle(() => help.click());
+    assert.equal(help.getAttribute('aria-expanded'), 'true');
+    assert.match(document.body.textContent ?? '', /Editing still requires Group access/);
+
+    // And it stays: reading it does not require holding a pointer still.
     await settle();
-    assert.match(document.body.textContent ?? '', /Publishing never grants edit access/);
+    assert.match(document.body.textContent ?? '', /Editing still requires Group access/);
+
+    // Escape dismisses, which is the keyboard's way out.
+    await settle(() => document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    assert.equal(help.getAttribute('aria-expanded'), 'false');
+  } finally { view.stop(); }
+});
+
+test('each scheme states its meaning once', async () => {
+  const gtin = { key: 'i1', scheme: 'sgtin' as const, canonical: '(01)00614141123452(21)1',
+    level: 'individual' as const,
+    components: { gtin: '00614141123452', serial: '1' }, policyVersion: 'x' };
+  const view = render({ identifiers: [gtin] });
+  try {
+    await settle(() => view.button('About SGTIN')!.click());
+    const help = document.querySelector('[data-slot="popover-content"]')?.textContent ?? '';
+    assert.match(help, /Serialised trade item/);
+    // The scheme description already says what it identifies, so appending the
+    // level said it twice.
+    assert.equal(help.match(/identifies this Asset/gi)?.length, 1, help);
   } finally { view.stop(); }
 });

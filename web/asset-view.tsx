@@ -332,29 +332,35 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         for the identifiers above rather than the subject of the page. */}
     <Section title="Details">
       <dl className="mb-0 grid grid-cols-[auto_1fr] gap-x-6 gap-y-[.45rem] text-[.875rem] [&_dd]:m-0 [&_dt]:text-muted-foreground max-sm:grid-cols-1 max-sm:gap-y-[.15rem]">
-        {/* The state is the text, not the control: a reader must be able to
-            tell a public Asset from a private one without interpreting the
-            position or colour of a switch. Visibility is a property of the
-            Asset, so it is changed here and never under Manage Groups, which
-            grants Groups access rather than publishing. */}
+        {/* A symmetric pair. "Public — read access" against "Private — Group
+            access" named two different things — what may be read, and how
+            authorization is derived — so the two states did not read as one
+            binary. Both ends are now labelled, the active one is the switch's
+            own state, and the consequence moved into the help. */}
         <dt className="flex items-center gap-1">Visibility
-          <HelpTip label="About visibility">A public Asset is readable by anyone with its
-            address, including the information shown on this page. Publishing never grants
-            edit access, which stays with the collaborating Groups.</HelpTip>
+          <HelpTip label="About visibility">Public Assets can be read by anyone with their
+            address. Editing still requires Group access.</HelpTip>
         </dt>
-        <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>{asset.isPublic ? 'Public — read access' : 'Private — Group access'}</span>
-          {canEdit && <Switch name="isPublic" checked={asset.isPublic} disabled={visibilityBusy}
-            label="Public access" labelHidden
-            onCheckedChange={(next) => visibility.submit({ ...identity, intent: 'visibility',
-              isPublic: String(next) }, { method: 'post' })} />}
+        <dd className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {canEdit ? <>
+            <span className={asset.isPublic ? 'text-muted-foreground' : 'font-[550]'}>Private</span>
+            <Switch name="isPublic" checked={asset.isPublic} disabled={visibilityBusy}
+              label="Public" labelHidden
+              onCheckedChange={(next) => visibility.submit({ ...identity, intent: 'visibility',
+                isPublic: String(next) }, { method: 'post' })} />
+            <span className={asset.isPublic ? 'font-[550]' : 'text-muted-foreground'}>Public</span>
+          </>
+            : <span>{asset.isPublic ? 'Public' : 'Private'}</span>}
           {visibilityResult?.error && <span role="alert">{visibilityResult.error}</span>}
         </dd>
         {/* Owner is a party of record the domain already models, but nothing
-            can create or choose one yet (#64). Saying "Not specified" would
-            describe an Asset whose owner was left blank, which is not what is
-            true: there is no way to specify one. */}
-        <dt>Owner</dt><dd>{asset.owner?.name ?? 'Not implemented yet'}</dd>
+            can create or choose one yet (#64). Muted because it is an
+            unfinished note rather than a fact about this Asset — and it is
+            text, so it does not wear the look of a control that happens to be
+            disabled. */}
+        <dt>Owner</dt>
+        <dd>{asset.owner?.name
+          ?? <span className="text-muted-foreground italic">Not implemented yet</span>}</dd>
         <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
         <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
           link={canViewReporterProfile} />{' · '}

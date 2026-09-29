@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
-  identifierSchemes, levelLabels, schemeDescriptions, schemeInputs, schemeLabels,
+  identifierSchemes, schemeDescriptions, schemeInputs, schemeLabels,
   type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
@@ -9,6 +9,7 @@ import { Icon } from './icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
 
 /** The scheme, with what it identifies available on demand.
@@ -19,11 +20,13 @@ import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading }
  * name itself, which asked a reader to discover that the word was also a
  * control.
  */
-function SchemeName({ scheme, level }: { scheme: IdentifierScheme; level: IdentifierLevel }) {
+function SchemeName({ scheme }: { scheme: IdentifierScheme }) {
+  // One source, one sentence. `schemeDescriptions` already states what the
+  // scheme identifies, so also appending the level said it twice: "Serialised
+  // trade item — identifies this Asset. Identifies this Asset."
   return <span className="inline-flex items-center gap-1">
     <span className="font-semibold">{schemeLabels[scheme]}</span>
-    <HelpTip label={'About ' + schemeLabels[scheme]}>
-      {schemeDescriptions[scheme]}. {levelLabels[level]}.</HelpTip>
+    <HelpTip label={'About ' + schemeLabels[scheme]}>{schemeDescriptions[scheme]}.</HelpTip>
   </span>;
 }
 
@@ -58,7 +61,7 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
         {/* The scheme carries its own explanation rather than spelling the
             level out beside the provenance badge, where two sentences of
             different kinds ran together. */}
-        <SchemeName scheme={identifier.scheme} level={identifier.level} />
+        <SchemeName scheme={identifier.scheme} />
         <Badge variant={issued ? 'brand' : 'outline'}>
           {issued ? 'Issued by Kannabi' : 'Recorded existing'}</Badge>
       </div>
@@ -198,10 +201,6 @@ export function IdentifierForm({ busy, error }: {
   const [scheme, setScheme] = useState<IdentifierScheme>('sgtin');
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="attach-identifier" />
-    {/* One sentence. That this never issues anything is now said by where the
-        control is rather than by a paragraph repeating it: issuing and
-        recording are two choices a reader picks between. */}
-    <Hint>Record an existing identifier already assigned by an external authority.</Hint>
     <Field label="Choose the identifier scheme">
       <NativeSelect name="scheme" value={scheme} onChange={(event) => setScheme(event.target.value as IdentifierScheme)}>
         {identifierSchemes.map((value) =>
@@ -214,7 +213,10 @@ export function IdentifierForm({ busy, error }: {
         inputMode={input.numeric ? 'numeric' : undefined} />
     </Field>)}
     {error && <p role="alert">{error}</p>}
-    <ActionRow><Button type="submit">{busy ? 'Recording…' : 'Record existing'}</Button></ActionRow>
+    {/* Not "Record existing": that is the tab a reader is already standing on,
+        and two controls with one name in the same section is ambiguous for a
+        person and for anything reading by accessible name. */}
+    <ActionRow><Button type="submit">{busy ? 'Recording…' : 'Record identifier'}</Button></ActionRow>
   </fieldset>;
 }
 
@@ -234,24 +236,31 @@ export function IdentifierForm({ busy, error }: {
  * browser already groups and labels them, and the selected one is announced.
  */
 export function AddIdentifier({ issue, record }: { issue: ReactNode; record: ReactNode }) {
-  const [mode, setMode] = useState<'issue' | 'record'>('issue');
   return <details className="mt-6 [&>summary]:cursor-pointer [&[open]>summary]:mb-4">
     <summary><SubHeading className="mt-0 mb-0 inline">Add identifier</SubHeading></summary>
-    <fieldset className="mb-5">
-      <legend className="mb-2 text-[.875rem]">How should this identifier be added?</legend>
-      <div className="flex flex-wrap gap-x-5 gap-y-2">
-        {([
-          ['issue', 'Issue new', 'Kannabi allocates a new value under a prefix a collaborating Group manages.'],
-          ['record', 'Record existing', 'A value another authority already assigned to this Asset.'],
-        ] as const).map(([value, label, hint]) => <label key={value}
-          className="flex items-center gap-2 text-[.875rem]">
-          <input type="radio" name="add-identifier-mode" value={value}
-            checked={mode === value} onChange={() => setMode(value)} />
-          {label}
-          <HelpTip label={'About ' + label}>{hint}</HelpTip>
-        </label>)}
-      </div>
-    </fieldset>
-    {mode === 'issue' ? issue : record}
+    {/* Two operations, one at a time. Radios beside their own help buttons read
+        as four similar round controls; tabs say "these are two modes of one
+        thing", which is what they are. The primitive carries the roles, the
+        arrow keys and the panel association. */}
+    <Tabs defaultValue="issue">
+      <TabsList>
+        <TabsTab value="issue">Issue new</TabsTab>
+        <TabsTab value="record">Record existing</TabsTab>
+      </TabsList>
+      {/* One sentence each, in normal prose. Which tab a reader chose already
+          carries the distinction that used to need a paragraph: issuing
+          exercises allocation authority Kannabi holds, recording states that
+          another authority already assigned the value. */}
+      <TabsPanel value="issue">
+        <Hint className="mt-0 mb-4">Issue an identifier under a GS1 Company Prefix namespace
+          managed by one of this Asset’s Groups.</Hint>
+        {issue}
+      </TabsPanel>
+      <TabsPanel value="record">
+        <Hint className="mt-0 mb-4">Record an identifier that has already been assigned outside
+          Kannabi.</Hint>
+        {record}
+      </TabsPanel>
+    </Tabs>
   </details>;
 }

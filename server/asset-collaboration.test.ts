@@ -22,7 +22,7 @@ const props = { groups: [a], controlled: [a, b], canEdit: true, canGrant: true,
 
 const dialog = () => document.querySelector('[role="alertdialog"], [role="dialog"]');
 
-test('associating one eligible Group confirms it and passes its key unchanged', async () => {
+test('one eligible Group is still chosen explicitly before it is confirmed', async () => {
   const changes: unknown[] = [];
   const page = show({ ...props, onChange: (key: string, grant: boolean) => changes.push([key, grant]) });
   try {
@@ -31,11 +31,19 @@ test('associating one eligible Group confirms it and passes its key unchanged', 
     assert.match(page.text(), /Workshop/);
     await settle(() => page.click(page.button('Associate another Group')));
 
+    // Deliberately not skipped for a single candidate: the step says which
+    // Group is being picked and which others were eligible.
+    assert.match(dialog()?.textContent ?? '', /Choose Group/);
+    const choice = page.field('select') as unknown as HTMLSelectElement;
+    assert.ok(choice, 'the candidate is selected rather than assumed');
+    assert.deepEqual([...choice.options].map((option) => option.textContent), ['Studio']);
+    assert.deepEqual(changes, [], 'nothing has happened yet');
+
+    await settle(() => page.click(page.button('Continue')));
     const confirm = dialog();
-    assert.ok(confirm, 'associating asks before it changes access');
     assert.match(confirm!.textContent ?? '', /Associate Studio with this Asset\?/);
     assert.match(confirm!.textContent ?? '', /Members of Studio will be able to read and edit/);
-    assert.deepEqual(changes, [], 'nothing has happened yet');
+    assert.deepEqual(changes, [], 'and still nothing until it is confirmed');
 
     await settle(() => page.click(page.button('Associate')));
     assert.deepEqual(changes, [['b', true]]);
@@ -115,6 +123,29 @@ test('a member who controls nothing sees the associations without the acts', () 
     assert.match(page.text(), /Workshop/);
     assert.equal(page.button(/^Remove/), null);
     assert.equal(page.button('Associate another Group'), null);
+  } finally { page.stop(); }
+});
+
+test('no title-level help, and one sentence inside instead', () => {
+  const page = show(props);
+  try {
+    // Every other top-level section title is a plain word; this one had the
+    // only help button beside it.
+    assert.equal(page.button(/^About Group/), null);
+    assert.match(page.text(), /Associated Groups can read and edit this Asset/);
+    // The rows say what they are, so the column header said nothing.
+    assert.equal(document.querySelector('thead'), null);
+    assert.match(page.text(), /Associated/);
+  } finally { page.stop(); }
+});
+
+test('somebody eligible to associate nothing is told so rather than shown an empty menu', async () => {
+  const page = show({ ...props, groups: [a, b], controlled: [a, b] });
+  try {
+    await settle(() => page.click(page.button('Associate another Group')));
+    assert.match(dialog()?.textContent ?? '', /You control no Group that is not already associated/);
+    assert.equal(page.field('select'), null);
+    assert.equal(page.button('Continue')?.disabled, true);
   } finally { page.stop(); }
 });
 

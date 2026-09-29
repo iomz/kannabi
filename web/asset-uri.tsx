@@ -30,8 +30,7 @@ export function AssetUri({ surfacedUri, nativeUri, showNativeUri }: {
       ? <div className="grid gap-3">
         <SubHeading className="mb-0">Asset URI
           <HelpTip label="About the Asset URI">Kannabi’s stable address for this Asset.
-            This Asset carries no GS1 identity Kannabi surfaces, so this is the address to
-            take away.</HelpTip>
+            It never changes.</HelpTip>
         </SubHeading>
         <CopyField id="asset-uri" value={nativeUri} hiddenLabel="Asset URI"
           copyLabel="Copy Asset URI" copiedLabel="Asset URI copied" />
@@ -43,10 +42,8 @@ export function AssetUri({ surfacedUri, nativeUri, showNativeUri }: {
   // about it is worth reading once rather than every visit.
   return <div className="grid gap-3">
     <SubHeading className="mb-0">GS1 Digital Link
-      <HelpTip label="About GS1 Digital Link">Derived from this Asset’s GS1 identity.
-        Kannabi resolves this URI to this Asset. It is not a canonical GS1 Digital Link URI;
-        the standard reserves that term for the <code>id.gs1.org</code> form, which Kannabi
-        never emits.</HelpTip>
+      <HelpTip label="About GS1 Digital Link">Kannabi resolves this URI to this Asset.
+        Canonical GS1 Digital Link URIs use the <code>id.gs1.org</code> domain.</HelpTip>
     </SubHeading>
     <CopyField id="asset-uri" value={surfacedUri} hiddenLabel="GS1 Digital Link URI"
       copyLabel="Copy GS1 Digital Link URI" copiedLabel="GS1 Digital Link URI copied" />

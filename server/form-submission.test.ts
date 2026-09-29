@@ -101,13 +101,15 @@ test('Asset name and visibility submit independently through their own fetchers'
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
-    // Issuing and recording are a choice, not two forms standing open, so the
-    // recording form exists only once somebody has asked for it.
-    assert.equal(view.field('input[name="gtin"]'), null, 'recording is not offered until chosen');
-    await settle(() => view.field('input[value="record"]')!.click());
+    // Issuing and recording are two tabs, not two forms standing open, so the
+    // recording form exists only once somebody has selected it.
+    assert.ok(view.field('input[name="gtin"]') === null, 'recording is not offered until chosen');
+    const recordTab = [...document.querySelectorAll('[role="tab"]')]
+      .find((tab) => tab.textContent?.trim() === 'Record existing') as HTMLElement;
+    await settle(() => recordTab.click());
     view.field('input[name="gtin"]')!.value = '00614141123452';
     view.field('input[name="serial"]')!.value = 'fixture-1';
-    await settle(() => view.button('Record existing')!.click());
+    await settle(() => view.button('Record identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'sgtin', gtin: '00614141123452', serial: 'fixture-1' } });
     const scheme = view.field('select[name="scheme"]')!;
@@ -117,7 +119,7 @@ test('Asset name and visibility submit independently through their own fetchers'
     });
     assert.match(view.text(), /GIAI value \(AI 8004\)/);
     view.field('input[name="assetReference"]')!.value = '024';
-    await settle(() => view.button('Record existing')!.click());
+    await settle(() => view.button('Record identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'giai', assetReference: '024' } });
     assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
@@ -256,10 +258,10 @@ test('the issuance empty state says what is missing and links to where it is cre
 test('generic identifier form explicitly records existing external identifiers only', async () => {
   const view = mount(createElement(IdentifierForm, { busy: false, error: null }));
   try {
-    assert.match(view.text(), /Record an existing identifier already assigned by an external authority/);
-    // That this never issues anything is now carried by the choice a reader
-    // made to get here, rather than by a paragraph repeating it.
+    // The lead sentence belongs to the tab panel that chose this mode, so the
+    // form itself carries no standing explanation of what it is not.
     assert.doesNotMatch(view.text(), /never issues identifiers/);
+    assert.doesNotMatch(view.text(), /already assigned by an external authority/);
     assert.equal(view.field('input[name="assetReference"]'), null, 'SGTIN starts selected');
     const select = view.field('select[name="scheme"]')!;
     select.value = 'giai';

@@ -1,7 +1,7 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { cn } from 'cn';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Icon } from './icon';
 
 /** The few compositions that repeat across every screen.
@@ -59,11 +59,15 @@ export function Section({ title, defaultOpen, children, className }: {
  *
  * A page that states a rule beside every fact reads as documentation with
  * controls embedded in it. The fact or the control is the normal state; the
- * paragraph explaining it waits behind this.
+ * sentence explaining it waits behind this.
  *
- * Base UI opens a tooltip on focus as well as hover, and the trigger is a real
- * button with its own accessible name, so the explanation is reachable by
- * keyboard and announced rather than being a mouse-only flourish.
+ * A popover rather than a tooltip. A tooltip opens on hover and focus and
+ * closes again on click, so somebody who clicks or taps the affordance — which
+ * is what people do with a question mark — watches the answer vanish. This
+ * opens on activation, stays until dismissed by Escape, by clicking away or by
+ * pressing the trigger again, and takes focus with it. The content is an
+ * ordinary block, so prose sets in a column rather than being laid out as flex
+ * items around whatever inline code it contains.
  */
 export function HelpTip({ label, children, className }: {
   /** Names what is being explained, e.g. "About GS1 Digital Link". */
@@ -71,16 +75,16 @@ export function HelpTip({ label, children, className }: {
   children: ReactNode;
   className?: string;
 }) {
-  return <Tooltip>
-    <TooltipTrigger
+  return <Popover>
+    <PopoverTrigger
       render={<button type="button" aria-label={label} />}
-      className={cn('inline-flex size-7 shrink-0 cursor-help items-center justify-center rounded-md',
+      className={cn('inline-flex size-7 shrink-0 items-center justify-center rounded-md',
         'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-        '[&_.icon]:size-[1.05rem]', className)}>
+        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-[1.05rem]', className)}>
       <Icon name="info" />
-    </TooltipTrigger>
-    <TooltipContent className="max-w-80">{children}</TooltipContent>
-  </Tooltip>;
+    </PopoverTrigger>
+    <PopoverContent>{children}</PopoverContent>
+  </Popover>;
 }
 
 /** An action carried by its glyph alone.

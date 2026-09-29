@@ -51,12 +51,14 @@ test('a surfaced Digital Link is offered first and the native URI stays reachabl
     // every visit. It has to be reachable without a mouse.
     const help = view.button('About GS1 Digital Link')!;
     assert.ok(help, 'the explanation has an affordance of its own');
-    await settle(() => help.focus());
-    assert.match(document.body.textContent ?? '', /not a canonical GS1 Digital Link URI/);
-    await settle(() => help.blur());
+    // Opened by activating it, which is what people do with a question mark.
+    await settle(() => help.click());
+    assert.match(document.body.textContent ?? '', /Kannabi resolves this URI to this Asset/);
+    assert.match(document.body.textContent ?? '', /Canonical GS1 Digital Link URIs use the/);
+    await settle(() => help.click());
 
     const native = view.button('About the Kannabi Asset URI')!;
-    await settle(() => native.focus());
+    await settle(() => native.click());
     // The native URI is described as durable rather than as a fallback.
     assert.match(document.body.textContent ?? '', /never changes and stays valid/);
   } finally { view.stop(); }

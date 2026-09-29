@@ -45,11 +45,15 @@ test('what a scheme identifies is available on demand beside its name', async ()
     assert.ok(help, 'the scheme carries its own help affordance');
     assert.match(view.text(), /GTIN/, 'and the name is still just the name');
     // Reachable without a mouse: a portal surface does not exist until opened.
-    await settle(() => help!.focus());
+    await settle(() => help!.click());
     await settle();
-    const explanation = document.querySelector('[data-slot="tooltip-content"]')?.textContent ?? '';
+    const explanation = document.querySelector('[data-slot="popover-content"]')?.textContent ?? '';
     assert.match(explanation, /Trade item/);
-    assert.match(explanation, /Describes a class this Asset belongs to/);
+    // Once. The scheme description already states what it identifies, so
+    // appending the level said the same thing twice.
+    assert.equal(explanation.match(/describes what this Asset is/gi)?.length, 1, explanation);
+    assert.ok(!/Describes a class this Asset belongs to/.test(explanation),
+      'the level is already carried by the description');
   } finally { view.stop(); }
 });
 

@@ -3,7 +3,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Icon } from './icon';
-import { HelpTip, IconButton, NativeSelect, Section } from './ui';
+import { Hint, IconButton, NativeSelect, Section, SubHeading } from './ui';
 
 type Group = { key: string; name: string };
 
@@ -40,31 +40,29 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
   // here is so the control explains itself rather than failing when used.
   const lastGroup = groups.length === 1;
 
-  // One eligible Group needs no choosing; several do. Either way the
-  // confirmation that follows names the Group and its consequence.
+  // Always a choice, even when there is one candidate. Skipping straight to
+  // the confirmation hid which Group had been picked and which others were
+  // eligible, and made association look like something that happened to the
+  // Asset rather than something a person selected.
   function beginAssociating() {
-    if (associable.length === 1) { setAssociating(associable[0]); return; }
     setChosen(associable[0]?.key ?? '');
     setPicking(true);
   }
 
-  return <Section title={<>Manage Groups
-    <HelpTip label="About Group association">Members of every associated Group can read and
-      edit this Asset. Associating another Group requires membership and control in a Group
-      already associated with it, plus control of the Group being added. Removing one requires
-      Asset access through a Group and control of the Group being removed.</HelpTip>
-  </>}>
+  return <Section title="Manage Groups">
+    {/* No help beside the title: this is the only top-level section that had
+        one, and it read as an anomaly next to Identifiers, Details and Photos.
+        One sentence inside the section instead, and the eligibility rules
+        surface at the operation that needs them rather than standing here. */}
+    <Hint className="mt-0 mb-4">Associated Groups can read and edit this Asset.</Hint>
+    <SubHeading className="mt-0">Associated</SubHeading>
     <table className="w-full text-[.875rem]">
       <caption className="sr-only">Groups associated with this Asset</caption>
-      <thead><tr>
-        <th scope="col" className="pb-2 text-left font-[650]">Group</th>
-        {/* Narrow enough that the name takes the card's width. */}
-        <th scope="col" className="w-10 pb-2"><span className="sr-only">Actions</span></th>
-      </tr></thead>
       <tbody>
-        {groups.map((group) => <tr key={group.key} className="border-t">
+        {groups.map((group) => <tr key={group.key} className="border-b last:border-b-0">
           <td className="py-2">{group.name}</td>
-          <td className="py-2 text-right">
+          {/* Fixed to icon width, so the name takes the card. */}
+          <td className="w-10 py-2 text-right">
             {controlled.some((g) => g.key === group.key) && <IconButton tone="destructive"
               disabled={busy || lastGroup}
               label={lastGroup
@@ -73,7 +71,7 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
               onClick={() => setRemoving(group)}><Icon name="trash" /></IconButton>}
           </td>
         </tr>)}
-        {associable.length > 0 && <tr className="border-t">
+        {canGrant && <tr>
           <td colSpan={2} className="py-2">
             <IconButton label="Associate another Group" disabled={busy}
               onClick={beginAssociating}><Icon name="plus" /></IconButton>
@@ -86,16 +84,18 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
     <AlertDialog open={picking} onOpenChange={(next) => { if (!next) setPicking(false); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Associate a Group</AlertDialogTitle>
+          <AlertDialogTitle>Choose Group</AlertDialogTitle>
           <AlertDialogDescription>
-            Choose a Group you control to associate with this Asset.
+            {associable.length
+              ? 'Groups you control that are not associated with this Asset yet.'
+              : 'You control no Group that is not already associated with this Asset.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <NativeSelect aria-label="Group to associate" value={chosen}
+        {associable.length > 0 && <NativeSelect aria-label="Group to associate" value={chosen}
           onChange={(event) => setChosen(event.target.value)}>
           {associable.map((group) =>
             <option key={group.key} value={group.key}>{group.name}</option>)}
-        </NativeSelect>
+        </NativeSelect>}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction disabled={!chosen} onClick={() => {
