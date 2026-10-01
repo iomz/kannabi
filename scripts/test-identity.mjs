@@ -40,7 +40,12 @@ for (const testFile of selected.length ? selected : suites) {
     }
     await driver.close();
     driver = undefined;
-    if (['media.integration.test.ts', 'demo.integration.test.ts'].includes(testFile)) {
+    // Suites that put bytes through the photo routes need object storage. The
+    // rest do not, and starting a container for them would make every run slower
+    // for nothing.
+    const needsObjectStorage = ['media.integration.test.ts', 'demo.integration.test.ts',
+      'corpus-load.integration.test.ts'];
+    if (needsObjectStorage.includes(testFile)) {
       await exec('docker', ['run', '--rm', '-d', '--name', name + '-s3', '-p', '127.0.0.1::8080',
         '-e', 'ADMIN_PASSWORD=' + password, '-e', 'JWT=' + randomUUID() + randomUUID(),
         '-e', 'DEFAULT_ACCESS_KEY=' + name, '-e', 'DEFAULT_SECRET_KEY=' + password,
