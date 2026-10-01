@@ -111,7 +111,7 @@ System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.
 
-During a human acceptance-test cycle, implementation may be committed locally but must not be pushed to the pull request branch until the human explicitly accepts that checkpoint. Pushing publishes the work for remote review and therefore advances the checkpoint on the human's behalf, which is theirs to decide.
+A human acceptance-test cycle adds a restriction rather than relaxing the one above: committing still requires explicit authorization, and an authorized local commit must additionally not be pushed to the pull request branch until the human accepts that checkpoint. Pushing publishes the work for remote review and therefore advances the checkpoint on the human's behalf, which is theirs to decide.
 
 GitHub Issue titles are concise plain-language imperative or problem statements, such as `Preserve detached identifier history` or `Decide whether identity lookup answers anonymous callers`.
 Do not give an Issue a Conventional Commit prefix or scope such as `feat(...)`, `fix(...)`, `refactor(...)` or `test(...)`; an Issue names a problem or an outcome, not a commit.

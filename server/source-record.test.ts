@@ -38,17 +38,46 @@ test('the reference carries the shared opaque-reference grammar', () => {
   }
 });
 
-test('the stated instant is optional, and normalised to an absolute one', () => {
+test('the stated instant is optional, and must name an instant', () => {
   const absent = sourceRecordParams({ reference: 'r' });
   assert.equal(absent.sourceRecordedAt, null, 'a source may state no time');
   assert.equal(sourceRecordParams({ reference: 'r', recordedAt: null }).sourceRecordedAt, null);
-  assert.equal(
-    sourceRecordParams({ reference: 'r', recordedAt: '2019-04-12T09:30:00Z' }).sourceRecordedAt,
-    '2019-04-12T09:30:00.000Z');
+
+  const at = (recordedAt: string) =>
+    sourceRecordParams({ reference: 'r', recordedAt }).sourceRecordedAt;
+  assert.equal(at('2019-04-12T09:30:00Z'), '2019-04-12T09:30:00.000Z');
   // An offset is preserved as the instant it names, never as local wall time.
-  assert.equal(
-    sourceRecordParams({ reference: 'r', recordedAt: '2019-04-12T18:30:00+09:00' }).sourceRecordedAt,
-    '2019-04-12T09:30:00.000Z');
+  assert.equal(at('2019-04-12T18:30:00+09:00'), '2019-04-12T09:30:00.000Z');
+  assert.equal(at('2019-04-12T09:30:00.123Z'), '2019-04-12T09:30:00.123Z');
+  // RFC 3339's "offset unknown" still names an instant.
+  assert.equal(at('2019-04-12T09:30:00-00:00'), '2019-04-12T09:30:00.000Z');
+  // A four-digit year below 0100 is valid and must not be remapped into the
+  // 1900s, which is what a `Date.UTC` round-trip would do to it.
+  assert.equal(at('0099-04-12T09:30:00Z'), '0099-04-12T09:30:00.000Z');
+  assert.equal(at('2020-02-29T00:00:00Z'), '2020-02-29T00:00:00.000Z', 'a real leap day');
+});
+
+test('a time the source did not state is refused rather than invented', () => {
+  // Every one of these is something `new Date` accepts and turns into an
+  // instant nobody claimed. The attribution is immutable, so each would be
+  // permanent.
+  rejects({ reference: 'r', recordedAt: '2019-04-12' },
+    'a date alone would become midnight UTC, a precision nobody stated');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00' },
+    'no offset would be read in the server\u2019s own zone, so the same evidence '
+    + 'would differ by host configuration');
+  rejects({ reference: 'r', recordedAt: 'April 12 2019' },
+    'prose is accepted by implementation-specific fallback parsing, in local time');
+  rejects({ reference: 'r', recordedAt: '2019' }, 'a bare year would become January 1st');
+  rejects({ reference: 'r', recordedAt: '2019-02-30T00:00:00Z' },
+    'a date that does not exist would roll over to March 2nd');
+  rejects({ reference: 'r', recordedAt: '2019-02-29T00:00:00Z' }, 'not a leap year');
+  rejects({ reference: 'r', recordedAt: '2019-13-01T00:00:00Z' }, 'month out of range');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T25:00:00Z' }, 'hour out of range');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00+24:00' }, 'offset hour out of range');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00+09:60' }, 'offset minute out of range');
+  rejects({ reference: 'r', recordedAt: '2019-12-31T23:59:60Z' },
+    'a leap second cannot be represented, so it is refused rather than moved');
   rejects({ reference: 'r', recordedAt: 'whenever' }, 'unparseable');
   rejects({ reference: 'r', recordedAt: 1555061400000 }, 'not a string');
 });

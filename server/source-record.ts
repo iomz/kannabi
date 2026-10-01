@@ -51,16 +51,59 @@ export type SourceRecordInput = Readonly<{
   recordedBy?: string | null;
 }>;
 
-/** An instant as the source stated it, normalised to an absolute one.
+/** An instant the source stated, and only an instant.
  *
- * Stored absolutely because a quoted time with an implied zone is a claim
- * Kannabi would be making on the source's behalf. */
+ * `new Date()` is far too willing here, and every way it is willing produces a
+ * time the source did not state:
+ *
+ *  - a date alone becomes midnight UTC, which is a precision nobody claimed;
+ *  - a date and time with no offset is read in the server's own zone, so the
+ *    same quoted evidence lands nine hours apart on a Tokyo host and a UTC one
+ *    — configuration deciding what a source said;
+ *  - prose like `April 12 2019` is accepted through implementation-specific
+ *    fallback parsing, also in local time;
+ *  - a date that does not exist rolls over silently, so `2019-02-30T00:00:00Z`
+ *    is stored as the 2nd of March.
+ *
+ * The attribution is immutable, so any of those would be permanent. An instant
+ * needs a date, a time and an explicit offset, so that is what is required, and
+ * the calendar is checked before the string is parsed.
+ *
+ * Deliberately stricter than `assetFilters`' own instant parsing, which accepts
+ * a plain date because a filter bound naming a whole day is a sensible thing to
+ * ask for. Quoted evidence is not a bound.
+ */
+const rfc3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
 function sourceInstant(value: unknown, field: string): string {
   if (typeof value !== 'string') throw new ValidationError(`${field} must be a string`);
+  const match = rfc3339.exec(value);
+  // One message for every way of failing: what is wanted is easier to act on
+  // than which of several rules was broken.
+  const refuse = () => {
+    throw new ValidationError(`${field} must be an instant with an explicit UTC offset, `
+      + 'such as 2019-04-12T09:30:00Z or 2019-04-12T18:30:00+09:00');
+  };
+  if (!match) refuse();
+  const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match!;
+  // Checked here rather than by round-tripping through `Date.UTC`, which remaps
+  // years 0 to 99 onto 1900 to 1999 and would reject four-digit years below
+  // 0100 that are perfectly valid.
+  const [y, mo, d, h, mi, sec] = [year, month, day, hour, minute, second].map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) refuse();
+  // RFC 3339 permits second 60 for a leap second; `Date` cannot represent one
+  // and refuses it below, so one is rejected rather than quietly moved to the
+  // next minute. A source that recorded a leap second has to lose it somewhere,
+  // and losing it with a message beats storing a different instant.
+  if (h > 23 || mi > 59 || sec > 59) refuse();
+  if (offsetHour !== undefined && (Number(offsetHour) > 23 || Number(offsetMinute) > 59)) refuse();
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new ValidationError(`${field} must be an ISO date or instant`);
-  }
+  if (Number.isNaN(parsed.getTime())) refuse();
   return parsed.toISOString();
 }
 
