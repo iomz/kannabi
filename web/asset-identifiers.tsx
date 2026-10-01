@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
-import { ActionRow, ExternalRef, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
+import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading } from './ui';
 
 /** The scheme, and where GS1 defines it.
  *
@@ -23,10 +23,16 @@ import { ActionRow, ExternalRef, Field, HelpTip, Hint, IconButton, NativeSelect,
  */
 function SchemeName({ scheme }: { scheme: IdentifierScheme }) {
   return <span className="inline-flex flex-wrap items-baseline gap-x-2">
-    <ExternalRef href={schemeReference[scheme]} className="font-semibold"
-      label={schemeLabels[scheme] + ' — GS1 reference (opens in a new tab)'}>
+    {/* The link treatment carries it. An outbound glyph beside every scheme on
+        every card was tested and read as clutter: four of them on one Asset
+        decorate the names rather than telling a reader anything the colour and
+        the underline on hover do not. The accessible name still says where it
+        goes and that it opens elsewhere. */}
+    <a href={schemeReference[scheme]} target="_blank" rel="noreferrer noopener"
+      aria-label={schemeLabels[scheme] + ' — GS1 reference (opens in a new tab)'}
+      className="font-semibold no-underline hover:underline">
       {schemeLabels[scheme]}
-    </ExternalRef>
+    </a>
     <span className="text-[.8rem] text-muted-foreground">{schemeDescriptions[scheme]}</span>
   </span>;
 }

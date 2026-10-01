@@ -122,6 +122,20 @@ Before creating or editing a public Issue or Issue comment, remove incidental pe
 Keep concrete empirical evidence whose specificity the engineering or research record genuinely depends on, and minimize unrelated personal information around it rather than weakening the evidence.
 When it is unclear whether a private detail needs to be published, ask instead of publishing it.
 
+## Deciding a visual question
+
+When the semantics and the interaction are settled but the way something should look is not, stop guessing at it one small change at a time. Repeatedly shipping a styling tweak to be looked at spends a review cycle per guess and resolves nothing in writing.
+
+Build a temporary design-lab route instead: out of the navigation, reachable only by address, mutating nothing.
+
+Put materially different candidate treatments beside each other, and include the real production component where one exists, so the comparison is between things that actually render rather than between descriptions of them. Hold the settled semantics and interaction constant, so the only thing varying is the open question. Use the real design system and real components; a comparison between approximations decides nothing.
+
+Label each variant with what it is testing and say which one currently ships. Include the content that might change the answer — a short, an ordinary and a long value, an empty state — and check the variants in both colour schemes, because a treatment can be obvious in one and effectively invisible in the other.
+
+The point is to let acceptance choose between rendered alternatives rather than translating a visual reaction through another round of prose and implementation.
+
+Once the choice is made, apply it, and delete the lab along with the variants that lost. A lab left behind is dead code that reads like a decision still being made.
+
 ## Browser and GUI verification
 
 Unless explicitly requested, do not launch or attach to a browser, desktop application, or other GUI for manual interaction testing.

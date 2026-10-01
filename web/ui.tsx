@@ -95,33 +95,6 @@ export function HelpTip({ label, children, className }: {
   </Popover>;
 }
 
-/** A pointer at somebody else's definition.
- *
- * Kannabi explains Kannabi through `HelpTip`. What a GS1 key *is* belongs to
- * GS1, and the two must not wear the same affordance: one opens a sentence
- * Kannabi wrote, the other leaves for a standard Kannabi does not own. A link
- * says that by being a link.
- */
-export function ExternalRef({ href, children, label, className }: {
-  href: string;
-  children: ReactNode;
-  /** What the destination is, for a reader who cannot see the glyph. */
-  label: string;
-  className?: string;
-}) {
-  return <a href={href} target="_blank" rel="noreferrer noopener" aria-label={label}
-    className={cn('inline-flex items-center gap-[.15rem] no-underline hover:underline', className)}>
-    {children}
-    {/* Small, and outside the text's own weight: it says "this leaves" rather
-        than decorating the name. */}
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      className="size-[.7em] shrink-0 opacity-60">
-      <path d="M13 5h6v6 M19 5l-9 9 M17 14v5H5V7h5" />
-    </svg>
-  </a>;
-}
-
 /** An action carried by its glyph alone.
  *
  * Reading is the page's normal state, and a bordered button beside every fact
