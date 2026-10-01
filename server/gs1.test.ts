@@ -4,7 +4,8 @@ import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
   allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertCompatible,
   assertReversibleSchemes, canIssueClassKey, canonicalGcp, canonicalGtin, canonicalIdentifier,
-  canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy, identifierSchemes, schemeInputs,
+  canonicalIdentifiers, classKeyConflictReason, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
+  identifierSchemes, schemeInputs,
   storedIdentifier,
 } from './gs1.js';
 import {
@@ -352,4 +353,42 @@ test('rendering descriptors cover every supported scheme without restating valid
   assert.match(schemeInputs.giai[0].hint!, /already assigned by an external authority/);
   assert.match(schemeInputs.giai[0].hint!, /validates GS1 syntax/);
   assert.match(schemeInputs.giai[0].hint!, /does not verify who assigned it or who controls its prefix/);
+});
+
+test('a class key that names a different trade item cannot be serialised for an Asset', () => {
+  const carried = canonicalIdentifier({ scheme: 'gtin', gtin: '00614141123452' });
+  const same = { scheme: 'gtin' as const, canonical: carried.canonical };
+  const other = { scheme: 'gtin' as const,
+    canonical: canonicalIdentifier({ scheme: 'gtin', gtin: '09520123000004' }).canonical };
+
+  // An Asset with no commitment can be serialised under either.
+  assert.equal(classKeyConflictReason(same, []), null);
+  assert.equal(classKeyConflictReason(other, []), null);
+
+  // Carrying a GTIN commits the Asset to that trade item. The key naming the
+  // same one is still usable; the key naming another is refused in advance,
+  // with the words the boundary itself would use on submission.
+  assert.equal(classKeyConflictReason(same, [carried]), null);
+  assert.equal(classKeyConflictReason(other, [carried]),
+    'Identifiers claim conflicting GTINs for one Asset');
+  assert.throws(() => assertCompatible([carried,
+    canonicalIdentifier({ scheme: 'gtin', gtin: '09520123000004' })]),
+  /conflicting GTINs/, 'and the same refusal arrives on submission');
+
+  // The commitment is carried by an SGTIN just as much as by a bare GTIN.
+  const serialised = canonicalIdentifier({ scheme: 'sgtin', gtin: '00614141123452', serial: 'A1' });
+  assert.equal(classKeyConflictReason(other, [serialised]),
+    'Identifiers claim conflicting GTINs for one Asset');
+});
+
+test('a GRAI asset type is committed to in the same way, and a GIAI never conflicts', () => {
+  const carried = canonicalIdentifier({ scheme: 'grai', assetType: '0614141123452' });
+  const other = { scheme: 'grai' as const,
+    canonical: canonicalIdentifier({ scheme: 'grai', assetType: '9520123000004' }).canonical };
+  assert.equal(classKeyConflictReason(other, [carried]),
+    'Identifiers claim conflicting GRAI asset types for one Asset');
+  assert.equal(classKeyConflictReason({ scheme: 'grai', canonical: carried.canonical }, [carried]), null);
+  // A GIAI comes straight from the prefix and shares no component, so there is
+  // no class key and nothing to conflict with.
+  assert.equal(classKeyConflictReason(null, [carried]), null);
 });

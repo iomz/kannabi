@@ -1,4 +1,4 @@
-import { record, requiredText, ValidationError } from './identity.js';
+import { boundedLabel, opaqueReference, record, requiredText } from './identity.js';
 
 /** The programmable credential that produced a canonical change.
  *
@@ -57,16 +57,10 @@ export type ChangeOrigin = Readonly<{
   basis?: string | null;
 }>;
 
-/** How long a credential label may be. Long enough to say what a token is for,
- * short enough that provenance stays a fixed cost per Asset. */
-const labelLimit = 80;
-
+/** What a token is for, as its holder named it. The bound is shared with
+ * every other display label, so provenance stays a fixed cost per Asset. */
 export function credentialLabel(value: unknown): string {
-  const label = requiredText(value, 'label');
-  if (label.length > labelLimit) {
-    throw new ValidationError(`label must be at most ${labelLimit} characters`);
-  }
-  return label;
+  return boundedLabel(value, 'label');
 }
 
 function assertingCredential(value: unknown): AssertingCredential {
@@ -74,33 +68,16 @@ function assertingCredential(value: unknown): AssertingCredential {
   return { id: requiredText(input.id, 'credential id'), label: credentialLabel(input.label) };
 }
 
-/** The lexical contract for `basis`, and the whole of it.
+/** The lexical contract for `basis`: the shared opaque-reference grammar,
+ * named for this field.
  *
- * `basis` identifies the basis; it is not the basis itself. The asserting
- * client owns its own reference space: Kannabi never generates, parses,
- * dereferences, or interprets these values, and keeps no registry of what a
- * prefix might mean. A convention such as `system:type:id` is useful to
- * clients and is deliberately not enforced here, because the first grammar
- * Kannabi validated would put somebody's external system inside Kannabi.
- *
- * The character set is narrow on purpose. It keeps the value transportable as
- * a request header, and it makes the field unusable for prose, secrets,
- * personal data or evidence content — which matters because a public Asset's
- * provenance is readable without authentication.
+ * `basis` identifies the basis; it is not the basis itself. See
+ * `opaqueReference` for why Kannabi never parses one. The same grammar carries
+ * an Asset's source-record reference, which is a different fact with the same
+ * shape.
  */
-const basisLimit = 128;
-const basisPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
-
 export function basisReference(value: unknown): string {
-  if (typeof value !== 'string') throw new ValidationError('basis must be a string');
-  if (value.length > basisLimit) {
-    throw new ValidationError(`basis must be at most ${basisLimit} characters`);
-  }
-  if (!basisPattern.test(value)) {
-    throw new ValidationError('basis must be an ASCII reference starting with a letter or digit, '
-      + 'using only letters, digits and . _ : / -');
-  }
-  return value;
+  return opaqueReference(value, 'basis');
 }
 
 export type ChangeParameters = Readonly<{

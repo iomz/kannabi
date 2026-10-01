@@ -14,6 +14,10 @@ Preserve the README naming story at the bottom of README.
 - Change provenance is bounded current-state provenance describing the latest change only. It never becomes a history log, and it never replaces `reportedBy`.
 - The asserting credential is recorded as a stable server-generated identity plus the label it carried at the time of the write. The identity is identity; the label is a historical snapshot and is never matched on, keyed by, or looked up. Renaming or revoking a credential never alters or hides existing provenance.
 - `basis` identifies the basis; it is not the basis itself. It is an opaque bounded ASCII reference the asserting client owns, and Kannabi never generates, parses, dereferences, or registers namespace meaning for one. It is the only Tier 1 provenance value a caller supplies, and a public Asset may expose it.
+- An Asset may carry one immutable attribution to the pre-existing source record it was created from: an opaque reference to that record, the instant the source states it recorded the Asset, and the name the source states recorded it. It is quoted evidence — Kannabi asserts only that the source says so — and is accepted when the Asset is created and on no other path.
+- Source attribution never becomes Kannabi's own chronology, authorship, identity, authorization, or current truth. `reportedAt` stays the sole Asset chronology and is never backdated from it; `reportedBy` stays the authenticated reporter and is never replaced by it; it is never a sort key, a filter, or cursor state.
+- The quoted recorder is a bounded display label and nothing else: never resolved to a User, never matched on, keyed by, or looked up, and never a node or an edge. A recorder named in a pre-existing record may never have held a Kannabi account, so representing them as a User in any state, including a tombstone, would assert a membership that never happened.
+- The source reference anchors the attribution and is required whenever it is present, so a quoted claim is always attributable to an identified record. It shares one opaque-reference grammar with `basis`, which is a different fact of the same shape: `basis` describes the latest change and moves with it, while source attribution describes where the record came from and never moves.
 - An API token is a delegated credential issued under one User's authority, never an independent principal. It authenticates as that User and passes through the same Group-derived authorization, evaluated live. A User issues tokens only for themself; an administrator may revoke another User's token but never create one, because minting one would grant that User's Asset access.
 - An admin-enabled token is a ceiling on the credential, never a grant. Administrator authority is re-read from the owning User on every request, and no token ever reaches an Asset outside its owner's Groups.
 - The browser Origin requirement guards cookie-authenticated writes, which a browser sends automatically. A bearer credential is authenticated on its own and never falls back to a cookie, so presenting one can never opt a cookie-authenticated request out of that check.
@@ -107,10 +111,30 @@ System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 Do not commit or push without explicit authorization.
 
+A human acceptance-test cycle adds a restriction rather than relaxing the one above: committing still requires explicit authorization, and an authorized local commit must additionally not be pushed to the pull request branch until the human accepts that checkpoint. Pushing publishes the work for remote review and therefore advances the checkpoint on the human's behalf, which is theirs to decide.
+
+GitHub Issue titles are concise plain-language imperative or problem statements, such as `Preserve detached identifier history` or `Decide whether identity lookup answers anonymous callers`.
+Do not give an Issue a Conventional Commit prefix or scope such as `feat(...)`, `fix(...)`, `refactor(...)` or `test(...)`; an Issue names a problem or an outcome, not a commit.
+Branches and commits keep their own conventional prefixes, and pull request naming follows the existing repository convention rather than this rule.
+
 Private working context — conversations, research notes, and the examples used in them — is not automatically publishable.
 Before creating or editing a public Issue or Issue comment, remove incidental personal and private detail, and prefer fictional or anonymized examples wherever a real identity is not technically necessary.
 Keep concrete empirical evidence whose specificity the engineering or research record genuinely depends on, and minimize unrelated personal information around it rather than weakening the evidence.
 When it is unclear whether a private detail needs to be published, ask instead of publishing it.
+
+## Deciding a visual question
+
+When the semantics and the interaction are settled but the way something should look is not, stop guessing at it one small change at a time. Repeatedly shipping a styling tweak to be looked at spends a review cycle per guess and resolves nothing in writing.
+
+Build a temporary design-lab route instead: out of the navigation, reachable only by address, mutating nothing.
+
+Put materially different candidate treatments beside each other, and include the real production component where one exists, so the comparison is between things that actually render rather than between descriptions of them. Hold the settled semantics and interaction constant, so the only thing varying is the open question. Use the real design system and real components; a comparison between approximations decides nothing.
+
+Label each variant with what it is testing and say which one currently ships. Include the content that might change the answer — a short, an ordinary and a long value, an empty state — and check the variants in both colour schemes, because a treatment can be obvious in one and effectively invisible in the other.
+
+The point is to let acceptance choose between rendered alternatives rather than translating a visual reaction through another round of prose and implementation.
+
+Once the choice is made, apply it, and delete the lab along with the variants that lost. A lab left behind is dead code that reads like a decision still being made.
 
 ## Browser and GUI verification
 

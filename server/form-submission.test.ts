@@ -60,7 +60,7 @@ test('every existing Group form submits its intended API mutation on click', asy
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
-test('Asset Save changes submits both name and public visibility through its fetcher', async () => {
+test('Asset name and visibility submit independently through their own fetchers', async () => {
   const id = newAssetId();
   const originalFetch = globalThis.fetch;
   const calls: { path: string; method: string; body: unknown }[] = [];
@@ -86,19 +86,30 @@ test('Asset Save changes submits both name and public visibility through its fet
     // governs both and this Asset has no Digital Link to surface instead.
     assert.equal([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'), false,
       'native Asset URI follows the Kannabi ID setting');
+    // Renaming happens on the heading itself. Each control sends only its own
+    // field, so neither can write back a value the person never touched.
+    await settle(() => view.button('Rename Before')!.click());
     view.field('input[name="name"]')!.value = 'After';
-    // Use the switch's native checkbox: happy-dom does not implement checkbox
-    // activation for the constructed PointerEvent Base UI forwards to it.
-    await settle(() => view.field('input[name="isPublic"]')!.click());
-    assert.equal(document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
-    await settle(() => view.button('Save changes')!.click());
+    await settle(() => view.button('Save name')!.click());
     await settle();
-    assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After', isPublic: true } }]);
+    assert.deepEqual(calls, [{ path: `/api/assets/${id}`, method: 'PATCH', body: { name: 'After' } }]);
+    // Publishing is consequential, so it is named and confirmed rather than
+    // toggled.
+    await settle(() => view.button('Change visibility')!.click());
+    await settle(() => view.button('Make public')!.click());
+    await settle();
+    assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
+    // Issuing and recording are two tabs, not two forms standing open, so the
+    // recording form exists only once somebody has selected it.
+    assert.ok(view.field('input[name="gtin"]') === null, 'recording is not offered until chosen');
+    const recordTab = [...document.querySelectorAll('[role="tab"]')]
+      .find((tab) => tab.textContent?.trim() === 'Record existing') as HTMLElement;
+    await settle(() => recordTab.click());
     view.field('input[name="gtin"]')!.value = '00614141123452';
     view.field('input[name="serial"]')!.value = 'fixture-1';
-    await settle(() => view.button('Record existing identifier')!.click());
+    await settle(() => view.button('Record identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'sgtin', gtin: '00614141123452', serial: 'fixture-1' } });
     const scheme = view.field('select[name="scheme"]')!;
@@ -108,7 +119,7 @@ test('Asset Save changes submits both name and public visibility through its fet
     });
     assert.match(view.text(), /GIAI value \(AI 8004\)/);
     view.field('input[name="assetReference"]')!.value = '024';
-    await settle(() => view.button('Record existing identifier')!.click());
+    await settle(() => view.button('Record identifier')!.click());
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/identifiers`, method: 'POST',
       body: { scheme: 'giai', assetReference: '024' } });
     assert.ok(calls.slice(-1).every((call) => !call.path.endsWith('/giai')),
@@ -131,7 +142,11 @@ test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI'
   try {
     assert.ok([...document.querySelectorAll('dt')].some((node) => node.textContent === 'Kannabi ID'));
     assert.ok([...document.querySelectorAll('dd code')].some((node) => node.textContent === id));
-    assert.ok([...document.querySelectorAll('label')].some((label) => label.textContent === 'Asset URI'));
+    // Named by a heading now rather than a form label, and still named for
+    // assistive technology by the field's own accessible name.
+    assert.ok([...document.querySelectorAll('h3')].some((node) => node.textContent?.startsWith('Asset URI')));
+    assert.ok([...document.querySelectorAll('input')]
+      .some((field) => field.getAttribute('aria-label') === 'Asset URI'));
   } finally { view.stop(); router.dispose(); }
 });
 
@@ -243,8 +258,10 @@ test('the issuance empty state says what is missing and links to where it is cre
 test('generic identifier form explicitly records existing external identifiers only', async () => {
   const view = mount(createElement(IdentifierForm, { busy: false, error: null }));
   try {
-    assert.match(view.text(), /Record an existing identifier already assigned by an external authority/);
-    assert.match(view.text(), /never issues identifiers/);
+    // The lead sentence belongs to the tab panel that chose this mode, so the
+    // form itself carries no standing explanation of what it is not.
+    assert.doesNotMatch(view.text(), /never issues identifiers/);
+    assert.doesNotMatch(view.text(), /already assigned by an external authority/);
     assert.equal(view.field('input[name="assetReference"]'), null, 'SGTIN starts selected');
     const select = view.field('select[name="scheme"]')!;
     select.value = 'giai';

@@ -9,11 +9,15 @@ import { Label } from '@/components/ui/label';
  * take away — a URI, a credential — is copied the same way, rather than each
  * place inventing its own button.
  */
-export function CopyField({ id, value, label, copyLabel, copiedLabel, className }: {
+export function CopyField({ id, value, label, hiddenLabel, copyLabel, copiedLabel, className }: {
   id: string;
   value: string;
-  /** Visible label, or omitted when the surrounding context already names it. */
+  /** Visible label, or omitted when a heading beside the field names it. */
   label?: string;
+  /** The field's name when there is no visible label. A read-only input with
+   * no name at all is a value nobody using a screen reader can identify, so
+   * one of the two is always present. */
+  hiddenLabel?: string;
   copyLabel: string;
   copiedLabel: string;
   className?: string;
@@ -40,6 +44,7 @@ export function CopyField({ id, value, label, copyLabel, copiedLabel, className 
     {label ? <Label htmlFor={id}>{label}</Label> : null}
     <div className="relative flex items-center">
       <Input id={id} value={value} readOnly title={value} spellCheck={false} autoComplete="off"
+        aria-label={label ? undefined : hiddenLabel}
         className="pe-11 font-mono text-[.85rem]"
         onFocus={(event) => event.currentTarget.select()} />
       <button type="button" onClick={() => void copy()}

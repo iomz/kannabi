@@ -42,6 +42,15 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   const microscope = await store.reportAsset({ name: 'Inspection microscope · Studio 011',
     identifiers: [{ scheme: 'gtin', gtin: cameraGtin }] }, inWorkshop);
   await store.updateAsset(microscope.id, { isPublic: true }, alex.key);
+  // Created from a record that already existed elsewhere, so the projection can
+  // be read against real stored data rather than a fixture's own shape.
+  const quoted = {
+    reference: 'legacy:asset:1483',
+    recordedAt: '2019-04-12T09:30:00.000Z',
+    recordedBy: 'A. Rivera',
+  };
+  const migrated = await store.reportAsset({ name: 'Calibration rig · Store 042',
+    sourceRecord: quoted }, inWorkshop);
   const laptop = await store.reportAsset({ name: 'Field laptop · Shelf 003',
     identifiers: [{ scheme: 'sgtin', gtin: laptopGtin, serial: 'DEMO-003' },
       { scheme: 'gtin', gtin: laptopGtin }] }, inWorkshop);
@@ -237,6 +246,32 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.deepEqual((detail.kannabiIssued as Json[]).map((entry) => entry.canonical),
       [issuedToLaptop]);
     assert.ok(!identifiers.some((identifier) => identifier.scheme === 'giai'));
+  });
+
+  await t.test('an Asset quoted from an earlier system reaches an agent as quoted evidence', async () => {
+    const inspected = await call('get_asset', { assetId: migrated.id });
+    const detail = inspected.asset as Json;
+    const source = detail.sourceRecord as Json;
+    assert.equal(source.reference, quoted.reference);
+    assert.equal(source.recordedBy, quoted.recordedBy);
+    assert.equal(Date.parse(source.recordedAt as string), Date.parse(quoted.recordedAt));
+
+    // Kannabi's own record of the same Asset stays separate and stays its own:
+    // it learned of this Asset now, from a Kannabi User, years after the date
+    // the source states.
+    assert.equal((detail.reportedBy as Json).name, 'Alex Demo');
+    assert.notEqual(detail.reportedAt, source.recordedAt);
+    assert.ok(Date.parse(detail.reportedAt as string) > Date.parse(quoted.recordedAt));
+
+    // An Asset that originated in Kannabi says so rather than omitting it.
+    const native = await call('get_asset', { assetId: camera.id });
+    assert.equal((native.asset as Json).sourceRecord, null);
+
+    // Quoted evidence is not a discovery key: the name is not searchable, and
+    // a search for it finds nothing rather than the Asset that quotes it.
+    const searched = await call('search_assets', { query: quoted.recordedBy });
+    assert.equal((searched.assets as Json[]).length, 0,
+      'a quoted recorder must not be matchable text');
   });
 
   await t.test('an Asset that does not exist is reported as a miss', async () => {

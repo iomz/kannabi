@@ -9,6 +9,7 @@ import {
 import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
 import { gs1LedgerCursor, type Gs1LedgerRequest } from './gs1-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
+import { sourceRecordParams, type SourceRecord, type SourceRecordInput } from './source-record.js';
 import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change-provenance.js';
@@ -94,6 +95,13 @@ export type Asset = Readonly<{
   /** Null only for an Asset last written before Kannabi recorded this; it
    * never means the Asset has not changed. */
   provenance: ChangeProvenance | null;
+  /** The pre-existing record this Asset was created from, as that record
+   * describes itself, or null for one that originated in Kannabi.
+   *
+   * Quoted evidence, immutable after creation. It is never chronology, never
+   * identity, never authorization, and never confused with `reportedAt` or
+   * `reportedBy` above, which describe what happened in Kannabi. */
+  sourceRecord: SourceRecord | null;
   owner: Entity | null;
   groups: readonly Entity[];
   isPublic: boolean;
@@ -367,6 +375,10 @@ export type ReportAsset = {
   /** Optional. An Asset exists independently of GS1 identification. */
   identifiers?: readonly unknown[];
   ownerKey?: string;
+  /** Optional. The pre-existing record this Asset is being created from.
+   * Accepted here and on no other path: `AssetChanges` has no counterpart,
+   * because where a record came from is not something a later edit revises. */
+  sourceRecord?: SourceRecordInput;
 };
 export type ReportingContext = { actorKey: string; groupKey: string };
 export type AssetChanges = { name?: string; ownerKey?: string | null; isPublic?: boolean };
@@ -566,6 +578,23 @@ const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
       acceptedBy: ${attribution('acceptor', 'a.changeAcceptedBy')},
       acceptedAt: toString(a.changeAcceptedAt), basis: a.changeBasis } END`;
 
+/** The source record as the domain sees it. Requires `a` in scope. The
+ * reference is the anchor, so its absence is the attribution's absence: there
+ * is no half-quoted source record. Deliberately not derived from, compared
+ * with, or ordered by anything — it is evidence, read and nothing else. */
+const sourceRecordProjection = `CASE WHEN a.sourceReference IS NULL THEN null ELSE {
+      reference: a.sourceReference, recordedAt: toString(a.sourceRecordedAt),
+      recordedBy: a.sourceRecordedBy } END`;
+
+/** Stamps a newly created Asset with the record it came from. Requires `a` in
+ * scope plus the parameters `sourceRecordParams` produces.
+ *
+ * Only ever a clause of the CREATE that makes the Asset. No update path sets
+ * these, which is what makes the attribution immutable: a later edit has its
+ * own `basis`, and replacing where a record came from is not an edit. */
+const recordSource = `SET a.sourceReference = $sourceReference,
+    a.sourceRecordedAt = datetime($sourceRecordedAt), a.sourceRecordedBy = $sourceRecordedBy`;
+
 /** Stamps the Asset with who made this change true. Requires `a` in scope plus
  * `$actorKey` and the parameters `changeParams` produces.
  *
@@ -647,6 +676,7 @@ const assetRowsProjection = (order: string) => `
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
+    sourceRecord: ${sourceRecordProjection},
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
@@ -715,6 +745,7 @@ const assetProjection = `
   WITH a, u, o, issuances, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
+    sourceRecord: ${sourceRecordProjection},
     owner: o { .key, .name },
     groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }] } AS asset`;
@@ -1146,7 +1177,7 @@ export class IdentityStore {
 
   async reportAsset(value: ReportAsset, context: ReportingContext, photoKey: string | null = null,
     origin: ChangeOrigin = {}): Promise<Asset> {
-    const input = record(value, ['name', 'identifiers', 'ownerKey']);
+    const input = record(value, ['name', 'identifiers', 'ownerKey', 'sourceRecord']);
     const actor = record(context, ['actorKey', 'groupKey']);
     const identifiers = canonicalIdentifiers(input.identifiers);
     const params = {
@@ -1157,6 +1188,10 @@ export class IdentityStore {
       ownerKey: input.ownerKey === undefined ? null : requiredText(input.ownerKey, 'ownerKey'),
       ...identifierParams(identifiers),
       ...changeParams(origin),
+      // Validated before the transaction opens, with every other input, so a
+      // malformed attribution fails the whole report rather than creating an
+      // Asset that then has to be corrected.
+      ...sourceRecordParams(input.sourceRecord),
       photoKey,
     };
     try {
@@ -1170,6 +1205,7 @@ export class IdentityStore {
           WITH u, g, o WHERE $ownerKey IS NULL OR o IS NOT NULL
           CREATE (a:Asset {id: $assetId, name: $name, reportedAt: datetime(), isPublic: false})
           ${recordChange}
+          ${recordSource}
           WITH a, u, g, o
           CREATE (a)-[:REPORTED_BY]->(u), (g)-[:CAN_COLLABORATE]->(a)
           FOREACH (owner IN CASE WHEN o IS NULL THEN [] ELSE [o] END |

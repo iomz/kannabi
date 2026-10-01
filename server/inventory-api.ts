@@ -273,7 +273,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const actorKey = actor(c.get('user'));
       if (!media) throw new HTTPException(503, { message: 'Media storage unavailable' });
       const form = await c.req.formData();
-      const input = record(JSON.parse(String(form.get('report'))), ['name', 'identifiers', 'ownerKey', 'groupKey']);
+      const input = record(JSON.parse(String(form.get('report'))), ['name', 'identifiers', 'ownerKey', 'groupKey', 'sourceRecord']);
       const { groupKey, ...report } = input;
       const file = form.get('photo');
       if (file !== null && !(file instanceof File)) throw new ValidationError('Expected a photo file');
@@ -367,7 +367,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       assetLookupQuery(value as Record<string, unknown>)), async (c) =>
       c.json(await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'))))
     .post('/assets', validator('json', (value) => {
-      const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey']);
+      const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey', 'sourceRecord']);
       return { ...input, groupKey: requiredText(input.groupKey, 'groupKey') } as ReportAsset & { groupKey: string };
     }), async (c) => {
       const actorKey = actor(c.get('user'));

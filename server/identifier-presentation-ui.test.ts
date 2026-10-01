@@ -36,19 +36,20 @@ test('an identifier card carries scheme, value and provenance, and nothing that 
   } finally { view.stop(); }
 });
 
-test('what a scheme identifies is available on demand from its name', async () => {
+test('a scheme name is a reference to GS1, not a Kannabi explanation', () => {
   const view = list();
   try {
-    // The scheme name is the trigger, and it keeps its own accessible name.
-    const trigger = [...document.querySelectorAll('[data-slot="tooltip-trigger"]')]
-      .find((node) => node.textContent?.trim() === 'GTIN') as HTMLElement | undefined;
-    assert.ok(trigger, 'the scheme name is the affordance');
-    // A portal surface does not exist until it is opened, so open it.
-    await settle(() => trigger!.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
-    await settle();
-    const explanation = document.querySelector('[data-slot="tooltip-content"]')?.textContent ?? '';
-    assert.match(explanation, /Trade item/);
-    assert.match(explanation, /Describes a class this Asset belongs to/);
+    // What a GS1 key is belongs to GS1. Kannabi's own help affordance is for
+    // Kannabi concepts, and wearing it here would claim the definition.
+    assert.equal(view.button('About GTIN'), null);
+    const link = [...document.querySelectorAll('a')]
+      .find((anchor) => anchor.textContent?.trim() === 'GTIN')!;
+    assert.ok(link, 'the name is the reference');
+    // AI 01 is the GTIN's own Application Identifier.
+    assert.equal(link.getAttribute('href'), 'https://ref.gs1.org/ai/01');
+    assert.match(link.getAttribute('aria-label') ?? '', /GS1 reference/);
+    // The orientation line stays beside it, once.
+    assert.match(view.text(), /Trade item — describes what this Asset is/);
   } finally { view.stop(); }
 });
 

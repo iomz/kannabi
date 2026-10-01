@@ -1,5 +1,8 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { cn } from 'cn';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Icon } from './icon';
 
 /** The few compositions that repeat across every screen.
  *
@@ -25,6 +28,104 @@ export function Hint({ className, ...props }: ComponentProps<'p'>) {
   return <p {...props} className={cn('text-[.8rem] text-muted-foreground [overflow-wrap:anywhere]', className)} />;
 }
 
+/** A Panel whose body folds away, with its heading as the control.
+ *
+ * The Asset page grows a section per capability, and a reader who came for one
+ * of them should not have to scroll past the rest. Which sections start open is
+ * a judgement about what a page is usually for, so each caller states it.
+ *
+ * `<details>` rather than a scripted disclosure: the browser already gives the
+ * summary a role, keyboard operation and an expanded state, and nothing here
+ * needs behaviour it does not have. The open state is presentation and lives
+ * only in the DOM — it is deliberately not persisted, because a fold is not a
+ * preference a reader set.
+ */
+export function Section({ title, defaultOpen, children, className }: {
+  title: ReactNode;
+  /** Open on arrival. Omitted means folded. */
+  defaultOpen?: boolean;
+  children?: ReactNode;
+  className?: string;
+}) {
+  return <Panel className={className}>
+    <details open={defaultOpen} className="[&>summary]:cursor-pointer [&[open]>summary]:mb-4">
+      <summary><h2 className="mb-0 inline text-[1.05rem]">{title}</h2></summary>
+      {children}
+    </details>
+  </Panel>;
+}
+
+/** Explanation, on request.
+ *
+ * A page that states a rule beside every fact reads as documentation with
+ * controls embedded in it. The fact or the control is the normal state; the
+ * sentence explaining it waits behind this.
+ *
+ * A popover rather than a tooltip. A tooltip opens on hover and focus and
+ * closes again on click, so somebody who clicks or taps the affordance — which
+ * is what people do with a question mark — watches the answer vanish. This
+ * opens on activation, stays until dismissed by Escape, by clicking away or by
+ * pressing the trigger again, and takes focus with it. The content is an
+ * ordinary block, so prose sets in a column rather than being laid out as flex
+ * items around whatever inline code it contains.
+ */
+export function HelpTip({ label, children, className }: {
+  /** Names what is being explained, e.g. "About GS1 Digital Link". */
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return <Popover>
+    <PopoverTrigger
+      render={<button type="button" aria-label={label} />}
+      // The gap was never the margin, it was the padding: a 1.75rem box round
+      // a 1rem glyph leaves .375rem of air on each side before any gap is
+      // added, so the glyph read as a control standing apart from its label.
+      // The visible box is now the glyph's own size and the target is grown
+      // back past it with an inset pseudo-element, which keeps roughly 2rem of
+      // hit area without any of it being visible.
+      className={cn('relative inline-flex size-[1.15rem] shrink-0 items-center justify-center',
+        'rounded-[.3rem] align-[-.15em] text-muted-foreground transition-colors',
+        'before:absolute before:-inset-[.4rem] before:content-[""]',
+        'hover:bg-muted hover:text-foreground',
+        'aria-expanded:bg-muted aria-expanded:text-foreground [&_.icon]:size-[1.15rem]', className)}>
+      <Icon name="info" />
+    </PopoverTrigger>
+    <PopoverContent>{children}</PopoverContent>
+  </Popover>;
+}
+
+/** An action carried by its glyph alone.
+ *
+ * Reading is the page's normal state, and a bordered button beside every fact
+ * competes with the fact. The chrome arrives on hover and focus instead, so
+ * the control stays discoverable without being loud. The hit target does not
+ * shrink with the border: the visible box goes, the clickable one stays.
+ *
+ * `label` is required rather than optional — an icon with no accessible name
+ * is a button nobody can read.
+ */
+export function IconButton({ label, tone, className, ...props }: ComponentProps<typeof Button> & {
+  label: string;
+  /** `destructive` keeps its warning for hover and focus rather than wearing
+   * it while somebody is only reading. */
+  tone?: 'destructive';
+}) {
+  return <Button type="button" variant="ghost" size="icon-sm" aria-label={label}
+    className={cn('text-muted-foreground [&_.icon]:size-[1.05rem]',
+      tone === 'destructive' && 'hover:bg-destructive/10 hover:text-destructive', className)}
+    {...props} />;
+}
+
+/** A heading inside a Section, for a group that is part of one subject rather
+ * than a subject of its own. */
+export function SubHeading({ className, children, ...props }: ComponentProps<'h3'>) {
+  return <h3 {...props}
+    className={cn('mt-6 mb-3 flex items-center gap-1 text-[.8rem] font-[650] tracking-[.08em] uppercase text-muted-foreground first:mt-0', className)}>
+    {children}
+  </h3>;
+}
+
 /** A small caps label naming what kind of thing this page is about. */
 export function Eyebrow({ className, ...props }: ComponentProps<'p'>) {
   return <p {...props} className={cn('mb-2 text-[.65rem] font-[650] tracking-[.15em] uppercase text-muted-foreground', className)} />;
@@ -41,7 +142,10 @@ export function PageHeading({ eyebrow, title, description, children, className }
   className?: string;
 }) {
   return <div className={cn('mb-8 flex items-center justify-between gap-6', className)}>
-    <div className="min-w-0">
+    {/* The title column takes the width that is going spare, so a title which
+        becomes an editable field fills the line it already occupied rather
+        than shrinking to its content. */}
+    <div className="min-w-0 flex-1">
       {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
       <h1>{title}</h1>
       {description ? <p className="mt-[.65rem] mb-0 text-[.9rem] text-muted-foreground">{description}</p> : null}
