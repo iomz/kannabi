@@ -63,7 +63,9 @@ export type SourceRecordInput = Readonly<{
  *  - prose like `April 12 2019` is accepted through implementation-specific
  *    fallback parsing, also in local time;
  *  - a date that does not exist rolls over silently, so `2019-02-30T00:00:00Z`
- *    is stored as the 2nd of March.
+ *    is stored as the 2nd of March;
+ *  - a fraction finer than a millisecond is truncated, so `09:30:00.123456Z`
+ *    becomes `09:30:00.123Z`.
  *
  * The attribution is immutable, so any of those would be permanent. An instant
  * needs a date, a time and an explicit offset, so that is what is required, and
@@ -73,7 +75,7 @@ export type SourceRecordInput = Readonly<{
  * a plain date because a filter bound naming a whole day is a sensible thing to
  * ask for. Quoted evidence is not a bound.
  */
-const rfc3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
+const rfc3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
 
 function daysInMonth(year: number, month: number): number {
   if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
@@ -90,7 +92,14 @@ function sourceInstant(value: unknown, field: string): string {
       + 'such as 2019-04-12T09:30:00Z or 2019-04-12T18:30:00+09:00');
   };
   if (!match) refuse();
-  const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match!;
+  const [, year, month, day, hour, minute, second, fraction, , offsetHour, offsetMinute] = match!;
+  // `Date` keeps milliseconds and drops the rest, so a source stating
+  // microseconds would have its instant quietly changed on the way in — the
+  // same loss this whole function exists to prevent, one order of magnitude
+  // down. Trailing zeros are a different spelling of the same instant and stay
+  // acceptable; a nonzero digit past the third is information Kannabi cannot
+  // keep, so it is refused rather than silently discarded.
+  if (fraction !== undefined && /[1-9]/.test(fraction.slice(3))) refuse();
   // Checked here rather than by round-tripping through `Date.UTC`, which remaps
   // years 0 to 99 onto 1900 to 1999 and would reject four-digit years below
   // 0100 that are perfectly valid.

@@ -55,6 +55,10 @@ test('the stated instant is optional, and must name an instant', () => {
   // 1900s, which is what a `Date.UTC` round-trip would do to it.
   assert.equal(at('0099-04-12T09:30:00Z'), '0099-04-12T09:30:00.000Z');
   assert.equal(at('2020-02-29T00:00:00Z'), '2020-02-29T00:00:00.000Z', 'a real leap day');
+  // Fewer than three fractional digits, and trailing zeros past the third, are
+  // other spellings of an instant Kannabi can keep exactly.
+  assert.equal(at('2019-04-12T09:30:00.1Z'), '2019-04-12T09:30:00.100Z');
+  assert.equal(at('2019-04-12T09:30:00.123000Z'), '2019-04-12T09:30:00.123Z');
 });
 
 test('a time the source did not state is refused rather than invented', () => {
@@ -78,6 +82,15 @@ test('a time the source did not state is refused rather than invented', () => {
   rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00+09:60' }, 'offset minute out of range');
   rejects({ reference: 'r', recordedAt: '2019-12-31T23:59:60Z' },
     'a leap second cannot be represented, so it is refused rather than moved');
+  // `Date` keeps milliseconds and truncates the rest, so a finer fraction would
+  // be stored as a different instant — the same loss as an implied zone, one
+  // order of magnitude down.
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00.123456Z' },
+    'microseconds would be truncated to .123');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00.1239Z' },
+    'a fourth nonzero digit is information Kannabi cannot keep');
+  rejects({ reference: 'r', recordedAt: '2019-04-12T09:30:00.000000001Z' },
+    'a nanosecond would vanish entirely');
   rejects({ reference: 'r', recordedAt: 'whenever' }, 'unparseable');
   rejects({ reference: 'r', recordedAt: 1555061400000 }, 'not a string');
 });
