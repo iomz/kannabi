@@ -540,6 +540,60 @@ If storage is unavailable, cleanup waits for recovery and the pending photo is n
 To evaluate an empty deployment, sign up, create a Group or join through a Group controller, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
+## Capability surfaces
+
+Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP server. They are not the same size, and are not meant to be. Each absence below is a decision, not a gap waiting to be filled, and the ones that carry meaning are explained under the table. The HTTP API is mounted at `/api`, which is why one row names an address outside it.
+
+| Capability | Web UI | HTTP API | MCP |
+| --- | --- | --- | --- |
+| **Assets** | | | |
+| Browse and search | yes | `GET /api/assets` | `search_assets` |
+| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
+| Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
+| Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
+| Supply identifiers while reporting | no | yes | no |
+| Rename, change visibility | yes | `PATCH /api/assets/{id}` | no |
+| **Source attribution** | | | |
+| Read what a source record stated | yes | yes | `get_asset` |
+| Supply it | no | creation only | no |
+| **Identifiers** | | | |
+| Record an identifier assigned elsewhere | yes | `POST /api/assets/{id}/identifiers` | no |
+| Detach one | yes | `DELETE /api/assets/{id}/identifiers/{key}` | no |
+| Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /api/assets/{id}/giai`, `/grai`, `/sgtin` | no |
+| Read an Asset's own issuances | yes | in the Asset representation | `get_asset` |
+| List the issuance ledger | no | no | `list_gs1_issuances` |
+| **GS1 namespaces** | | | |
+| Configure or deactivate a prefix namespace | yes | `POST /api/groups/{key}/gs1-namespaces`, `PATCH /api/gs1-namespaces/{key}` | no |
+| List namespaces | yes | `GET /api/gs1-namespaces` | `list_gs1_namespaces` |
+| Allocate or adopt a class key | yes | `POST /api/gs1-namespaces/{key}/class-keys` | no |
+| List class keys | yes | `GET /api/gs1-namespaces/{key}/class-keys` | `list_managed_class_keys` |
+| **GS1 Digital Link** | | | |
+| Dereference a supported address | yes | document address, not an `/api` route | path returned, never dereferenced |
+| **Groups** | | | |
+| Create, add a member, leave | yes | `POST /api/groups`, `POST /api/groups/{key}/members`, `DELETE /api/groups/{key}/membership` | no |
+| List | yes | `GET /api/groups`, `GET /api/groups/controlled` | `list_groups` |
+| Grant or remove Asset collaboration | yes | `PUT`/`DELETE /api/assets/{id}/collaboration/{groupKey}` | no |
+| **Photos** | | | |
+| Upload, read, delete | yes | `POST`/`GET`/`DELETE /api/assets/{id}/photos` | metadata only, never bytes |
+| **Account and administration** | | | |
+| Profile, appearance, account deletion | yes | `/api/profile*` | no |
+| API tokens | yes | `/api/api-tokens*` | no |
+| Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
+
+### What the absences mean
+
+**MCP writes nothing.** All seven tools are read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
+
+**The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
+
+**Reporting through the browser takes no identifiers.** The form asks for a name, a Group and optionally a photo, and identifiers are added from the Asset page afterwards. An Asset exists independently of GS1, so nothing about identification belongs on the path that brings one into existence. A client loading a corpus already holds the identifiers and supplies them in one request.
+
+**The issuance ledger is listed only over MCP.** Per-Asset issuances reach all three surfaces through the Asset representation, which is what answers "did Kannabi issue this value" — the question allocation provenance exists for. A ledger-wide listing is a different question, about a namespace rather than an Asset, and so far only an agent inspecting allocation provenance has needed it.
+
+**A Digital Link address is a document address.** Kannabi dereferences the forms it supports by serving the Asset page at them, outside `/api`; there is no JSON endpoint that takes one. MCP reports the path an identifier corresponds to and does not resolve it, because resolving it would grant nothing a `get_asset` call does not already answer.
+
+**MCP returns photo metadata and never photo bytes.** The keys identify the images within Kannabi; the images themselves stay behind the HTTP photo routes and their authorization.
+
 ## Tests
 
 ```sh

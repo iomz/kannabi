@@ -109,6 +109,8 @@ Keep object bytes behind the small S3 storage interface and photo metadata in Ne
 Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, and the API token lifetime ceiling; store timestamps as absolute instants.
 System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
+
+The README capability matrix records what each of the three surfaces — web UI, HTTP API, MCP — can do. Any change that adds, removes, or materially changes what a surface exposes updates that table in the same change, and states the reason beneath it when an absence is deliberate. This keeps the record honest; it is not a requirement that the surfaces match. Asymmetry between them is normal and often the point, and the table exists so that each asymmetry is a decision somebody wrote down rather than something a reader has to infer from the route list.
 Do not commit or push without explicit authorization.
 
 A human acceptance-test cycle adds a restriction rather than relaxing the one above: committing still requires explicit authorization, and an authorized local commit must additionally not be pushed to the pull request branch until the human accepts that checkpoint. Pushing publishes the work for remote review and therefore advances the checkpoint on the human's behalf, which is theirs to decide.
