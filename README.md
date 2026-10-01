@@ -542,43 +542,43 @@ Enable the photo requirement, select a display timezone, and change the built-in
 
 ## Capability surfaces
 
-Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP server. They are not the same size, and are not meant to be. Each absence below is a decision, not a gap waiting to be filled, and the ones that carry meaning are explained under the table.
+Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP server. They are not the same size, and are not meant to be. Each absence below is a decision, not a gap waiting to be filled, and the ones that carry meaning are explained under the table. The HTTP API is mounted at `/api`, which is why one row names an address outside it.
 
 | Capability | Web UI | HTTP API | MCP |
 | --- | --- | --- | --- |
 | **Assets** | | | |
-| Browse and search | yes | `GET /assets` | `search_assets` |
-| Resolve a complete identifier | yes | `GET /assets/lookup` | `resolve_external_identifier` |
-| Inspect one Asset | yes | `GET /assets/:id` | `get_asset` |
-| Report an Asset | yes | `POST /assets`, `POST /reports` | no |
+| Browse and search | yes | `GET /api/assets` | `search_assets` |
+| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
+| Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
+| Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
 | Supply identifiers while reporting | no | yes | no |
-| Rename, change visibility | yes | `PATCH /assets/:id` | no |
+| Rename, change visibility | yes | `PATCH /api/assets/{id}` | no |
 | **Source attribution** | | | |
 | Read what a source record stated | yes | yes | `get_asset` |
 | Supply it | no | creation only | no |
 | **Identifiers** | | | |
-| Record an identifier assigned elsewhere | yes | `POST /assets/:id/identifiers` | no |
-| Detach one | yes | `DELETE /assets/:id/identifiers/:key` | no |
-| Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /assets/:id/{giai,grai,sgtin}` | no |
+| Record an identifier assigned elsewhere | yes | `POST /api/assets/{id}/identifiers` | no |
+| Detach one | yes | `DELETE /api/assets/{id}/identifiers/{key}` | no |
+| Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /api/assets/{id}/giai`, `/grai`, `/sgtin` | no |
 | Read an Asset's own issuances | yes | in the Asset representation | `get_asset` |
 | List the issuance ledger | no | no | `list_gs1_issuances` |
 | **GS1 namespaces** | | | |
-| Configure or deactivate a prefix namespace | yes | `POST /groups/:key/gs1-namespaces`, `PATCH /gs1-namespaces/:key` | no |
-| List namespaces | yes | `GET /gs1-namespaces` | `list_gs1_namespaces` |
-| Allocate or adopt a class key | yes | `POST /gs1-namespaces/:key/class-keys` | no |
-| List class keys | yes | `GET /gs1-namespaces/:key/class-keys` | `list_managed_class_keys` |
+| Configure or deactivate a prefix namespace | yes | `POST /api/groups/{key}/gs1-namespaces`, `PATCH /api/gs1-namespaces/{key}` | no |
+| List namespaces | yes | `GET /api/gs1-namespaces` | `list_gs1_namespaces` |
+| Allocate or adopt a class key | yes | `POST /api/gs1-namespaces/{key}/class-keys` | no |
+| List class keys | yes | `GET /api/gs1-namespaces/{key}/class-keys` | `list_managed_class_keys` |
 | **GS1 Digital Link** | | | |
 | Dereference a supported address | yes | document address, not an `/api` route | path returned, never dereferenced |
 | **Groups** | | | |
-| Create, add a member, leave | yes | `POST /groups`, `POST /groups/:key/members`, `DELETE /groups/:key/membership` | no |
-| List | yes | `GET /groups`, `GET /groups/controlled` | `list_groups` |
-| Grant or remove Asset collaboration | yes | `PUT`/`DELETE /assets/:id/collaboration/:groupKey` | no |
+| Create, add a member, leave | yes | `POST /api/groups`, `POST /api/groups/{key}/members`, `DELETE /api/groups/{key}/membership` | no |
+| List | yes | `GET /api/groups`, `GET /api/groups/controlled` | `list_groups` |
+| Grant or remove Asset collaboration | yes | `PUT`/`DELETE /api/assets/{id}/collaboration/{groupKey}` | no |
 | **Photos** | | | |
-| Upload, read, delete | yes | `POST`/`GET`/`DELETE /assets/:id/photos` | metadata only, never bytes |
+| Upload, read, delete | yes | `POST`/`GET`/`DELETE /api/assets/{id}/photos` | metadata only, never bytes |
 | **Account and administration** | | | |
-| Profile, appearance, account deletion | yes | `/profile*` | no |
-| API tokens | yes | `/api-tokens*` | no |
-| Users, settings, mail, Group recovery | yes | `/admin/*`, `/settings` | no |
+| Profile, appearance, account deletion | yes | `/api/profile*` | no |
+| API tokens | yes | `/api/api-tokens*` | no |
+| Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
 
 ### What the absences mean
 
