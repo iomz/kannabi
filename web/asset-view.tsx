@@ -47,11 +47,16 @@ export async function loadAsset(id: string, request: Request) {
   const digitalLinks = Object.fromEntries(result.asset.identifiers
     .filter((identifier) => identifier.level === 'individual')
     .map((identifier) => [identifier.key, absolute(digitalLinkPath(identifier))]));
-  // Only namespaces this Asset's Groups manage, and only active ones. The
-  // server re-checks the Group join and the active state on every issuance;
-  // this narrows what is offered, never what is permitted.
+  // Only namespaces this Asset's Groups manage, only active ones, and only
+  // those whose managing Group this reader controls. Issuing is authority over
+  // what a Group manages, so membership alone no longer carries it (#20); a
+  // member without control can still see the namespace and still cannot issue
+  // from it. The server re-checks the Group join, the control and the active
+  // state on every issuance; this narrows what is offered, never what is
+  // permitted.
   const eligible = namespaces.filter((namespace) =>
-    namespace.active && namespace.group && groupKeys.has(namespace.group.key));
+    namespace.active && namespace.group && groupKeys.has(namespace.group.key)
+    && controlled.some((group) => group.key === namespace.group!.key));
   // The class keys those namespaces manage, flattened with the prefix each
   // belongs to, so a serialised GRAI or an SGTIN can name the one it is
   // issued under. Inactive class keys are left out for the same reason

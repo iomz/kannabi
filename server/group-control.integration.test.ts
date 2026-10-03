@@ -70,8 +70,13 @@ test('Group control grants membership, never Asset access', { skip: !uri || !pas
   assert.equal(reported.status, 201);
   const assetId = (await reported.json()).asset.id as string;
   const assetPath = `/assets/${assetId}`;
-  const configured = await member(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' });
-  assert.equal(configured.status, 201);
+  // Configured by the controller, who at this point still holds membership too.
+  // Since #20 a namespace is configured with membership and control of the
+  // managing Group, so `member` — a member without control — cannot; this
+  // setup exists so the assertions below have a real namespace to point at,
+  // and who may configure one is asserted in gs1-authority.integration.test.ts.
+  const configured = await controller(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' });
+  assert.equal(configured.status, 201, await configured.clone().text());
   const namespaceKey = (await configured.json()).namespace.key as string;
 
   await t.test('a controller without membership cannot read, edit, or issue for a private Asset', async () => {

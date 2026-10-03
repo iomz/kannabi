@@ -180,8 +180,9 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
         ? 'Kannabi has issued every identifier it can for this Asset.'
         : namespaces.length === 0
           ? <>No identifiers can currently be issued for this Asset: no collaborating Group you
-            belong to has an active GS1 Company Prefix. <Link to="/groups">Configure one under
-            Groups</Link>, then come back.</>
+            belong to and control has an active GS1 Company Prefix. <Link to="/groups">Configure one
+            under Groups</Link>, then come back — or ask a controller of one of this Asset’s
+            Groups.</>
           : <>No identifiers can currently be issued for this Asset. A serialised GRAI or an SGTIN
             is issued under a managed class key, and this Asset’s prefixes have no active
             one yet. <Link to="/groups">Allocate or adopt a class key under Groups</Link>, then

@@ -680,9 +680,40 @@ const assetRowsProjection = (order: string) => `
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
-/** Which GS1 namespaces an audience may see. Requires `n` in scope. */
+/** Which GS1 namespaces an audience may see. Requires `n` in scope.
+ *
+ * Reading stays with membership. Narrowing privileged mutation to controllers
+ * says who may change a namespace, not who may know it exists: a member can
+ * already see every value the Group issued on its own Assets, so hiding the
+ * namespace from them would conceal nothing and would stop them finding out
+ * who to ask. */
 const visibleNamespace = `($systemRead OR EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n) })`;
+
+/** The organizational authority for privileged operations on what a Group
+ * manages. Requires `g` bound to that Group, plus `$actorKey`.
+ *
+ * Membership is matched by the surrounding pattern and control by this, so both
+ * are required and neither substitutes for the other. A controller who is not a
+ * member has no authority over the Group's resources, and a member who does not
+ * control the Group no longer has any either — which is the narrowing this
+ * expresses, replacing the temporary any-member assumption that shipped with
+ * v0.5.0's allocation machinery.
+ *
+ * It is one constant rather than a clause per operation so that every
+ * privileged managed-GS1 operation provably asks the same question. Where an
+ * operation also acts on an Asset, that Asset's own predicate is required
+ * independently and in addition: control never substitutes for collaboration.
+ *
+ * Deliberately not a per-resource authority. Control carries every privileged
+ * operation over everything the Group manages, so Kannabi cannot yet express a
+ * GS1 administrator who may not also recruit members; scoping those apart is
+ * done with a second Group until a deployment needs otherwise.
+ */
+const groupControlled = `EXISTS {
+  MATCH (controller:User {key: $actorKey})-[:CONTROLS]->(g)
+  WHERE controller.accountDeletedAt IS NULL
+}`;
 
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
 const collaboration = `EXISTS {
@@ -2022,6 +2053,7 @@ export class IdentityStore {
       }
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
+        WHERE ${groupControlled}
         CREATE (g)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {
           key: $key, gcp: $gcp, active: true,
           ${namespaceCounters.map(counterAssignments).join(',\n          ')},
@@ -2039,7 +2071,8 @@ export class IdentityStore {
     if (typeof active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
     return this.write(async (tx) => {
       const result = await tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {key: $key})
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {key: $key})
+        WHERE ${groupControlled}
         SET n.active = $active
         RETURN ${namespaceProjection} AS namespace`,
       { actorKey, key: requiredText(namespaceKey, 'namespace key'), active });
@@ -2057,8 +2090,9 @@ export class IdentityStore {
     if (typeof active !== 'boolean') throw new ValidationError('Class key active state must be a boolean');
     return this.write(async (tx) => {
       const result = await tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace)
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace)
           <-[:IN_NAMESPACE]-(classKey:Gs1ClassKeyAllocation {key: $key})
+        WHERE ${groupControlled}
         SET classKey.active = $active
         WITH classKey
         OPTIONAL MATCH (asserter:User {key: classKey.assertedBy})
@@ -2103,7 +2137,8 @@ export class IdentityStore {
           ${counterProjection('n', classKeyCounter(scheme))} AS counter`, { key });
       if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
       const authorized = await tx.run(`
-        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
+        MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
+        WHERE ${groupControlled}
         RETURN true AS ok`, { actorKey, key });
       if (!authorized.records.length) throw new ReferenceError('Allocation namespace not found');
       const gcp = locked.records[0].get('gcp') as string;
@@ -2225,10 +2260,13 @@ export class IdentityStore {
             ${counterProjection('n', 'giai')} AS counter`, { key });
         if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
         await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
-        // 2. Authority comes from the Group that manages the namespace, and
-        //    that Group must also collaborate on the Asset.
+        // 2. Authority comes from the Group that manages the namespace — its
+        //    membership and its control, both required — and that Group must
+        //    also collaborate on the Asset. Control is the organizational half
+        //    and never stands in for the Asset half.
         const authorized = await tx.run(`
           MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
+          WHERE ${groupControlled}
           MATCH (g)-[:CAN_COLLABORATE]->(a:Asset {id: $assetId})
           RETURN a.id AS id`, { actorKey, key, assetId: assetKey });
         if (!authorized.records.length) throw new ReferenceError('Asset access or allocation namespace not found');
