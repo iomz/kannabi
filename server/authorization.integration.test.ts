@@ -274,10 +274,16 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     const lookup = (caller: typeof member, params: Record<string, string>) =>
       caller.request('/assets/lookup?' + new URLSearchParams(params));
 
-    // Anonymous callers cannot use lookup at all: #18 adds no anonymous
-    // discovery, even though a public Asset stays readable by direct URI.
-    assert.equal((await lookup(anonymous, { id })).status, 401);
-    assert.equal((await lookup(anonymous, identifier)).status, 401);
+    // Digital Link resolution uses lookup as the public audience. Anonymous
+    // callers may ask, but this private Asset stays indistinguishable from a
+    // missing identity; allowing lookup never broadens the readable set.
+    for (const params of [{ id }, identifier]) {
+      const response = await lookup(anonymous, params);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body.assets, []);
+      assert.equal(body.matching, 0);
+    }
 
     // A member resolves both the native id and the canonical identifier.
     const byId = await lookup(member, { id });
