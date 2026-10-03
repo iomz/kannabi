@@ -572,6 +572,8 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | **Groups** | | | |
 | Create, add a member, leave | yes | `POST /api/groups`, `POST /api/groups/{key}/members`, `DELETE /api/groups/{key}/membership` | no |
 | List | yes | `GET /api/groups`, `GET /api/groups/controlled` | `list_groups` |
+| Read who controls a Group | not yet | `GET /api/groups/{key}/control` | no |
+| Grant or withdraw control | not yet | `PUT`/`DELETE /api/groups/{key}/control/{userKey}` | no |
 | Grant or remove Asset collaboration | yes | `PUT`/`DELETE /api/assets/{id}/collaboration/{groupKey}` | no |
 | **Photos** | | | |
 | Upload, read, delete | yes | `POST`/`GET`/`DELETE /api/assets/{id}/photos` | metadata only, never bytes |
@@ -591,6 +593,8 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 **The issuance ledger is listed only over MCP.** Per-Asset issuances reach all three surfaces through the Asset representation, which is what answers "did Kannabi issue this value" — the question allocation provenance exists for. A ledger-wide listing is a different question, about a namespace rather than an Asset, and so far only an agent inspecting allocation provenance has needed it.
 
 **A Digital Link address is a document address.** Kannabi dereferences the forms it supports by serving the Asset page at them, outside `/api`; there is no JSON endpoint that takes one. MCP reports the path an identifier corresponds to and does not resolve it, because resolving it would grant nothing a `get_asset` call does not already answer.
+
+**Group control has no web surface yet.** Granting and withdrawing it are API operations, and the Groups page still shows only membership. The control plane is reachable and testable where it is decided; putting it in front of people is a separate question about who should be doing this and what they need to see, and belongs with the Group destination (#67) and the managed-authority redesign (#58) rather than being bolted onto a page about membership.
 
 **MCP returns photo metadata and never photo bytes.** The keys identify the images within Kannabi; the images themselves stay behind the HTTP photo routes and their authorization.
 
