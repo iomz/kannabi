@@ -171,7 +171,7 @@ Locating a GS1 Company Prefix inside an arbitrary key requires the GS1 GCP Lengt
 ## GS1 identifier issuance
 
 A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GS1 identifiers under them.
-Configuring a prefix records an assertion by an authorized member, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
+Configuring a prefix records an assertion by a member who controls the Group, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
 General Specifications 26.0 §1.5 states that a licensed GS1 Company Prefix entitles its holder to allocate any GS1 identification key, which is why one namespace serves all three schemes below.
 
 Four operations stay permanently distinct, and the UI keeps them distinct too — each has its own control, because collapsing two of them into one form where an empty field meant "allocate" hid exactly the difference the domain protects:
@@ -243,9 +243,10 @@ Allocating a GTIN does not make Kannabi a product catalogue.
 §4.2.6.1 states that GTIN management and product listing are two entirely autonomous decisions, and §4.2.6 leaves communicating a trade item's characteristics to trading partners with its allocator, in their own systems.
 Kannabi says so where a GTIN is allocated, and models no product data.
 
-One managed GCP belongs to one Group, because Group membership is currently the only authorization Kannabi has; this is a Kannabi authority boundary, not a GS1 organizational claim.
-Any current Group member may configure a namespace, manage class keys in it and issue from it, which is deliberately broader than the eventual model and will be narrowed by Group-scoped privileges without changing allocation semantics or ledger data.
-Class-key management touches no Asset and grants no Asset access; issuing an individual key additionally requires that the managing Group collaborates on the Asset.
+One managed GCP belongs to one Group; this is a Kannabi authority boundary, not a GS1 organizational claim.
+Configuring a namespace, managing class keys in it and issuing from it require membership **and** control of that Group, so a collaborator invited for Asset work does not thereby acquire the power to allocate under the operator's prefix.
+Reading a namespace and its class keys stays with membership, because the prefixes a Group manages are not secret from its members and hiding them would only stop somebody finding out who to ask.
+Class-key management touches no Asset and grants no Asset access; issuing an individual key additionally requires that the managing Group collaborates on the Asset, which control never substitutes for.
 
 Kannabi accepts normative 4–12 digit GS1 Company Prefixes for GS1 key allocation.
 The EPC Tag Data Standard imposes additional treatment for 4- and 5-digit prefixes; EPC binary encoding and EPC URI generation are outside this release and tracked separately.

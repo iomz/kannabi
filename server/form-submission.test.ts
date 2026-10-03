@@ -60,6 +60,40 @@ test('every existing Group form submits its intended API mutation on click', asy
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
+/** A member who does not control the Group.
+ *
+ * Configuring a prefix, managing its class keys and issuing from it now need
+ * membership and control of the managing Group (#20), so the Groups page must
+ * not offer a mutation the server will refuse. Reading is deliberately left
+ * alone: the prefixes a Group manages are not secret from its members, and
+ * hiding them would leave somebody unable to see what to ask a controller for.
+ */
+test('the Groups page offers a member without control nothing it cannot do', () => {
+  const classKey = { key: 'class', scheme: 'gtin' as const, canonical: '06141410000176',
+    gcp: '0614141', namespaceKey: 'active', sequence: 1, provenance: 'allocated' as const,
+    active: true, serial: counter, assertedAt: '2026-01-01T00:00:00Z',
+    assertedBy: { key: 'actor', name: 'Reporter', status: 'active' as const } };
+  const router = createMemoryRouter([{ path: '/groups',
+    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
+      controlledGroups: [], namespaces, classKeys: [classKey] } } as never),
+  }], { initialEntries: ['/groups'] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    document.querySelector('details')!.open = true;
+    // What the Group manages stays visible, and says who to ask.
+    assert.match(view.text(), /0614141/);
+    assert.match(view.text(), /06141410000176/);
+    assert.match(view.text(), /requires control of it\. Ask\s+a controller of this Group/);
+    for (const label of ['Configure prefix', 'Add member', 'Deactivate', 'Reactivate',
+      'Allocate', 'Adopt']) {
+      assert.equal(view.button(label), null, `${label} must not be offered without control`);
+    }
+    // Membership's own actions are untouched by the narrowing.
+    assert.ok(view.button('Leave Group'));
+    assert.ok(view.button('Create Group'));
+  } finally { view.stop(); router.dispose(); }
+});
+
 test('Asset name and visibility submit independently through their own fetchers', async () => {
   const id = newAssetId();
   const originalFetch = globalThis.fetch;
@@ -238,7 +272,12 @@ test('the issuance empty state says what is missing and links to where it is cre
     issuances: [], identifiers: [], busy: false, error: null });
   const first = mount(createElement(RouterProvider, { router: noPrefix }));
   try {
-    assert.match(first.text(), /no collaborating Group you belong to has an\s+active GS1 Company Prefix/);
+    // Issuing is authority over what a Group manages, so the empty state names
+    // control as well as membership (#20); a member without control is told to
+    // ask a controller rather than sent to configure a prefix they cannot.
+    assert.match(first.text(),
+      /no collaborating Group you belong to and control has an\s+active GS1 Company Prefix/);
+    assert.match(first.text(), /ask a controller of one of this Asset’s\s+Groups/);
     assert.equal(document.querySelector('a[href="/groups"]')?.textContent,
       'Configure one under Groups');
     assert.equal(first.button('Issue GIAI'), null);

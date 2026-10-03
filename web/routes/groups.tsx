@@ -134,6 +134,7 @@ export default function Groups({ loaderData: { user, groups, controlledGroups, n
           <summary>{group.name}</summary>
           {controlledKeys.has(group.key) && <AddMemberForm groupKey={group.key} actionData={actionData} busy={busy} />}
           <Gs1Namespaces groupKey={group.key} busy={busy} classKeys={classKeys} justAdded={justAdded}
+            canManage={controlledKeys.has(group.key)}
             namespaces={namespaces.filter((namespace) => namespace.group?.key === group.key)} />
           <Form method="post" preventScrollReset><input type="hidden" name="groupKey" value={group.key} />
             <Hint className="mb-3">Leaving removes your access to this Group’s private Assets, including those you reported.</Hint>
@@ -158,7 +159,7 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   useEffect(() => { if (result?.status === 'added') form.current?.reset(); }, [result]);
   return <Form ref={form} method="post" preventScrollReset className={inlineForm}>
     <input type="hidden" name="intent" value="member" /><input type="hidden" name="groupKey" value={groupKey} />
-    <Field label="Member key" hint="Adding a member lets them view and edit this Group’s private Assets and currently grants namespace access.">
+    <Field label="Member key" hint="Adding a member lets them view and edit this Group’s private Assets. Managing this Group’s GS1 prefixes additionally requires control of it.">
       <Input name="userKey" required /></Field>
     <Button type="submit" disabled={busy}>Add member</Button>
     <div className="flex min-h-8 basis-full items-center" aria-live="polite" aria-atomic="true">
@@ -168,9 +169,15 @@ function AddMemberForm({ groupKey, actionData, busy }: { groupKey: string; actio
   </Form>;
 }
 
-function Gs1Namespaces({ groupKey, namespaces, classKeys, busy, justAdded }: {
+function Gs1Namespaces({ groupKey, namespaces, classKeys, busy, justAdded, canManage }: {
   groupKey: string; namespaces: Gs1Namespace[]; classKeys: ManagedClassKey[]; busy: boolean;
   justAdded: string | null;
+  /** Whether this reader controls the Group, which is what configuring a
+   * prefix, managing its class keys and issuing from it now requires. A member
+   * without control still reads everything here: the prefixes a Group manages
+   * are not secret from its members, and hiding them would leave somebody
+   * unable to see what they need to ask a controller for. */
+  canManage: boolean;
 }) {
   return <div className="my-4">
     <h3 className="mt-0 mb-1 text-[.95rem]">GS1 Company Prefixes</h3>
@@ -198,28 +205,32 @@ function Gs1Namespaces({ groupKey, namespaces, classKeys, busy, justAdded }: {
                 + ` · next ${namespace.gtinFormat} item reference ${namespace.counters.gtinItem.nextSequence}`
               : ' · too long for a class reference, so GIAI only'}</Hint>}
         </div>
-        <Form method="post" preventScrollReset>
+        {canManage && <Form method="post" preventScrollReset>
           <input type="hidden" name="intent" value="namespace-active" />
           <input type="hidden" name="namespaceKey" value={namespace.key} />
           <input type="hidden" name="active" value={namespace.active ? 'false' : 'true'} />
           <Button type="submit" variant="outline" size="sm" disabled={busy}>{namespace.active ? 'Deactivate' : 'Reactivate'}</Button>
-        </Form>
+        </Form>}
         {namespace.classKeyIssuable
-          && <ClassKeys namespaceKey={namespace.key} justAdded={justAdded} classKeys={classKeys
-            .filter((classKey) => classKey.namespaceKey === namespace.key)} busy={busy} />}
+          && <ClassKeys namespaceKey={namespace.key} justAdded={justAdded} canManage={canManage}
+            classKeys={classKeys
+              .filter((classKey) => classKey.namespaceKey === namespace.key)} busy={busy} />}
       </li>)}</ul>}
-    <Form method="post" preventScrollReset className={inlineForm}>
-      <input type="hidden" name="intent" value="namespace" />
-      <input type="hidden" name="groupKey" value={groupKey} />
-      <Field label="GS1 Company Prefix"
-        hint="Four to twelve digits. Restricted-circulation prefix space is not a company prefix and is refused.">
-        <Input name="gcp" inputMode="numeric" required /></Field>
-      <Field label="Already-used GIAI references"
-        hint="Optional. References issued before Kannabi, which it must never allocate.">
-        <Input name="giaiExclusions" placeholder="1-4,9-11,200-300" />
-      </Field>
-      <Button type="submit" disabled={busy}>Configure prefix</Button>
-    </Form>
+    {canManage
+      ? <Form method="post" preventScrollReset className={inlineForm}>
+        <input type="hidden" name="intent" value="namespace" />
+        <input type="hidden" name="groupKey" value={groupKey} />
+        <Field label="GS1 Company Prefix"
+          hint="Four to twelve digits. Restricted-circulation prefix space is not a company prefix and is refused.">
+          <Input name="gcp" inputMode="numeric" required /></Field>
+        <Field label="Already-used GIAI references"
+          hint="Optional. References issued before Kannabi, which it must never allocate.">
+          <Input name="giaiExclusions" placeholder="1-4,9-11,200-300" />
+        </Field>
+        <Button type="submit" disabled={busy}>Configure prefix</Button>
+      </Form>
+      : <Hint>Configuring a prefix for this Group, and issuing from one, requires control of it. Ask
+        a controller of this Group.</Hint>}
   </div>;
 }
 
@@ -230,10 +241,12 @@ function Gs1Namespaces({ groupKey, namespaces, classKeys, busy, justAdded }: {
  * allocation record and nothing more — Kannabi holds no product data for it,
  * and giving it a label would make it look like master data it is not.
  */
-function ClassKeys({ namespaceKey, classKeys, busy, justAdded }: {
+function ClassKeys({ namespaceKey, classKeys, busy, justAdded, canManage }: {
   namespaceKey: string; classKeys: ManagedClassKey[]; busy: boolean;
   /** The key added a moment ago, highlighted where the reader was working. */
   justAdded: string | null;
+  /** Whether this reader controls the Group that manages the prefix. */
+  canManage: boolean;
 }) {
   return <div className="basis-full">
     <Hint className="mb-2">Class keys under this prefix. Kannabi issues SGTIN serials under a managed
@@ -255,21 +268,21 @@ function ClassKeys({ namespaceKey, classKeys, busy, justAdded }: {
             {classKey.serial.exclusions.length
               ? ` · existing use ${formatExclusionRanges(classKey.serial.exclusions)}` : ''}</Hint>
         </div>
-        <Form method="post" preventScrollReset>
+        {canManage && <Form method="post" preventScrollReset>
           <input type="hidden" name="intent" value="class-key-active" />
           <input type="hidden" name="namespaceKey" value={namespaceKey} />
           <input type="hidden" name="classKeyKey" value={classKey.key} />
           <input type="hidden" name="active" value={classKey.active ? 'false' : 'true'} />
           <Button type="submit" variant="outline" size="sm" disabled={busy}>
             {classKey.active ? 'Deactivate' : 'Reactivate'}</Button>
-        </Form>
+        </Form>}
       </li>)}</ul>}
     {/* Two actions, because they are two assertions. Allocating asks Kannabi
         to produce the next reference from this prefix. Adopting tells Kannabi
         that this Group already produced one elsewhere, and hands it only the
         serial space underneath. Collapsing them into one form where an empty
         field meant "allocate" hid exactly the distinction the domain keeps. */}
-    <div className="mt-4 grid gap-3 md:grid-cols-2">
+    {canManage && <div className="mt-4 grid gap-3 md:grid-cols-2">
       <Form method="post" preventScrollReset
         className="rounded-lg border border-dashed p-4 [&_label]:m-0">
         <input type="hidden" name="intent" value="class-key-allocate" />
@@ -301,7 +314,7 @@ function ClassKeys({ namespaceKey, classKeys, busy, justAdded }: {
           <Input name="serialExclusions" placeholder="1-100" /></Field>
         <ActionRow><Button type="submit" variant="outline" disabled={busy}>Adopt</Button></ActionRow>
       </Form>
-    </div>
+    </div>}
   </div>;
 }
 

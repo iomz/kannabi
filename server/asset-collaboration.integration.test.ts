@@ -93,11 +93,21 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
   });
 
   await t.test('B collaboration never grants A namespace authority', async () => {
-    const namespace = await store.configureGs1Namespace(aOnly.key, a.key, { gcp: '0614141' });
+    // Configured by bridge, which holds both membership and control of A.
+    // aOnly and dual are members of A without controlling it, so since #20 they
+    // hold no authority over what A manages — asserted below rather than left
+    // as an accident of which actor this line happens to use.
+    const namespace = await store.configureGs1Namespace(bridge.key, a.key, { gcp: '0614141' });
     assert.equal((await bOnly.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 404);
     assert.equal((await bOnly.call(`/gs1-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
     assert.equal((await bOnly.call(`/groups/${a.key}/gs1-namespaces`, 'POST', { gcp: '9521234' })).status, 404);
-    assert.equal((await dual.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 200);
+    // Sharing an Asset with B never lends A's authority, and neither does
+    // membership of A on its own.
+    assert.equal((await dual.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 404,
+      'membership of the managing Group is no longer sufficient without its control');
+    assert.equal((await aOnly.call(`/gs1-namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
+    assert.equal((await bridge.call(`${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 200,
+      'membership and control of the managing Group, which also collaborates');
   });
 
   await t.test('bearer grants record credential and basis; owner authority remains live', async () => {
@@ -167,6 +177,11 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
   });
 
   await t.test('writes waiting behind revocation recheck access before changing anything', async () => {
+    // bOnly is a member of B but not a controller, so since #20 it holds no
+    // authority over what B manages. bridge controls B and grants it, which is
+    // how authority is now obtained; this test is about writes racing a
+    // revocation, not about who may configure.
+    await store.setGroupControl(bridge.key, b.key, bOnly.key, true);
     const namespace = await store.configureGs1Namespace(bOnly.key, b.key, { gcp: '9521234' });
     const target = await store.reportAsset({ name: 'Revocation race' }, { actorKey: bridge.key, groupKey: a.key });
     await store.setAssetCollaboration(target.id, bridge.key, b.key, true);

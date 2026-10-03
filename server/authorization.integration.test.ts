@@ -211,17 +211,23 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   });
 
   await t.test('GIAI allocation is Group-authorized and idempotent over the API', async () => {
-    // Configuring a prefix is a Group-member act; outsiders cannot reach it.
+    // Configuring a prefix takes membership and control of the managing Group;
+    // outsiders cannot reach it, and since #20 neither can an ordinary member.
     assert.equal((await stranger.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 404);
     assert.equal((await anonymous.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 401);
+    assert.equal((await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 404,
+      'membership alone is no longer namespace authority');
+    // The Group's creator controls it and grants that control, which is how
+    // authority is obtained; the rest of this test then proceeds as before.
+    assert.equal((await reporter.request(`/groups/${groupKey}/control/${people[1].key}`, 'PUT')).status, 200);
     const configured = await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST',
       { gcp: '0614141', giaiExclusions: [{ from: 1, to: 4 }] });
     assert.equal(configured.status, 201, await configured.clone().text());
     const namespace = (await configured.json()).namespace;
     assert.equal(namespace.gcp, '0614141');
     assert.deepEqual(namespace.counters.giai.exclusions, [{ from: 1, to: 4 }]);
-    // A second Group cannot claim a managed prefix while Group membership is
-    // the only authorization model.
+    // One managed GCP belongs to one Group, so the same prefix cannot be
+    // claimed twice.
     assert.equal((await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 409);
     assert.equal((await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '06141A1' })).status, 400);
 

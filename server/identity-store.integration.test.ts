@@ -716,7 +716,17 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await assert.rejects(store.issueKey(asset.id, stranger.key, 'giai', { namespaceKey: namespace.key }), ReferenceError);
     await assert.rejects(store.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: foreign.key }), ReferenceError);
     await assert.rejects(store.issueKey(asset.id, owner.key, 'giai', { namespaceKey: 'not-a-namespace' }), ReferenceError);
-    // A Group member of the namespace-owning Group that collaborates succeeds.
+    // Nor is membership of the collaborating, namespace-managing Group enough
+    // on its own: issuing is authority over what that Group manages, which
+    // since #20 is membership and control of it.
+    await assert.rejects(store.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: namespace.key }), ReferenceError);
+    // With that control, a member of the namespace-owning Group that
+    // collaborates succeeds — and need not be the Asset's reporter. Granted in
+    // Cypher because `createUser` makes a domain User with no authentication
+    // account, which `setGroupControl` deliberately refuses; the grant itself is
+    // exercised through the domain API in group-control-lifecycle.
+    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey})
+      CREATE (u)-[:CONTROLS]->(g)`, { userKey: collaborator.key, groupKey: group.key });
     assert.ok((await store.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: namespace.key })).issuances.length);
   });
 
