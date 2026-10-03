@@ -345,6 +345,17 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       const added = await store.addGroupMember(actor(c.get('user')), c.req.param('key'), c.req.valid('json').userKey);
       return c.json({ ok: true, added });
     })
+    // Group administration, shaped like the collaboration routes: control is a
+    // relationship between a User and a Group, so the address names both and
+    // the verb says which way it goes.
+    .get('/groups/:key/control', async (c) => c.json({
+      controllers: await store.listGroupControllers(actor(c.get('user')), c.req.param('key')) }))
+    .put('/groups/:key/control/:userKey', async (c) => c.json(
+      await store.setGroupControl(actor(c.get('user')), c.req.param('key'),
+        c.req.param('userKey'), true)))
+    .delete('/groups/:key/control/:userKey', async (c) => c.json(
+      await store.setGroupControl(actor(c.get('user')), c.req.param('key'),
+        c.req.param('userKey'), false)))
     .delete('/groups/:key/membership', async (c) => {
       await store.leaveGroup(actor(c.get('user')), c.req.param('key'));
       return c.json({ ok: true });

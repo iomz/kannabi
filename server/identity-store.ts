@@ -1139,6 +1139,94 @@ export class IdentityStore {
     });
   }
 
+  /** Who controls this Group, for a controller deciding what to change.
+   *
+   * Authorized by control rather than membership, because this is the
+   * control plane: a controller who is not a member still administers the
+   * Group and still needs to see who else does. It returns Group
+   * administration only — no Asset, no membership, no namespace ledger — so
+   * reading it discloses nothing a controller could not already act on.
+   */
+  async listGroupControllers(actorKey: string, groupKey: string): Promise<ReporterAttribution[]> {
+    const params = {
+      actorKey: requiredText(actorKey, 'actorKey'), groupKey: requiredText(groupKey, 'groupKey'),
+    };
+    return this.write(async (tx) => {
+      // Authorized in a query of its own. Folding the check into the listing
+      // would make an unauthorized caller indistinguishable from a Group with
+      // nothing to list, and answer both with an empty array and a 200.
+      const authorized = await tx.run(`
+        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(:Group {key: $groupKey})
+        WHERE actor.accountDeletedAt IS NULL
+        RETURN actor.key`, params);
+      if (!authorized.records.length) throw new ReferenceError('Group control not found');
+      const result = await tx.run(`
+        MATCH (u:User)-[:CONTROLS]->(:Group {key: $groupKey})
+        RETURN ${attribution('u', 'u.key')} AS controller
+        ORDER BY toLower(coalesce(u.name, u.provenanceName, '')), u.key`, params);
+      return result.records.map((row) => row.get('controller') as ReporterAttribution);
+    });
+  }
+
+  /** Grant or withdraw control of a Group.
+   *
+   * Control was created at Group creation and by administrator recovery, and
+   * removed only by account deletion, so it could neither be handed on nor
+   * given up. A Group could therefore not intentionally become uncontrolled
+   * while a living controller remained — which also made recovery, the one
+   * repair mechanism, unreachable in exactly the case needing repair.
+   *
+   * Controllers are peers. Any of them may grant control or withdraw it, from
+   * another or from themselves, and there is no primary controller to appeal
+   * to; introducing one would be a different model. Peer withdrawal is what
+   * makes a departed controller removable, and so what makes reaching zero
+   * possible at all.
+   *
+   * Reaching zero is allowed. An uncontrolled Group is valid and is what the
+   * existing administrator recovery is for. Nothing here invents a successor,
+   * and nothing blocks a controller from standing down.
+   *
+   * Transfer is this operation twice: grant, then withdraw. No separate
+   * transfer exists, because a succession step would have to decide who
+   * inherits, which is the invention this model refuses.
+   *
+   * Control stays independent of membership in both directions: a grant adds
+   * no membership, and this is never called when somebody leaves a Group.
+   */
+  async setGroupControl(actorKey: string, groupKey: string, userKey: string,
+    control: boolean): Promise<{ changed: boolean }> {
+    const params = {
+      actorKey: requiredText(actorKey, 'actorKey'),
+      groupKey: requiredText(groupKey, 'groupKey'),
+      userKey: requiredText(userKey, 'userKey'),
+    };
+    return this.write(async (tx) => {
+      // The target User first, then the Group, exactly as recovery orders them:
+      // a deletion racing this must not turn an active match into a tombstone
+      // grant, and the Group lock serializes concurrent control changes.
+      await tx.run('MATCH (u:User {key: $userKey}) SET u.lock = true', params);
+      await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true', params);
+      const authorized = await tx.run(`
+        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(g:Group {key: $groupKey})
+        WHERE actor.accountDeletedAt IS NULL
+        RETURN EXISTS { MATCH (:User {key: $userKey})-[:CONTROLS]->(g) } AS held`, params);
+      if (!authorized.records.length) throw new ReferenceError('Group control not found');
+      if (authorized.records[0].get('held') === control) return { changed: false };
+      if (control) {
+        // Only an account that can exercise it. A tombstone holding control
+        // would be an authority nobody can use and nobody can withdraw.
+        const granted = await tx.run(`MATCH (g:Group {key: $groupKey}), (u:User {key: $userKey})
+          WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
+          CREATE (u)-[:CONTROLS]->(g) RETURN g.key`, params);
+        if (!granted.records.length) throw new ReferenceError('Active User not found');
+        return { changed: true };
+      }
+      await tx.run(`MATCH (:User {key: $userKey})-[control:CONTROLS]->(:Group {key: $groupKey})
+        DELETE control`, params);
+      return { changed: true };
+    });
+  }
+
   async addGroupMember(actorKey: string, groupKey: string, userKey: string): Promise<boolean> {
     return this.write(async (tx) => {
       const result = await tx.run(`
