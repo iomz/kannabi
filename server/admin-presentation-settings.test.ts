@@ -4,10 +4,10 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import Administration, { clientAction as adminSettingsAction } from '../web/routes/settings.js';
-import { mount, settle, withTheme } from './dom-render.js';
+import { mount, withTheme } from './dom-render.js';
 import { defaultToastSeconds, validateSettings } from './settings.js';
 
-test('instance presentation settings default hidden and render as independent choices', async () => {
+test('instance presentation settings default hidden and render as independent choices', () => {
   const settings = validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
   assert.equal(settings.showAssetId, false);
   assert.equal(settings.showIdentifierPolicyVersion, false);
@@ -29,54 +29,25 @@ test('instance presentation settings default hidden and render as independent ch
     assert.ok(policy);
     assert.equal(assetId.checked, false);
     assert.equal(policy.checked, false);
+    assert.ok(view.text().includes('Show Kannabi ID on Asset pages'));
+    assert.ok(view.text().includes('Show identifier policy version on Asset pages'));
+    assert.ok(view.text().includes('A surfaced GS1 Digital Link URI is unaffected'));
+    assert.ok(view.text().includes('Shows Kannabi’s stable UUIDv7 reference for the Asset, and the native Asset URI that spells it.'));
     const general = [...document.querySelectorAll('h2')].find((heading) => heading.textContent === 'General')
       ?.closest('section');
     assert.ok(general);
-    // Each setting is named by a short label; the explanation is not on the
-    // page until somebody asks for it.
     assert.deepEqual([...general.querySelectorAll('label')].map((label) => label.textContent?.trim()), [
-      'Require asset photo', 'Show Kannabi ID', 'Show identifier policy version', 'Enforce GTIN consistency',
-      'Display timezone', 'Maximum API token lifetime (days)', 'Notification duration (seconds)',
+      'Require photo when reporting an Asset', 'Show Kannabi ID on Asset pages',
+      'Show identifier policy version on Asset pages', 'Enforce GTIN consistency',
+      'Display timezone',
+      'Longest API token lifetime (days)', 'How long a message stays on screen (seconds)',
     ]);
-    assert.equal(general.querySelectorAll('p').length, 0, 'no setting carries a standing helper paragraph');
-    assert.doesNotMatch(view.text(), /GS1 Digital Link URIs are unaffected/);
-    const helps = ['Require asset photo', 'Show Kannabi ID', 'Show identifier policy version',
-      'Enforce GTIN consistency', 'Display timezone', 'Maximum API token lifetime', 'Notification duration'];
-    const explanations = [
-      /Require a photo when creating an Asset\./,
-      /permanent Kannabi UUID and URI\. GS1 Digital Link URIs are unaffected\./,
-      /GS1 policy version used to validate each identifier\./,
-      /Require GTINs associated with the same Asset to match, including those embedded in SGTINs\./,
-      /Choose how timestamps are displayed\. Stored timestamps\s+are unchanged\./,
-      /Leave empty to allow tokens without expiration\./,
-      /Hovering pauses the timer\. Between 2 and 30\./,
-    ];
-    for (const [index, name] of helps.entries()) {
-      const help = view.button(`About ${name}`);
-      assert.ok(help, `${name} has its own info affordance`);
-      // Beside the label, never inside it, so the control's name stays the
-      // label's words and activating the icon does not toggle the setting.
-      assert.equal(help.closest('label'), null);
-      assert.equal(help.getAttribute('aria-expanded'), 'false');
-      await settle(() => help.click());
-      assert.equal(help.getAttribute('aria-expanded'), 'true');
-      const popup = [...document.querySelectorAll('[data-slot="popover-content"]')].at(-1);
-      assert.ok(popup);
-      assert.match(popup.textContent ?? '', explanations[index]);
-      // Portalled out of the card, so the card's bounds cannot clip it.
-      assert.equal(general.contains(popup), false);
-      await settle(() => document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
-      assert.equal(help.getAttribute('aria-expanded'), 'false');
-    }
-    // Opening every explanation changed no setting.
-    assert.equal(assetId.checked, false);
-    assert.equal(policy.checked, false);
     const theme = [...document.querySelectorAll('h2')].filter((heading) => heading.textContent === 'Theme');
     // GTIN consistency is enforced unless an administrator turns it off.
     const consistency = document.querySelector<HTMLInputElement>('input[name="enforceGtinConsistency"]');
     assert.ok(consistency);
     assert.equal(consistency.checked, true);
+    assert.ok(view.text().includes('Require GTINs associated with the same Asset to match, including those embedded in SGTINs.'));
     assert.equal(theme.length, 1, 'Theme has one visible card heading');
     assert.ok(theme[0].closest('section')?.className.includes('max-w-3xl'));
     assert.equal(settings.toastSeconds, defaultToastSeconds);
