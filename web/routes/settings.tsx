@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { redirect, useFetcher } from 'react-router';
 import { api, unwrap } from '../api';
 import { ThemeSelector } from '../theme-selector';
@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ActionRow, ActionStatus, Eyebrow, Field, Hint, NativeSelect, Panel, SectionHeading,
+import { ActionRow, ActionStatus, Eyebrow, Field, HelpTip, Hint, NativeSelect, Panel, SectionHeading,
   StatusPill } from '../ui';
 
 /** Two fields that belong together on one line where there is room. */
@@ -28,6 +28,31 @@ const subSection = 'mt-7 border-t pt-6';
 const subHeading = 'mt-0 mb-[.35rem] text-[.95rem]';
 const credentialContext = 'mb-[.7rem] flex flex-wrap items-baseline gap-x-[.65rem] gap-y-[.35rem]';
 const credentialAction = 'h-auto shrink-0 p-0 text-[.78rem] font-medium';
+
+/* A General setting shows its name and nothing else; what it does waits behind
+ * the info icon beside the name. The icon sits outside the label rather than
+ * inside it, so its own name never joins the control's accessible name and
+ * activating it never toggles the control. */
+function SettingSwitch({ label, help, ...control }: Omit<ComponentProps<typeof Switch>, 'label' | 'className'> & {
+  label: string; help: ReactNode;
+}) {
+  return <div className="mb-[1.15rem] flex items-center gap-1.5">
+    <Switch {...control} label={label} className="mb-0" />
+    <HelpTip label={`About ${label}`}>{help}</HelpTip>
+  </div>;
+}
+
+function SettingField({ id, label, helpLabel, help, children }: {
+  id: string; label: string; helpLabel: string; help: ReactNode; children: ReactNode;
+}) {
+  return <div className="mb-[1.15rem] grid gap-2">
+    <div className="flex items-center gap-1.5">
+      <Label htmlFor={id} className="font-[550]">{label}</Label>
+      <HelpTip label={helpLabel}>{help}</HelpTip>
+    </div>
+    {children}
+  </div>;
+}
 
 /** Delivery state is a fact about the instance, not a severity scale — but a
  * state that stops mail being sent has to read differently from one that does
@@ -308,45 +333,45 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     <Panel form><h2>General</h2>
       <fetcher.Form method="post"><fieldset disabled={busy} aria-busy={busy}>
         <input type="hidden" name="intent" value="settings" />
-        <Switch name="requirePhoto" checked={current.requirePhoto}
+        <SettingSwitch name="requirePhoto" checked={current.requirePhoto}
           onCheckedChange={(requirePhoto) => update({ requirePhoto })}
-          label="Require photo when reporting an Asset" />
-        <p className={settingHelp}>Applies to new Asset reports.</p>
-        <Switch name="showAssetId" checked={current.showAssetId} disabled={busy}
-          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show Kannabi ID on Asset pages" />
-        <p className={settingHelp}>Shows Kannabi’s stable UUIDv7 reference for the Asset, and the native Asset URI that spells it. A surfaced GS1 Digital Link URI is unaffected, and the native address keeps resolving either way.</p>
-        <Switch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
+          label="Require asset photo" help="Require a photo when creating an Asset." />
+        <SettingSwitch name="showAssetId" checked={current.showAssetId} disabled={busy}
+          onCheckedChange={(showAssetId) => update({ showAssetId })} label="Show Kannabi ID"
+          help="Display the Asset’s permanent Kannabi UUID and URI. GS1 Digital Link URIs are unaffected." />
+        <SettingSwitch name="showIdentifierPolicyVersion" checked={current.showIdentifierPolicyVersion} disabled={busy}
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
-          label="Show identifier policy version on Asset pages" />
-        <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
-        <Switch name="enforceGtinConsistency" checked={current.enforceGtinConsistency} disabled={busy}
+          label="Show identifier policy version"
+          help="Display the GS1 policy version used to validate each identifier." />
+        <SettingSwitch name="enforceGtinConsistency" checked={current.enforceGtinConsistency} disabled={busy}
           onCheckedChange={(enforceGtinConsistency) => update({ enforceGtinConsistency })}
-          label="Refuse identifiers that name conflicting GTINs" />
-        <p className={settingHelp}>An Asset is an instance of one trade item, so by default every GTIN it carries, alone or inside an SGTIN, must agree. Turn this off only to record conflicting identifiers a source asserted; each keeps its own basis and the conflict stays visible. Applies to new identifiers: turning it back on removes nothing already recorded.</p>
+          label="Enforce GTIN consistency"
+          help="Require GTINs associated with the same Asset to match, including those embedded in SGTINs." />
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
-          onChange={(displayTimezone) => update({ displayTimezone })} />
-        <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
-        <Field label="Longest API token lifetime (days)">
-          <Input name="apiTokenMaxLifetimeDays" type="number" min={1} step={1} inputMode="numeric"
-            defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
+          onChange={(displayTimezone) => update({ displayTimezone })}
+          help={<HelpTip label="About Display timezone">Choose how timestamps are displayed. Stored timestamps
+            are unchanged.</HelpTip>} />
+        <SettingField id="api-token-max-lifetime" label="Maximum API token lifetime (days)"
+          helpLabel="About Maximum API token lifetime"
+          help="Maximum lifetime in days for new API tokens. Leave empty to allow tokens without expiration.">
+          <Input id="api-token-max-lifetime" name="apiTokenMaxLifetimeDays" type="number" min={1} step={1}
+            inputMode="numeric" defaultValue={current.apiTokenMaxLifetimeDays ?? ''} disabled={busy}
             onBlur={(event) => {
               const raw = event.currentTarget.value.trim();
               const next = raw === '' ? null : Number(raw);
               if (next !== current.apiTokenMaxLifetimeDays) update({ apiTokenMaxLifetimeDays: next });
             }} />
-        </Field>
-        <p className={settingHelp}>Leave empty to allow tokens that never expire. A token's expiry is
-          absolute and is fixed when it is created.</p>
-        <Field label="How long a message stays on screen (seconds)">
-          <Input name="toastSeconds" type="number" min={minToastSeconds} max={maxToastSeconds} step={1}
-            inputMode="numeric" defaultValue={current.toastSeconds} disabled={busy}
+        </SettingField>
+        <SettingField id="toast-seconds" label="Notification duration (seconds)"
+          helpLabel="About Notification duration"
+          help={`Time in seconds before notifications disappear. Hovering pauses the timer. Between ${minToastSeconds} and ${maxToastSeconds}.`}>
+          <Input id="toast-seconds" name="toastSeconds" type="number" min={minToastSeconds} max={maxToastSeconds}
+            step={1} inputMode="numeric" defaultValue={current.toastSeconds} disabled={busy}
             onBlur={(event) => {
               const next = Number(event.currentTarget.value.trim());
               if (Number.isSafeInteger(next) && next !== current.toastSeconds) update({ toastSeconds: next });
             }} />
-        </Field>
-        <p className={settingHelp}>Between {minToastSeconds} and {maxToastSeconds}. Resting the pointer
-          on a message holds it, however short this is.</p>
+        </SettingField>
       </fieldset></fetcher.Form>
     </Panel>
     <Panel className="max-w-3xl"><h2>Theme</h2>

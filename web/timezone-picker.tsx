@@ -1,10 +1,14 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { filterTimezones } from './timezones';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-export function TimezonePicker({ name, value, disabled = false, onChange }: {
-  name: string; value: string; disabled?: boolean; onChange?(value: string): void;
+export function TimezonePicker({ name, value, disabled = false, help, onChange }: {
+  name: string; value: string; disabled?: boolean;
+  /** Set beside the label rather than inside it, so it never becomes part of
+   * the picker's accessible name. */
+  help?: ReactNode;
+  onChange?(value: string): void;
 }) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -47,7 +51,8 @@ export function TimezonePicker({ name, value, disabled = false, onChange }: {
 
   return <div ref={root} className="relative mb-[1.15rem] grid max-w-[30rem] gap-2"
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
-    <Label id={`${id}-label`} htmlFor={`${id}-trigger`}>Display timezone</Label>
+    <div className="flex items-center gap-1.5">
+      <Label id={`${id}-label`} htmlFor={`${id}-trigger`}>Display timezone</Label>{help}</div>
     <input type="hidden" name={name} value={selected} readOnly />
     <button id={`${id}-trigger`} ref={trigger} type="button" disabled={disabled}
       className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-card px-2.5 py-1 text-left text-sm shadow-xs outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
