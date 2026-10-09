@@ -123,8 +123,9 @@ test('a refused GTIN consistency switch hands back the Assets that block it', as
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('the GTIN conflict dialog names the readable Assets, counts the rest and pages on request', async () => {
+test('the GTIN conflict dialog names the readable Assets, counts the rest and has one OK', async () => {
   const originalFetch = globalThis.fetch;
+  const originalObserver = globalThis.IntersectionObserver;
   const asked: string[] = [];
   globalThis.fetch = async (input) => {
     asked.push(String(input));
@@ -132,11 +133,20 @@ test('the GTIN conflict dialog names the readable Assets, counts the rest and pa
       assets: [{ id: '01a1208f-8ce3-7523-9947-cd187ada00d3', name: 'Third' }] } }),
     { headers: { 'Content-Type': 'application/json' } });
   };
+  // The list pages as it is scrolled to its end, as the inventory does; this
+  // stands in for the browser reporting that the end came into view.
+  const watching: (() => void)[] = [];
+  globalThis.IntersectionObserver = class {
+    constructor(private readonly callback: IntersectionObserverCallback) {}
+    observe() { watching.push(() => this.callback([{ isIntersecting: true }] as never, this as never)); }
+    disconnect() {}
+  } as never;
+  let closed = 0;
   const conflicts = { total: 3, hidden: 1, next: '01a1208f-8ce3-7523-9947-cd187ada00d2',
     assets: [{ id: '01a1208f-8ce3-7523-9947-cd187ada00d1', name: 'First' },
       { id: '01a1208f-8ce3-7523-9947-cd187ada00d2', name: 'Second' }] };
   const router = createMemoryRouter([{ path: '/', element: createElement(GtinConflictDialog,
-    { conflicts, onClose: () => {} }) }], { initialEntries: ['/'] });
+    { conflicts, onClose: () => { closed += 1; } }) }], { initialEntries: ['/'] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
     await settle();
@@ -147,10 +157,26 @@ test('the GTIN conflict dialog names the readable Assets, counts the rest and pa
     assert.deepEqual(links(), [['First', '/asset/01a1208f-8ce3-7523-9947-cd187ada00d1'],
       ['Second', '/asset/01a1208f-8ce3-7523-9947-cd187ada00d2']]);
     assert.match(view.text(), /1 more is in Groups you do not belong to/);
-    await settle(() => view.button('Show more')!.click());
+    // The refusal is the dialog's description, and the Assets to act on stand
+    // apart from it.
+    const description = document.getElementById(view.dialog()!.getAttribute('aria-describedby') ?? '');
+    assert.match(description?.textContent ?? '', /^3 Assets have conflicting GTINs\./);
+    assert.equal(description!.querySelector('a'), null);
+    const buttons = () => [...view.dialog()!.querySelectorAll('button')].map((button) => button.textContent?.trim());
+    assert.deepEqual(buttons(), ['OK'], 'one acknowledgement and nothing else');
+
+    assert.equal(asked.length, 0, 'nothing more is read until the list end is reached');
+    await settle(() => watching.at(-1)!());
     await settle();
     assert.match(asked[0], /\/api\/admin\/gtin-conflicts\?after=01a1208f-8ce3-7523-9947-cd187ada00d2/);
     assert.deepEqual(links().map(([name]) => name), ['First', 'Second', 'Third']);
-    assert.equal(view.button('Show more'), null, 'the last page offers no more');
-  } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
+    assert.deepEqual(buttons(), ['OK'], 'paging adds no button');
+
+    await settle(() => view.button('OK')!.click());
+    assert.equal(closed, 1, 'OK closes the dialog and does nothing else');
+    assert.equal(asked.length, 1, 'closing sends nothing');
+  } finally {
+    view.stop(); router.dispose(); globalThis.fetch = originalFetch;
+    globalThis.IntersectionObserver = originalObserver;
+  }
 });
