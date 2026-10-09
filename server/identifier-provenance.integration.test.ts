@@ -93,6 +93,8 @@ test('quoted descriptions, identifier provenance and GTIN consistency', { skip: 
   };
   const byScheme = (identifiers: Identifier[], scheme: string) =>
     identifiers.filter((identifier) => identifier.scheme === scheme);
+  const conflictSetFor = async (id: string) => (await query(`MATCH (:Settings {key: 'instance'})
+    -[:HAS_GTIN_CONFLICT]->(a:Asset {id: $id}) RETURN a.id AS id`, { id })).records.map((row) => row.get('id') as string);
 
   // A product GTIN and a lab number in SGTIN syntax whose GTIN names no
   // trade item: the combination a legacy depot recorded on most of its Assets.
@@ -260,12 +262,79 @@ test('quoted descriptions, identifier provenance and GTIN consistency', { skip: 
     assert.equal((await loader(`/assets/${elsewhere.id}/identifiers`, 'POST', labSgtin('901'))).status, 409,
       'an individual identifier still identifies one Asset');
 
-    // Back on: nothing recorded is removed or rewritten; new conflicts are
-    // refused; an identifier that adds no AI 01 is still accepted.
+    // The instance keeps a queryable set of the Assets holding a conflict.
+    const coherentPair = await loader('/assets', 'POST', { groupKey, name: 'Two serials, one trade item',
+      identifiers: [labSgtin('904'), labSgtin('905')] });
+    assert.equal(coherentPair.status, 201);
+    const sameTradeItem = await loader('/assets', 'POST', { groupKey, name: 'GTIN and its own SGTIN',
+      identifiers: [productGtin, { scheme: 'sgtin', gtin: '04901234567894', serial: '1' }] });
+    assert.equal(sameTradeItem.status, 201, 'a GTIN-13 and the GTIN-14 inside an SGTIN are one GTIN');
+    const conflictSet = async () => (await query(`MATCH (:Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(a:Asset)
+      RETURN a.id AS id ORDER BY id`)).records.map((row) => row.get('id') as string);
+    const togetherId = (await together.json()).asset.id as string;
+    assert.deepEqual(await conflictSet(), [asset.id, togetherId].sort());
+
+    // Switching enforcement back on is refused while they exist, names them,
+    // and leaves the setting off.
+    const blocked = await call('/settings', 'PATCH', { requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', enforceGtinConsistency: true });
+    assert.equal(blocked.status, 409);
+    const refusal = await blocked.json() as { error: string; gtinConflicts: {
+      total: number; hidden: number; assets: { id: string; name: string }[]; next: string | null } };
+    assert.match(refusal.error, /conflicting GTINs/);
+    assert.equal(refusal.gtinConflicts.total, 2);
+    assert.equal(refusal.gtinConflicts.hidden, 0);
+    assert.deepEqual(refusal.gtinConflicts.assets.map((entry) => entry.name).sort(),
+      ['Conflict in one report', 'Conflict recorded']);
+    assert.equal(refusal.gtinConflicts.next, null);
+    assert.equal((await (await call('/settings')).json()).settings.enforceGtinConsistency, false);
+    // Saving another setting while enforcement stays off is not blocked.
+    await setEnforcement(false);
+
+    // Startup rebuilds the set from the identifiers themselves: a database
+    // that never kept it, or kept a stale one, is brought into line, and no
+    // identifier is touched.
+    const before = await query('MATCH (:Asset)-[r:IDENTIFIED_BY|CLASSIFIED_AS]->() RETURN count(r) AS n');
+    await query(`MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->() DELETE c`);
+    await query(`MATCH (s:Settings {key: 'instance'}), (a:Asset {name: 'Two serials, one trade item'})
+      CREATE (s)-[:HAS_GTIN_CONFLICT]->(a)`);
+    await IdentityStore.open(driver);
+    await IdentityStore.open(driver);
+    assert.deepEqual(await conflictSet(), [asset.id, togetherId].sort(), 'rebuilt, idempotently');
+    const afterRebuild = await query('MATCH (:Asset)-[r:IDENTIFIED_BY|CLASSIFIED_AS]->() RETURN count(r) AS n');
+    assert.equal(afterRebuild.records[0].get('n').toNumber(), before.records[0].get('n').toNumber());
+
+    // An Asset the administrator cannot read is counted but not named.
+    const hiddenAsset = (await (await loader('/assets', 'POST', { groupKey, name: 'Elsewhere conflict',
+      identifiers: [productGtin, labSgtin('906')] })).json()).asset as { id: string };
+    await query(`MATCH (:Group {key: $groupKey})-[r:CAN_COLLABORATE]->(a:Asset {id: $id}) DELETE r
+      CREATE (:Group {key: $other, name: 'Other lab'})-[:CAN_COLLABORATE]->(a)`,
+    { groupKey, id: hiddenAsset.id, other: randomUUID() });
+    const withHidden = await (await call('/settings', 'PATCH', { requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', enforceGtinConsistency: true })).json() as typeof refusal;
+    assert.equal(withHidden.gtinConflicts.total, 3);
+    assert.equal(withHidden.gtinConflicts.hidden, 1);
+    assert.equal(withHidden.gtinConflicts.assets.some((entry) => entry.id === hiddenAsset.id), false);
+    // Deleting an Asset takes its membership with it. Kannabi has no deletion
+    // route; the relationship model is what guarantees this.
+    await query('MATCH (a:Asset {id: $id}) DETACH DELETE a', { id: hiddenAsset.id });
+    assert.deepEqual(await conflictSet(), [asset.id, togetherId].sort());
+
+    // Detaching the identifier that disagrees resolves a conflict, and the
+    // set follows; once none remain, enforcement resumes.
+    const gtinOf = async (id: string) => byScheme((await read(id)).identifiers, 'gtin')[0];
+    assert.equal((await loader(`/assets/${asset.id}/identifiers/${(await gtinOf(asset.id)).key}`, 'DELETE')).status, 200);
+    assert.deepEqual(await conflictSet(), [togetherId]);
+    assert.equal((await call('/settings', 'PATCH', { requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', enforceGtinConsistency: true })).status, 409, 'one conflict still blocks');
+    assert.equal((await loader(`/assets/${togetherId}/identifiers/${(await gtinOf(togetherId)).key}`, 'DELETE')).status, 200);
+    assert.deepEqual(await conflictSet(), []);
     await setEnforcement(true);
+
+    // Back on: new conflicts are refused; an identifier that adds no AI 01 is
+    // still accepted.
     const kept = await read(asset.id);
-    assert.deepEqual(kept.identifiers.map((identifier) => identifier.canonical).sort(),
-      conflicted.identifiers.map((identifier) => identifier.canonical).sort());
+    assert.deepEqual(kept.identifiers.map((identifier) => identifier.scheme), ['sgtin']);
     assert.equal((await loader(`/assets/${asset.id}/identifiers`, 'POST',
       { scheme: 'gtin', gtin: '4512345678906' })).status, 400, 'a further conflicting GTIN');
     assert.equal((await loader(`/assets/${asset.id}/identifiers`, 'POST',
@@ -273,5 +342,63 @@ test('quoted descriptions, identifier provenance and GTIN consistency', { skip: 
     'unrelated to AI 01');
     assert.equal((await loader('/assets', 'POST', { groupKey, name: 'Conflict refused again',
       identifiers: [productGtin, labSgtin('903')] })).status, 400);
+    assert.deepEqual(await conflictSet(), []);
+  });
+
+  await t.test('a large conflict set is paged and its total stays exact', async () => {
+    await setEnforcement(false);
+    const ids: string[] = [];
+    for (let n = 0; n < 23; n += 1) {
+      const response = await loader('/assets', 'POST', { groupKey, name: `Paged conflict ${n}`,
+        identifiers: [productGtin, labSgtin(`p${n}`)] });
+      assert.equal(response.status, 201);
+      ids.push((await response.json()).asset.id);
+    }
+    const refused = await (await call('/settings', 'PATCH', { requirePhoto: false, displayTimezone: 'UTC',
+      themeId: 'default', enforceGtinConsistency: true })).json() as { gtinConflicts: {
+      total: number; assets: { id: string }[]; next: string | null } };
+    assert.equal(refused.gtinConflicts.total, 23);
+    assert.equal(refused.gtinConflicts.assets.length, 20);
+    assert.ok(refused.gtinConflicts.next);
+    const rest = await call(`/admin/gtin-conflicts?after=${refused.gtinConflicts.next}`);
+    assert.equal(rest.status, 200);
+    const second = (await rest.json()).gtinConflicts as { total: number; assets: { id: string }[]; next: string | null };
+    assert.equal(second.total, 23);
+    assert.equal(second.next, null);
+    assert.deepEqual([...refused.gtinConflicts.assets, ...second.assets].map((entry) => entry.id), [...ids].sort());
+    assert.equal((await loader('/admin/gtin-conflicts')).status, 403, 'an ordinary token is not administration');
+    assert.equal((await call('/admin/gtin-conflicts?after=not-an-id')).status, 400);
+    // Resolve them so the next test starts from an empty set.
+    for (const id of ids) {
+      const gtin = byScheme((await read(id)).identifiers, 'gtin')[0];
+      assert.equal((await loader(`/assets/${id}/identifiers/${gtin.key}`, 'DELETE')).status, 200);
+    }
+    await setEnforcement(true);
+  });
+
+  await t.test('enforcement and a conflicting write never both succeed', async () => {
+    for (let round = 0; round < 8; round += 1) {
+      await setEnforcement(false);
+      const { asset } = await (await loader('/assets', 'POST', { groupKey, name: `Race ${round}`,
+        identifiers: [labSgtin(`r${round}`)] })).json();
+      const [enable, attach] = await Promise.all([
+        call('/settings', 'PATCH', { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+          enforceGtinConsistency: true }),
+        loader(`/assets/${asset.id}/identifiers`, 'POST', productGtin),
+      ]);
+      // Either the conflict landed first and blocks enforcement, or
+      // enforcement landed first and refuses the conflict.
+      assert.ok((enable.status === 409 && attach.status === 201) || (enable.status === 200 && attach.status === 400),
+        `round ${round}: settings ${enable.status}, attach ${attach.status}`);
+      const enforcing = (await (await call('/settings')).json()).settings.enforceGtinConsistency as boolean;
+      assert.equal(enforcing, enable.status === 200);
+      if (enforcing) assert.deepEqual(await conflictSetFor(asset.id), []);
+      else {
+        assert.deepEqual(await conflictSetFor(asset.id), [asset.id]);
+        const gtin = byScheme((await read(asset.id)).identifiers, 'gtin')[0];
+        assert.equal((await loader(`/assets/${asset.id}/identifiers/${gtin.key}`, 'DELETE')).status, 200);
+      }
+    }
+    await setEnforcement(true);
   });
 });

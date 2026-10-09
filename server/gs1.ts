@@ -493,10 +493,11 @@ export function classKeyConflictReason(
  * The rules of `assertCompatible`, judged on what the addition introduces. On
  * an Asset whose identifiers are coherent the two answers are identical. They
  * differ only on an Asset that already holds a GTIN conflict, recorded while an
- * instance did not enforce the rule: there, turning enforcement back on refuses
- * any identifier that would disagree with a GTIN the Asset carries, while an
- * identifier with no AI 01 at all is still accepted. The conflict already
- * recorded is neither repaired nor a reason to refuse unrelated writes.
+ * instance did not enforce the rule. Enforcement cannot resume while any Asset
+ * holds one, so under enforcement this is a defence rather than a path: it
+ * refuses any identifier that would disagree with a GTIN the Asset carries,
+ * while an identifier with no AI 01 at all is still accepted. The conflict
+ * already recorded is neither repaired nor a reason to refuse unrelated writes.
  */
 export function assertAttachable(existing: readonly ExternalIdentifier[], identifier: ExternalIdentifier,
   policy: CoherencePolicy = defaultCoherencePolicy): void {
@@ -506,6 +507,14 @@ export function assertAttachable(existing: readonly ExternalIdentifier[], identi
       && committedComponents(existing, 'gtin').some((value) => value !== gtin)) {
     throw new ValidationError(conflictingGtins);
   }
+}
+
+/** Whether these identifiers, taken together, name more than one trade item:
+ * every AI 01 counts, alone as a GTIN or inside an SGTIN, and several
+ * identifiers naming the same GTIN do not conflict. The one definition of a GTIN
+ * conflict, shared by enforcement and by the record of which Assets hold one. */
+export function hasGtinConflict(identifiers: readonly ExternalIdentifier[]): boolean {
+  return committedComponents(identifiers, 'gtin').length > 1;
 }
 
 export function assertCompatible(identifiers: readonly ExternalIdentifier[],
@@ -521,9 +530,7 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[],
   // — alone as a GTIN or inside an SGTIN — must name the same trade item.
   // Configurable per instance (`CoherencePolicy`): an instance recording what a
   // legacy source asserted may keep a conflict visible rather than refuse it.
-  const gtins = new Set(identifiers.flatMap((identifier) =>
-    typeof identifier.components.gtin === 'string' ? [identifier.components.gtin] : []));
-  if (policy.enforceGtinConsistency && gtins.size > 1) throw new ValidationError(conflictingGtins);
+  if (policy.enforceGtinConsistency && hasGtinConflict(identifiers)) throw new ValidationError(conflictingGtins);
   // The same rule one scheme along. A GRAI asset type names a series of
   // identical returnable assets, so an Asset belongs to at most one: carrying
   // two would claim it is a member of one series and an instance within

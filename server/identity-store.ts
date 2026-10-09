@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Record as Neo4jRecord, Session } from 'neo4j-driver';
-import neo4j, { int } from 'neo4j-driver';
+import neo4j, { int, type Integer } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
   type AssetSort,
@@ -10,7 +10,7 @@ import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
 import { gs1LedgerCursor, type Gs1LedgerRequest } from './gs1-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { sourceRecordParams, type SourceRecord, type SourceRecordInput } from './source-record.js';
-import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
+import { assetId, assetIdPattern, isAssetId, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
 import {
   changeParams, type AssertingCredential, type ChangeOrigin, type ChangeProvenance,
@@ -21,7 +21,7 @@ import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
   allocatedGtinFormat, allocatedSgtin, assertAttachable, assertCompatible, canIssueClassKey, canonicalGcp,
   canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
-  issuanceClassScheme,
+  hasGtinConflict, issuanceClassScheme,
   storedIdentifier, type ClassKeyScheme, type CoherencePolicy, type ExternalIdentifier, type IdentifierLevel,
   type IdentifierScheme, type IssuanceScheme,
 } from './gs1.js';
@@ -37,6 +37,31 @@ export class ReferenceError extends Error {}
 export class AdministrationError extends Error {}
 export class LastAdministratorError extends Error {}
 export class LastCollaborationError extends Error {}
+
+/** One page of the Assets that currently carry a GTIN conflict, as one reader
+ * may see them.
+ *
+ * `total` counts every conflicting Asset in the instance, so the number that
+ * blocks enforcement is never understated; `assets` lists only those the reader
+ * can read, because system administration grants no Asset access, and
+ * `hidden` says how many of the total that leaves out. `next` continues the
+ * list after the last Asset shown, or is null when there are no more. */
+export type GtinConflictPage = Readonly<{
+  total: number;
+  hidden: number;
+  assets: readonly Readonly<{ id: string; name: string }>[];
+  next: string | null;
+}>;
+
+/** Enforcement was asked to resume while Assets still carry conflicting GTINs. */
+export class GtinConflictError extends Error {
+  constructor(readonly conflicts: GtinConflictPage) {
+    super('GTIN consistency cannot be enabled while Assets carry conflicting GTINs');
+  }
+}
+
+/** How many conflicting Assets one response lists. */
+export const gtinConflictPageSize = 20;
 /** A User an external principal resolved to. Deliberately thin: resolution
  * answers who is acting, and every later authorization decision is made from
  * the Group model as usual rather than from anything carried here. */
@@ -674,6 +699,11 @@ const recordSource = `SET a.sourceReference = $sourceReference,
  * Settings node. An instance that predates the setting enforces. */
 const coherencePolicyProjection = '{ enforceGtinConsistency: coalesce(s.enforceGtinConsistency, true) }';
 
+/** Every identifier one Asset carries, in the shape `storedIdentifier` reads.
+ * Requires `a` in scope. */
+const assetIdentifierRows = `[(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
+  + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }]`;
+
 /** Stamps the Asset with who made this change true. Requires `a` in scope plus
  * `$actorKey` and the parameters `changeParams` produces.
  *
@@ -911,6 +941,7 @@ export class IdentityStore {
         ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0,
           s.showAssetId = false, s.showIdentifierPolicyVersion = false, s.enforceGtinConsistency = true
         SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
+      await IdentityStore.reconcileGtinConflicts(driver);
       await session.run(`MERGE (m:MailConfiguration {key: 'instance'})
         ON CREATE SET m.enabled = false, m.transport = 'smtp', m.revision = 0
         SET m.verificationStatus = coalesce(m.verificationStatus, 'not-verified')`);
@@ -1441,6 +1472,7 @@ export class IdentityStore {
         if (!result.records.length) {
           throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
         }
+        await IdentityStore.recordGtinConflict(tx, params.assetId);
         return assetFrom(result.records[0].get('asset'));
       });
     } catch (error) {
@@ -1896,8 +1928,23 @@ export class IdentityStore {
   async updateSettings(actorKey: string, value: unknown): Promise<Settings> {
     const settings = validateSettings(value);
     return this.write(async (tx) => {
+      // The Settings lock is taken before the conflict set is read, and every
+      // identifier write takes it before judging and recording, so a conflict
+      // either committed before this check and blocks it, or is judged by the
+      // policy this commits.
+      const state = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
+        SET s.revision = s.revision + 1
+        RETURN coalesce(s.enforceGtinConsistency, true) AS enforcing`, { actorKey });
+      if (!state.records.length) throw new ReferenceError('Administrator access required');
+      // Resuming enforcement is refused while any Asset holds a conflict, and
+      // nothing is reconciled to make it succeed. An instance already
+      // enforcing is not blocked from saving its other settings.
+      if (settings.enforceGtinConsistency && !state.records[0].get('enforcing')) {
+        const conflicts = await IdentityStore.gtinConflictPage(tx, actorKey, null);
+        if (conflicts.total > 0) throw new GtinConflictError(conflicts);
+      }
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
-        SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
+        SET s.requirePhoto = $settings.requirePhoto,
           s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
           s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
           s.toastSeconds = $settings.toastSeconds, s.showAssetId = $settings.showAssetId,
@@ -2011,8 +2058,7 @@ export class IdentityStore {
     change: ReturnType<typeof changeParams>): Promise<void> {
     await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
-      RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
-        + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
+      RETURN ${assetIdentifierRows} AS identifiers`,
     { assetId: assetKey, actorKey });
     if (!current.records.length) throw new ReferenceError('Asset access not found');
     const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
@@ -2038,6 +2084,92 @@ export class IdentityStore {
       ${recordChange}
       ${attachIdentifiers}`,
     { assetId: assetKey, actorKey, ...change, ...identifierParams([identifier]) });
+    await IdentityStore.recordGtinConflict(tx, assetKey);
+  }
+
+  /** Brings one Asset's membership of the GTIN conflict set into line with the
+   * identifiers it carries now.
+   *
+   * The set is `(:Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(:Asset)`:
+   * references to the Assets whose AI 01 values name more than one trade item,
+   * hung off the node that holds the policy they block. Every path that changes
+   * an Asset's identifiers calls this in the same transaction, after the
+   * change and under the Asset lock, and it reads the identifiers back rather
+   * than being told what they are, so membership is derived from the
+   * relationships themselves and cannot be computed from a stale picture.
+   * Whether they conflict is `hasGtinConflict`, the same rule enforcement
+   * applies. Deleting an Asset takes the relationship with it. */
+  private static async recordGtinConflict(tx: ManagedTransaction, assetKey: string): Promise<void> {
+    const current = await tx.run(`${assetMatch} RETURN ${assetIdentifierRows} AS identifiers`,
+      { assetId: assetKey });
+    const identifiers = (current.records[0].get('identifiers') as StoredIdentifier[])
+      .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+    await tx.run(hasGtinConflict(identifiers)
+      ? `MATCH (s:Settings {key: 'instance'}) ${assetMatch} MERGE (s)-[:HAS_GTIN_CONFLICT]->(a)`
+      : `MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(:Asset {id: $assetId}) DELETE c`,
+    { assetId: assetKey });
+  }
+
+  /** Rebuilds the GTIN conflict set from the identifiers every Asset carries.
+   *
+   * Runs on every startup, after the Settings node exists, so a database
+   * written before the set was kept — or by a release that did not keep it —
+   * starts out with every conflict it already holds, never with an empty set
+   * that would let enforcement resume over them. Idempotent: it adds what is
+   * missing, removes what no longer conflicts and leaves the rest. It reads
+   * identifiers and writes only the set; no identifier association is changed.
+   * It holds the Settings lock for the whole rebuild, so no identifier write or
+   * policy change interleaves with it. Only Assets carrying two or more
+   * identifiers can conflict, so only those are read. */
+  private static async reconcileGtinConflicts(driver: Driver): Promise<void> {
+    const session = driver.session();
+    try {
+      await session.executeWrite(async (tx) => {
+        await tx.run("MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1 RETURN s.key");
+        const candidates = await tx.run(`MATCH (a:Asset)
+          WHERE COUNT { (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() } > 1
+          RETURN a.id AS id, ${assetIdentifierRows} AS identifiers`);
+        const conflicting = candidates.records
+          .filter((row) => hasGtinConflict((row.get('identifiers') as StoredIdentifier[])
+            .map((stored) => storedIdentifier(stored.scheme, stored.canonical, stored.policyVersion))))
+          .map((row) => row.get('id') as string);
+        await tx.run(`MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(a:Asset)
+          WHERE NOT a.id IN $conflicting DELETE c`, { conflicting });
+        await tx.run(`MATCH (s:Settings {key: 'instance'})
+          UNWIND $conflicting AS id MATCH (a:Asset {id: id}) MERGE (s)-[:HAS_GTIN_CONFLICT]->(a)`, { conflicting });
+      });
+    } finally { await session.close(); }
+  }
+
+  /** One page of the conflicting Assets this reader can read, with the total
+   * across the instance. Requires the Settings lock or a read transaction. */
+  private static async gtinConflictPage(tx: ManagedTransaction, actorKey: string,
+    after: string | null): Promise<GtinConflictPage> {
+    const counts = await tx.run(`MATCH (s:Settings {key: 'instance'})
+      OPTIONAL MATCH (s)-[:HAS_GTIN_CONFLICT]->(a:Asset)
+      RETURN count(a) AS total, count(CASE WHEN ${readableByViewer} THEN a END) AS readable`, { actorKey });
+    const total = (counts.records[0].get('total') as Integer).toNumber();
+    const readable = (counts.records[0].get('readable') as Integer).toNumber();
+    const page = await tx.run(`MATCH (:Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(a:Asset)
+      WHERE ${readableByViewer} AND ($after IS NULL OR a.id > $after)
+      RETURN a { .id, .name } AS asset ORDER BY a.id LIMIT $limit`,
+    { actorKey, after, limit: int(gtinConflictPageSize + 1) });
+    const assets = page.records.map((row) => row.get('asset') as { id: string; name: string });
+    const more = assets.length > gtinConflictPageSize;
+    if (more) assets.pop();
+    return { total, hidden: total - readable, assets, next: more ? assets[assets.length - 1].id : null };
+  }
+
+  /** The Assets that block enforcing GTIN consistency, for an administrator.
+   * Paged by native Asset ID; `after` is the `next` of the previous page. */
+  async gtinConflicts(actorKey: string, after: unknown): Promise<GtinConflictPage> {
+    if (after !== undefined && after !== null && !isAssetId(after)) throw new ValidationError('Invalid cursor');
+    if (!await this.isAdministrator(actorKey)) throw new AdministrationError('Administrator access required');
+    const session = this.driver.session({ defaultAccessMode: neo4j.session.READ });
+    try {
+      return await session.executeRead((tx) =>
+        IdentityStore.gtinConflictPage(tx, actorKey, (after as string | undefined) ?? null));
+    } finally { await session.close(); }
   }
 
   /** GS1 namespaces the audience can reach, ordered by prefix. */
@@ -2489,6 +2621,7 @@ export class IdentityStore {
       if (!detached.records.length) throw new ReferenceError('Asset access or identifier not found');
       await tx.run(`MATCH (c:ClassIdentifier {key: $key})
         WHERE NOT EXISTS { ()-[:CLASSIFIED_AS]->(c) } DELETE c`, { key: identifierKey });
+      await IdentityStore.recordGtinConflict(tx, assetKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
       return assetFrom(result.records[0].get('asset'));

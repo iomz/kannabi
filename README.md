@@ -584,6 +584,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | API tokens | yes | `/api/api-tokens*` | no |
 | Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
 | Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
+| List Assets blocking GTIN consistency | yes, when enabling is refused | `GET /api/admin/gtin-conflicts`, and the `409` refusing `PATCH /api/settings` | no |
 
 ### What the absences mean
 
@@ -595,7 +596,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 **Identifier provenance is read-only everywhere.** Each association records who accepted it, when, and the basis the request named in `X-Kannabi-Basis`; nothing supplies it as data, and the accepting User and credential come only from authentication. It is an acceptance, never a verification, and it is removed with the association it describes.
 
-**GTIN consistency is an administrator setting with no MCP control.** Turning it off lets an instance record identifiers whose GTINs disagree — a legacy corpus that wrote its own numbering in SGTIN syntax — and every surface then shows both, each with its own basis. Turning it back on refuses new conflicts and removes nothing.
+**GTIN consistency is an administrator setting with no MCP control.** Turning it off lets an instance record identifiers whose GTINs disagree — a legacy corpus that wrote its own numbering in SGTIN syntax — and every surface then shows both, each with its own basis. Turning it back on is refused with `409` while any Asset still holds a conflict; the refusal names the conflicting Assets the administrator can read and counts the rest, and nothing is removed to make it succeed. Once every conflict is resolved, enabling succeeds and new conflicts are refused.
 
 **Reporting through the browser takes no identifiers.** The form asks for a name, a Group and optionally a photo, and identifiers are added from the Asset page afterwards. An Asset exists independently of GS1, so nothing about identification belongs on the path that brings one into existence. A client loading a corpus already holds the identifiers and supplies them in one request.
 

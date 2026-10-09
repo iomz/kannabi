@@ -5,7 +5,7 @@ import {
   allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertAttachable, assertCompatible,
   assertReversibleSchemes, canIssueClassKey, canonicalGcp, canonicalGtin, canonicalIdentifier,
   canonicalIdentifiers, classKeyConflictReason, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
-  identifierSchemes, schemeInputs,
+  hasGtinConflict, identifierSchemes, schemeInputs,
   storedIdentifier,
 } from './gs1.js';
 import {
@@ -415,7 +415,23 @@ test('GTIN consistency is an acceptance policy that only the AI 01 rule obeys', 
     /conflicting GTINs/);
 });
 
-test('re-enabling GTIN consistency judges what a write adds, not what is already recorded', () => {
+test('a GTIN conflict is more than one distinct AI 01 value, alone or inside an SGTIN', () => {
+  const product = canonicalIdentifier({ scheme: 'gtin', gtin: '4901234567894' });
+  const sameInSgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '04901234567894', serial: '1' });
+  const labSgtin = (serial: string) => canonicalIdentifier({ scheme: 'sgtin', gtin: '04589604681007', serial });
+  const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '4589604681ASSET' });
+  assert.equal(hasGtinConflict([]), false);
+  assert.equal(hasGtinConflict([product, giai]), false);
+  assert.equal(hasGtinConflict([product, sameInSgtin]), false, 'a GTIN-13 and its GTIN-14 form are one GTIN');
+  assert.equal(hasGtinConflict([labSgtin('1'), labSgtin('2')]), false, 'serials of one trade item');
+  assert.equal(hasGtinConflict([product, labSgtin('1')]), true);
+  assert.equal(hasGtinConflict([labSgtin('1'), sameInSgtin]), true, 'two SGTINs naming different GTINs');
+  // The same rule enforcement applies, so the two can never disagree.
+  assert.throws(() => assertCompatible([product, labSgtin('1')]), /conflicting GTINs/);
+  assert.doesNotThrow(() => assertCompatible([product, sameInSgtin]));
+});
+
+test('on an Asset already holding a conflict, a write is judged by what it adds', () => {
   const product = canonicalIdentifier({ scheme: 'gtin', gtin: '4901234567894' });
   const labSgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '04589604681007', serial: '532' });
   const other = canonicalIdentifier({ scheme: 'gtin', gtin: '4512345678906' });

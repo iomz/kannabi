@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import Administration, { clientAction as adminSettingsAction } from '../web/routes/settings.js';
-import { mount, withTheme } from './dom-render.js';
+import { mount, settle, withTheme } from './dom-render.js';
+import { GtinConflictDialog } from '../web/gtin-conflict-dialog.js';
 import { defaultToastSeconds, validateSettings } from './settings.js';
 
 test('instance presentation settings default hidden and render as independent choices', () => {
@@ -101,4 +102,55 @@ test('the GTIN consistency switch saves its own state and nothing else', async (
     }
     assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [false, true]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a refused GTIN consistency switch hands back the Assets that block it', async () => {
+  const originalFetch = globalThis.fetch;
+  const gtinConflicts = { total: 2, hidden: 1, next: null,
+    assets: [{ id: '01a1208f-8ce3-7523-9947-cd187ada00d1', name: 'Bench camera' }] };
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: 'GTIN consistency cannot be enabled while Assets carry conflicting GTINs', gtinConflicts,
+  }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+  const data = new FormData();
+  for (const [name, value] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
+    apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on' })) data.set(name, value);
+  try {
+    const result = await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
+      method: 'POST', body: data,
+    }) } as never) as { saved: boolean; gtinConflicts?: unknown };
+    assert.equal(result.saved, false);
+    assert.deepEqual(result.gtinConflicts, gtinConflicts);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('the GTIN conflict dialog names the readable Assets, counts the rest and pages on request', async () => {
+  const originalFetch = globalThis.fetch;
+  const asked: string[] = [];
+  globalThis.fetch = async (input) => {
+    asked.push(String(input));
+    return new Response(JSON.stringify({ gtinConflicts: { total: 3, hidden: 1, next: null,
+      assets: [{ id: '01a1208f-8ce3-7523-9947-cd187ada00d3', name: 'Third' }] } }),
+    { headers: { 'Content-Type': 'application/json' } });
+  };
+  const conflicts = { total: 3, hidden: 1, next: '01a1208f-8ce3-7523-9947-cd187ada00d2',
+    assets: [{ id: '01a1208f-8ce3-7523-9947-cd187ada00d1', name: 'First' },
+      { id: '01a1208f-8ce3-7523-9947-cd187ada00d2', name: 'Second' }] };
+  const router = createMemoryRouter([{ path: '/', element: createElement(GtinConflictDialog,
+    { conflicts, onClose: () => {} }) }], { initialEntries: ['/'] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    await settle();
+    assert.equal(view.dialogName(), 'Cannot enable GTIN consistency');
+    assert.match(view.text(), /3 Assets have conflicting GTINs\. Resolve these conflicts before enabling\s+this setting\./);
+    const links = () => [...document.querySelectorAll('[role="alertdialog"] a')]
+      .map((link) => [link.textContent, link.getAttribute('href')]);
+    assert.deepEqual(links(), [['First', '/asset/01a1208f-8ce3-7523-9947-cd187ada00d1'],
+      ['Second', '/asset/01a1208f-8ce3-7523-9947-cd187ada00d2']]);
+    assert.match(view.text(), /1 more is in Groups you do not belong to/);
+    await settle(() => view.button('Show more')!.click());
+    await settle();
+    assert.match(asked[0], /\/api\/admin\/gtin-conflicts\?after=01a1208f-8ce3-7523-9947-cd187ada00d2/);
+    assert.deepEqual(links().map(([name]) => name), ['First', 'Second', 'Third']);
+    assert.equal(view.button('Show more'), null, 'the last page offers no more');
+  } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });

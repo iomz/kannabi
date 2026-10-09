@@ -36,7 +36,8 @@ export type Settings = {
    * lets an instance record conflicting GTINs it was told about — a migration
    * from a source that wrote its own numbering in SGTIN syntax, say — and leaves
    * the conflict visible; it never declares that one Asset is two trade items.
-   * Turning it back on removes nothing already recorded. Syntax, check digits,
+   * Turning it back on is refused while any Asset still holds a conflict, and
+   * removes nothing to make it succeed. Syntax, check digits,
    * uniqueness and the same-identifier-twice rule do not depend on it. */
   enforceGtinConsistency: boolean;
 };
