@@ -13,18 +13,29 @@ test('display timezone changes presentation without changing the absolute instan
   assert.equal(instant, '2026-01-01T23:30:00.000Z');
   assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast' }),
     { requirePhoto: false, displayTimezone: 'UTC', themeId: 'raycast', apiTokenMaxLifetimeDays: null,
-      toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false });
+      toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
+      enforceGtinConsistency: true });
   // The token-lifetime ceiling is optional policy: absent and null both mean
   // no ceiling, and a ceiling must be a whole number of days.
   assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
     apiTokenMaxLifetimeDays: 30 }),
   { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: 30,
-    toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false });
+    toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
+    enforceGtinConsistency: true });
   assert.deepEqual(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
     showAssetId: true, showIdentifierPolicyVersion: true }), {
     requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
     toastSeconds: defaultToastSeconds, showAssetId: true, showIdentifierPolicyVersion: true,
+    enforceGtinConsistency: true,
   });
+  // GTIN consistency is enforced unless an administrator explicitly turns it
+  // off: an absent value is an instance older than the setting, never consent.
+  assert.equal(validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+    enforceGtinConsistency: false }).enforceGtinConsistency, false);
+  for (const enforceGtinConsistency of ['false', 0, null]) {
+    assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
+      enforceGtinConsistency }), String(enforceGtinConsistency));
+  }
   for (const [showAssetId, showIdentifierPolicyVersion] of [['yes', false], [false, 0]]) {
     assert.throws(() => validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
       showAssetId, showIdentifierPolicyVersion }));

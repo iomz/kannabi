@@ -80,6 +80,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         toastSeconds: Number(data.get('toastSeconds')),
         showAssetId: data.get('showAssetId') === 'on',
         showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
+        enforceGtinConsistency: data.get('enforceGtinConsistency') === 'on',
       } }));
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
@@ -281,7 +282,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
       toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
-      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '' },
+      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '',
+      enforceGtinConsistency: next.enforceGtinConsistency ? 'on' : '' },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -317,6 +319,10 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
           label="Show identifier policy version on Asset pages" />
         <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
+        <Switch name="enforceGtinConsistency" checked={current.enforceGtinConsistency} disabled={busy}
+          onCheckedChange={(enforceGtinConsistency) => update({ enforceGtinConsistency })}
+          label="Refuse identifiers that name conflicting GTINs" />
+        <p className={settingHelp}>An Asset is an instance of one trade item, so by default every GTIN it carries, alone or inside an SGTIN, must agree. Turn this off only to record conflicting identifiers a source asserted; each keeps its own basis and the conflict stays visible. Applies to new identifiers: turning it back on removes nothing already recorded.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />
         <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>

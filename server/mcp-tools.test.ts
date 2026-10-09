@@ -40,11 +40,22 @@ const quoted = {
   reference: 'legacy:asset:1483',
   recordedAt: '2019-04-12T09:30:00.000Z',
   recordedBy: 'A. Rivera',
+  description: 'Bench camera\r\nS/N 0042',
+};
+
+/** How the GTIN came to be attached, as the store projects it. */
+const cameraGtinAttachment = {
+  acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:01.000Z',
+  assertedBy: { id: 'token-1', label: 'Depot importer' }, basis: 'depot:assetcats:42',
+};
+const changeProvenance = {
+  acceptedBy: reporter, acceptedAt: '2026-06-23T00:00:00.000Z', assertedBy: null, basis: null,
 };
 
 const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera · Bench 001', {
-  sourceRecord: quoted,
-  identifiers: [{ key: 'i1', ...cameraGtin }, { key: 'i2', ...issuedGiai }],
+  sourceRecord: quoted, provenance: changeProvenance,
+  identifiers: [{ key: 'i1', ...cameraGtin, attachment: cameraGtinAttachment },
+    { key: 'i2', ...issuedGiai, attachment: null }],
   issuances: [{
     key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
     classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
@@ -53,7 +64,7 @@ const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera 
   photos: [{ key: 'p1', contentType: 'image/png', size: 1024, createdAt: '2026-06-22T00:00:00.000Z' }],
 });
 const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection microscope · Studio 011', {
-  identifiers: [{ key: 'i3', ...cameraGtin }, { key: 'i4', ...lookalikeGiai }],
+  identifiers: [{ key: 'i3', ...cameraGtin, attachment: null }, { key: 'i4', ...lookalikeGiai, attachment: null }],
   groups: [studio], isPublic: true,
 });
 /** An issuance whose value has since been detached from its Asset. */
@@ -78,6 +89,7 @@ function recordingStore(calls: Call[]) {
     async findAssets(audience: AudienceInput, request: unknown): Promise<AssetPage> {
       calls.push({ method: 'findAssets', audience, request });
       return { assets: [camera, microscope], total: 3, matching: 2,
+        matchedFields: { [camera.id]: ['name'], [microscope.id]: ['sourceDescription'] },
         scopes: { all: 2, mine: 0, group: 0, public: 1 }, nextCursor: 'next-page' };
     },
     async lookupAssets(audience: AudienceInput, request: unknown): Promise<AssetLookup> {
@@ -195,7 +207,10 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.deepEqual(assets[1].kannabiIssued, []);
     // A candidate stays small: no reporter, components, policy version or photo keys.
     assert.deepEqual(Object.keys(assets[0]).sort(), ['assetId', 'groups', 'identifiers', 'isPublic',
-      'kannabiIssued', 'name', 'owner', 'photoCount', 'reportedAt', 'surfacedPath'].sort());
+      'kannabiIssued', 'matchedFields', 'name', 'owner', 'photoCount', 'reportedAt', 'surfacedPath'].sort());
+    // Each candidate says which field the text matched, so a match on quoted
+    // source text is never presented as a match on the Asset's own name.
+    assert.deepEqual(assets.map((entry) => entry.matchedFields), [['name'], ['sourceDescription']]);
     // Presentation travels with a candidate; identity is still the assetId.
     // Both surface their GIAI, and the microscope's was never issued by
     // Kannabi — issuance is provenance and decides nothing about what is
@@ -259,10 +274,30 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.equal((detail.reportedBy as { name: string }).name, reporter.name);
     assert.notEqual((detail.reportedBy as { name: string }).name, quoted.recordedBy);
 
+    // The quoted description reaches an agent exactly, line break included.
+    assert.equal((detail.sourceRecord as { description: string }).description, quoted.description);
+
     // An Asset that originated in Kannabi says so rather than omitting the field.
     const native = structured(await client.callTool({ name: 'get_asset',
       arguments: { assetId: microscope.id } }));
     assert.equal((native.asset as Record<string, unknown>).sourceRecord, null);
+  });
+
+  await t.test('inspection carries how each identifier was accepted, and the latest change', async () => {
+    const found = structured(await client.callTool({ name: 'get_asset',
+      arguments: { assetId: camera.id } }));
+    const detail = found.asset as Record<string, unknown>;
+    const identifiers = detail.identifiers as Record<string, unknown>[];
+    const gtin = identifiers.find((identifier) => identifier.canonical === cameraGtin.canonical)!;
+    const giai = identifiers.find((identifier) => identifier.canonical === issuedGiai.canonical)!;
+    assert.deepEqual(gtin.attachment, cameraGtinAttachment);
+    // An association recorded before Kannabi kept this says so, not "nobody".
+    assert.equal(giai.attachment, null);
+    assert.deepEqual(detail.provenance, changeProvenance);
+    const tools = await client.listTools();
+    const schema = JSON.stringify(tools.tools.find((tool) => tool.name === 'get_asset')!.outputSchema);
+    assert.match(schema, /An acceptance, not a verification/);
+    assert.match(schema, /not evidence that the source had none/);
   });
 
   await t.test('a malformed Asset ID never reaches the store', async () => {

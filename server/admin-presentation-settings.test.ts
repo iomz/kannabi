@@ -38,10 +38,16 @@ test('instance presentation settings default hidden and render as independent ch
     assert.ok(general);
     assert.deepEqual([...general.querySelectorAll('label')].map((label) => label.textContent?.trim()), [
       'Require photo when reporting an Asset', 'Show Kannabi ID on Asset pages',
-      'Show identifier policy version on Asset pages', 'Display timezone',
+      'Show identifier policy version on Asset pages', 'Refuse identifiers that name conflicting GTINs',
+      'Display timezone',
       'Longest API token lifetime (days)', 'How long a message stays on screen (seconds)',
     ]);
     const theme = [...document.querySelectorAll('h2')].filter((heading) => heading.textContent === 'Theme');
+    // GTIN consistency is enforced unless an administrator turns it off.
+    const consistency = document.querySelector<HTMLInputElement>('input[name="enforceGtinConsistency"]');
+    assert.ok(consistency);
+    assert.equal(consistency.checked, true);
+    assert.ok(view.text().includes('turning it back on removes nothing already recorded'));
     assert.equal(theme.length, 1, 'Theme has one visible card heading');
     assert.ok(theme[0].closest('section')?.className.includes('max-w-3xl'));
     assert.equal(settings.toastSeconds, defaultToastSeconds);
@@ -71,5 +77,28 @@ test('saving either presentation setting preserves the configured toast lifetime
     assert.equal(sent[0].toastSeconds, 12);
     assert.equal(sent[0].showAssetId, true);
     assert.equal(sent[0].showIdentifierPolicyVersion, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('the GTIN consistency switch saves its own state and nothing else', async () => {
+  const originalFetch = globalThis.fetch;
+  const sent: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    sent.push(body);
+    return new Response(JSON.stringify({ settings: body }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    for (const value of ['', 'on']) {
+      const data = new FormData();
+      for (const [name, field] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
+        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: value })) {
+        data.set(name, field);
+      }
+      await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
+        method: 'POST', body: data,
+      }) } as never);
+    }
+    assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [false, true]);
   } finally { globalThis.fetch = originalFetch; }
 });

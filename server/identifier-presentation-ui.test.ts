@@ -15,7 +15,7 @@ const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '0614141ASSET
 
 function list(props: Partial<Parameters<typeof IdentifierList>[0]> = {}) {
   return mount(createElement(IdentifierList, {
-    identifiers: [{ ...gtin, key: 'class' }, { ...giai, key: 'individual' }],
+    identifiers: [{ ...gtin, key: 'class', attachment: null }, { ...giai, key: 'individual', attachment: null }],
     issuances: [], digitalLinks: {}, showPolicyVersion: false,
     canEdit: false, busy: false, onDetach: () => {}, ...props,
   }));
@@ -84,7 +84,7 @@ test('issuance controls point a first-time reader at the thing they are missing'
     issuances: [{ key: 'i', scheme: 'giai', canonical: giai.canonical, gcp: '0614141',
       sequence: 1, classKeyCanonical: null, allocatedAt: '2026-01-01T00:00:00Z',
       allocatedForAssetId: 'a', allocatedBy: { key: 'u', name: 'U', status: 'active' } }],
-    identifiers: [{ ...giai, key: 'individual' }], busy: false, error: null,
+    identifiers: [{ ...giai, key: 'individual', attachment: null }], busy: false, error: null,
   });
   try {
     assert.match(view.text(), /issued under a managed class key/);

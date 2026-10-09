@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { assetPhotoPath } from '../shared/asset-uri';
 import { surfacedAssetPath } from '../server/surfaced-uri.js';
 import { schemeLabels } from '../server/gs1.js';
-import type { Asset } from '../server/identity-store';
+import type { Asset, MatchedField } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
 import { Icon } from './icon';
 import { ReporterAttribution } from './reporter-attribution';
@@ -11,7 +11,12 @@ import { Badge } from '@/components/ui/badge';
 
 /** One Asset as it appears in any list. Shared so the inventory and identity
  * lookup present Assets identically rather than drifting into two layouts. */
-export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt' }) {
+export function AssetRow({ asset, detail, matchedFields = [] }: {
+  asset: Asset; detail?: 'reportedAt';
+  /** Which fields a search query matched, so a row found only through the
+   * quoted source description says so instead of looking like a name match. */
+  matchedFields?: readonly MatchedField[];
+}) {
   const location = useLocation();
   return <li className="border-t first:border-t-0">
     {/* The surfaced URI, so the inventory links where the Asset is published
@@ -34,6 +39,9 @@ export function AssetRow({ asset, detail }: { asset: Asset; detail?: 'reportedAt
           {detail === 'reportedAt' && <><span aria-hidden="true">·</span>
             <time dateTime={asset.reportedAt}>{displayDate(asset.reportedAt)}</time></>}
         </span>
+        {matchedFields.includes('sourceDescription') && !matchedFields.includes('name')
+          && <span className="mt-[.35rem] block text-[.78rem] text-muted-foreground italic">
+            Matched the quoted source description</span>}
       </div>
       <Badge variant={asset.isPublic ? 'brand' : 'secondary'}
         className="gap-[.6rem] max-sm:col-start-2 max-sm:justify-self-start max-sm:text-[.67rem] [&_.icon]:size-4">

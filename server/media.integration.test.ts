@@ -26,7 +26,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   // as a missing value, so an upgrade needs no migration to be usable.
   assert.deepEqual(await store.settings(),
     { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
-      toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false });
+      toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
+      enforceGtinConsistency: true });
   const storage = storageFromEnv();
   await storage.check();
   const media = new MediaService(store, storage);
@@ -63,7 +64,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
     assert.deepEqual(await store.settings(),
       { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: null,
-        toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false });
+        toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
+        enforceGtinConsistency: true });
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', showAssetId: true,
       showIdentifierPolicyVersion: true }))).status, 200);

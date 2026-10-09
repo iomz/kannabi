@@ -65,7 +65,7 @@ export function WorkspaceHeader({ enabled, search }: {
     </>}
     {search ? <Form action="/" method="get" role="search" className="relative flex min-w-0 flex-1 items-center">
       <input type="hidden" name="scope" value={scope} />
-      <label className="sr-only" htmlFor="asset-search">Search Assets by name</label>
+      <label className="sr-only" htmlFor="asset-search">Search Assets by name or source description</label>
       <span className="pointer-events-none absolute left-3 text-muted-foreground"><Icon name="search" /></span>
       {/* The native `type="search"` clear button is suppressed. It clears the
           field and nothing else, which left the results standing and the input

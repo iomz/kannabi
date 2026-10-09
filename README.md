@@ -548,20 +548,21 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Capability | Web UI | HTTP API | MCP |
 | --- | --- | --- | --- |
 | **Assets** | | | |
-| Browse and search | yes | `GET /api/assets` | `search_assets` |
+| Browse and search by name or quoted source description | yes | `GET /api/assets` | `search_assets` |
 | Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
 | Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
 | Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
 | Supply identifiers while reporting | no | yes | no |
 | Rename, change visibility | yes | `PATCH /api/assets/{id}` | no |
 | **Source attribution** | | | |
-| Read what a source record stated | yes | yes | `get_asset` |
+| Read what a source record stated, including its description | yes | yes | `get_asset` |
 | Supply it | no | creation only | no |
 | **Identifiers** | | | |
 | Record an identifier assigned elsewhere | yes | `POST /api/assets/{id}/identifiers` | no |
 | Detach one | yes | `DELETE /api/assets/{id}/identifiers/{key}` | no |
 | Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /api/assets/{id}/giai`, `/grai`, `/sgtin` | no |
 | Read an Asset's own issuances | yes | in the Asset representation | `get_asset` |
+| Read who accepted each identifier, when and on what basis | yes | in the Asset representation | `get_asset` |
 | List the issuance ledger | no | no | `list_gs1_issuances` |
 | **GS1 namespaces** | | | |
 | Configure or deactivate a prefix namespace | yes | `POST /api/groups/{key}/gs1-namespaces`, `PATCH /api/gs1-namespaces/{key}` | no |
@@ -582,12 +583,19 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Profile, appearance, account deletion | yes | `/api/profile*` | no |
 | API tokens | yes | `/api/api-tokens*` | no |
 | Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
+| Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
 
 ### What the absences mean
 
 **MCP writes nothing.** All seven tools are read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
 
 **The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
+
+**A source description is quoted text, and search says when it matched.** `GET /api/assets` and `search_assets` match a case-insensitive substring of the Asset name or of its source record's description, and each result names the fields that matched. A match on the description is a match on what a source said, so the web UI marks it and MCP reports it as `sourceDescription`; it is never presented as a match on a fact Kannabi holds. The description is set at creation only, like the rest of the attribution.
+
+**Identifier provenance is read-only everywhere.** Each association records who accepted it, when, and the basis the request named in `X-Kannabi-Basis`; nothing supplies it as data, and the accepting User and credential come only from authentication. It is an acceptance, never a verification, and it is removed with the association it describes.
+
+**GTIN consistency is an administrator setting with no MCP control.** Turning it off lets an instance record identifiers whose GTINs disagree — a legacy corpus that wrote its own numbering in SGTIN syntax — and every surface then shows both, each with its own basis. Turning it back on refuses new conflicts and removes nothing.
 
 **Reporting through the browser takes no identifiers.** The form asks for a name, a Group and optionally a photo, and identifiers are added from the Asset page afterwards. An Asset exists independently of GS1, so nothing about identification belongs on the path that brings one into existence. A client loading a corpus already holds the identifiers and supplies them in one request.
 

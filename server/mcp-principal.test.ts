@@ -40,7 +40,7 @@ function storeWithLink(links: Record<string, ResolvedUser>, calls: unknown[] = [
     },
     async findAssets(audience: NamedAudienceInput): Promise<AssetPage> {
       calls.push({ audience });
-      return { assets: [] as Asset[], total: 0, matching: 0,
+      return { assets: [] as Asset[], matchedFields: {}, total: 0, matching: 0,
         scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null };
     },
   } as unknown as IdentityStore;
