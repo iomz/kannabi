@@ -73,7 +73,7 @@ export function WorkspaceHeader({ enabled, search }: {
           rather than beside the shortcut hint. Clearing is a change of state,
           so it is a control of ours that navigates. */}
       <Input ref={field} key={q} id="asset-search" name="q" type="search" maxLength={200}
-        placeholder="Search assets by name…" defaultValue={q} disabled={!enabled}
+        placeholder="Search by name or source description…" defaultValue={q} disabled={!enabled}
         className={'bg-muted ps-9 [&::-webkit-search-cancel-button]:hidden '
           + (q ? 'pe-[5.25rem]' : 'pe-16')} />
       {/* One group at the end of the field, so the two controls read together
