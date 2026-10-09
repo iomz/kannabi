@@ -28,6 +28,18 @@ export type Settings = {
   showAssetId: boolean;
   /** Show the accepting GS1 policy stamp beside recorded identifiers. */
   showIdentifierPolicyVersion: boolean;
+  /** Refuse an identifier whose AI 01 disagrees with one the Asset already
+   * carries. On by default, and every instance that predates the setting keeps
+   * it on.
+   *
+   * An acceptance policy for subsequent writes and nothing more. Turning it off
+   * lets an instance record conflicting GTINs it was told about — a migration
+   * from a source that wrote its own numbering in SGTIN syntax, say — and leaves
+   * the conflict visible; it never declares that one Asset is two trade items.
+   * Turning it back on is refused while any Asset still holds a conflict, and
+   * removes nothing to make it succeed. Syntax, check digits,
+   * uniqueness and the same-identifier-twice rule do not depend on it. */
+  enforceGtinConsistency: boolean;
 };
 
 /** The shipped lifetime, and the one every existing deployment keeps. */
@@ -63,11 +75,12 @@ export function apiTokenLifetimeDays(value: unknown, field: string): number {
 
 export function validateSettings(value: unknown): Settings {
   const input = record(value, ['requirePhoto', 'displayTimezone', 'themeId', 'apiTokenMaxLifetimeDays',
-    'toastSeconds', 'showAssetId', 'showIdentifierPolicyVersion']);
+    'toastSeconds', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency']);
   if (typeof input.requirePhoto !== 'boolean' || typeof input.displayTimezone !== 'string'
       || !isThemeId(input.themeId)
       || (input.showAssetId !== undefined && typeof input.showAssetId !== 'boolean')
-      || (input.showIdentifierPolicyVersion !== undefined && typeof input.showIdentifierPolicyVersion !== 'boolean')) {
+      || (input.showIdentifierPolicyVersion !== undefined && typeof input.showIdentifierPolicyVersion !== 'boolean')
+      || (input.enforceGtinConsistency !== undefined && typeof input.enforceGtinConsistency !== 'boolean')) {
     throw new ValidationError('Photo requirement, display timezone, and supported theme are required');
   }
   try { new Intl.DateTimeFormat('en', { timeZone: input.displayTimezone }); }
@@ -83,6 +96,9 @@ export function validateSettings(value: unknown): Settings {
       ? defaultToastSeconds : toastSeconds(input.toastSeconds, 'toastSeconds'),
     showAssetId: input.showAssetId === true,
     showIdentifierPolicyVersion: input.showIdentifierPolicyVersion === true,
+    // Absent keeps the shipped rule, so a client that predates the setting can
+    // never switch enforcement off by omission.
+    enforceGtinConsistency: input.enforceGtinConsistency !== false,
   };
 }
 /** Kannabi's own date-only presentation.

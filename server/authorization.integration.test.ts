@@ -59,7 +59,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       // show which one is active without a second request.
       assert.equal(user.email, `person${i}@example.com`);
     }
-    assert.deepEqual(await (await reporter.request('/assets')).json(), { assets: [], total: 0, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
+    assert.deepEqual(await (await reporter.request('/assets')).json(), { assets: [], matchedFields: {}, total: 0, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
     const session = driver.session();
     try {
       const result = await session.run(`MATCH (u:User), (a:AuthAccount {userId: u.id})
@@ -192,11 +192,17 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       // none of it is filtered here. A deployment that would not publish what
       // a source record quotes chooses that when it publishes the Asset, and
       // the reference grammar keeps prose, secrets and personal data out of
-      // the reference itself.
+      // the reference itself. A quoted description is prose, and is published
+      // with the Asset on the same terms. Each identifier's acceptance is
+      // attribution of the same kind as provenance, so it never carries an
+      // address either.
       assert.deepEqual(Object.keys(result.asset).sort(),
         ['groups', 'id', 'identifiers', 'isPublic', 'issuances', 'name', 'owner', 'photos',
           'provenance', 'reportedAt', 'reportedBy', 'sourceRecord']);
       assert.equal('email' in result.asset.provenance.acceptedBy, false);
+      for (const identifier of result.asset.identifiers as { attachment: { acceptedBy: object } | null }[]) {
+        if (identifier.attachment) assert.equal('email' in identifier.attachment.acceptedBy, false);
+      }
       assert.equal(assetPath, '/assets/' + result.asset.id);
       assert.equal('email' in result.asset.reportedBy, false);
       assert.equal('role' in result.asset.reportedBy, false);
@@ -370,9 +376,9 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.equal(first.total, 107);
     assert.equal(first.matching, 107);
     const noMatch = await (await member.request('/assets?q=absent')).json();
-    assert.deepEqual(noMatch, { assets: [], total: 107, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
+    assert.deepEqual(noMatch, { assets: [], matchedFields: {}, total: 107, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
     const empty = await (await reporter.request('/assets?q=absent')).json();
-    assert.deepEqual(empty, { assets: [], total: 1, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
+    assert.deepEqual(empty, { assets: [], matchedFields: {}, total: 1, matching: 0, scopes: { all: 0, mine: 0, group: 0, public: 0 }, nextCursor: null });
     assert.equal((await anonymous.request('/assets?limit=1')).status, 401);
 
     let cursor: string | null = null;

@@ -20,6 +20,7 @@ const sourceRecord = {
   reference: 'legacy:asset:1483',
   recordedAt: '2019-04-12T09:30:00.000Z',
   recordedBy: 'A. Rivera',
+  description: null as string | null,
 };
 
 function loaderData(overrides: Record<string, unknown> = {}) {
@@ -105,4 +106,22 @@ test('a source that stated no time or no recorder says so rather than borrowing 
     // Kannabi's own reporting stays visible and stays separate.
     assert.match(definitionOf('Reported')!.value, /Alex/);
   } finally { view.stop(); }
+});
+
+test('a quoted description is shown exactly, as a quotation, and absence claims nothing', () => {
+  const description = 'Bench camera\r\nS/N 0042\n  funding <code>';
+  const view = render({ sourceRecord: { ...sourceRecord, description } });
+  try {
+    const stated = definitionOf('Source states description');
+    assert.ok(stated, 'labelled as the source’s statement');
+    assert.notEqual(stated!.list, definitionOf('Reported')!.list);
+    const quote = stated!.list.querySelector('blockquote');
+    assert.ok(quote, 'set off as a quotation');
+    assert.equal(quote!.textContent, description, 'line breaks and spacing are kept');
+  } finally { view.stop(); }
+  const absent = render({ sourceRecord });
+  try {
+    assert.equal(definitionOf('Source states description'), null,
+      'no description recorded is not rendered as the source having none');
+  } finally { absent.stop(); }
 });

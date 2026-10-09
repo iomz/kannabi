@@ -11,8 +11,9 @@ import { ValidationError } from './identity.js';
 const rejects = (value: unknown, because: string) =>
   assert.throws(() => sourceRecordParams(value), ValidationError, because);
 
-test('an absent attribution is three nulls, not a half-written record', () => {
-  const nothing = { sourceReference: null, sourceRecordedAt: null, sourceRecordedBy: null };
+test('an absent attribution is all nulls, not a half-written record', () => {
+  const nothing = { sourceReference: null, sourceRecordedAt: null, sourceRecordedBy: null,
+    sourceDescription: null };
   assert.deepEqual(sourceRecordParams(undefined), nothing);
   assert.deepEqual(sourceRecordParams(null), nothing);
 });
@@ -113,4 +114,32 @@ test('an unrecognised field is refused rather than quietly dropped', () => {
   // Notably the stored property names: the attribution is supplied grouped and
   // flattened by Kannabi, never handed over pre-flattened.
   rejects({ sourceReference: 'r' }, 'stored property names are not input names');
+});
+
+test('a quoted description is stored exactly as accepted', () => {
+  const description = ' Bench camera\r\nS/N\t0042\nfunding <code>  ';
+  assert.equal(sourceRecordParams({ reference: 'r', description }).sourceDescription, description);
+  assert.equal(sourceRecordParams({ reference: 'r', description: 'x'.repeat(4096) }).sourceDescription,
+    'x'.repeat(4096));
+});
+
+test('no description is null, and null is not a statement that the source had none', () => {
+  // Blank text stores nothing. That is an acceptance decision, not an edit of
+  // quoted text: nothing is kept to have been altered.
+  for (const description of [undefined, null, '', '   ', '\r\n\t', '　　']) {
+    assert.equal(sourceRecordParams({ reference: 'r', description }).sourceDescription, null,
+      JSON.stringify(description));
+  }
+});
+
+test('a description Kannabi cannot quote exactly is refused, never repaired', () => {
+  rejects({ reference: 'r', description: 'Café' }, 'not NFC: normalizing would alter the quotation');
+  rejects({ reference: 'r', description: 'odd\u0012byte' }, 'a C0 control other than tab and line breaks');
+  rejects({ reference: 'r', description: 'bell\u0007' }, 'another C0 control');
+  rejects({ reference: 'r', description: 'del\u007f' }, 'DEL');
+  rejects({ reference: 'r', description: 'c1\u0085' }, 'a C1 control');
+  rejects({ reference: 'r', description: 'x'.repeat(4097) }, 'longer than the bound');
+  rejects({ reference: 'r', description: 42 }, 'not text');
+  rejects({ description: 'orphan' }, 'a description with nothing to attribute it to');
+  assert.equal(sourceRecordParams({ reference: 'r', description: 'Café' }).sourceDescription, 'Café');
 });

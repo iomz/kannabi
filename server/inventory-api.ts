@@ -15,7 +15,7 @@ import { basisReference, type ChangeOrigin } from './change-provenance.js';
 import { validateCreateApiToken, type ApiTokenService, type TokenCredential } from './api-token.js';
 import { assetId } from './asset-id.js';
 import { identifierInputFields } from './gs1.js';
-import { AdministrationError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
+import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
 
@@ -252,6 +252,11 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
     .patch('/settings', async (c) => c.json({ settings: await store.updateSettings(actor(c.get('user')), await c.req.json()) }))
+    // The Assets that block enforcing GTIN consistency, a page at a time. The
+    // 409 refusing enforcement carries the first page; this continues it.
+    .get('/admin/gtin-conflicts', async (c) => c.json({
+      gtinConflicts: await store.gtinConflicts(actor(c.get('user')), c.req.query('after')),
+    }))
     .get('/admin/mail', async (c) => {
       if (!mail) throw new HTTPException(503, { message: 'Mail service unavailable' });
       return c.json({ configuration: await mail.configuration(actor(c.get('user'))) });
@@ -487,6 +492,9 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       c.req.param('classKeyKey'), c.req.valid('json').active) }))
     .onError((error, c) => {
       if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
+      if (error instanceof GtinConflictError) {
+        return c.json({ error: error.message, gtinConflicts: error.conflicts }, 409);
+      }
       if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);
       if (error instanceof LastCollaborationError) return c.json({ error: error.message }, 409);
       if (error instanceof MailRevisionConflictError) return c.json({ error: error.message }, 409);

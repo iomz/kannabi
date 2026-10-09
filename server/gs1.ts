@@ -412,13 +412,26 @@ export function assertDigitalLinkSchemes(): void {
   }
 }
 
-export function canonicalIdentifiers(value: unknown): ExternalIdentifier[] {
+export function canonicalIdentifiers(value: unknown,
+  policy: CoherencePolicy = defaultCoherencePolicy): ExternalIdentifier[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new ValidationError('Identifiers must be a list');
   const identifiers = value.map(canonicalIdentifier);
-  assertCompatible(identifiers);
+  assertCompatible(identifiers, policy);
   return identifiers;
 }
+
+/** Which of Kannabi's own coherence rules an acceptance applies.
+ *
+ * Only the AI 01 rule is configurable. It is an acceptance policy, decided per
+ * instance, and never a statement about the identifiers it lets through:
+ * switching it off does not declare that one Asset may be two trade items,
+ * only that this instance records what it is told and leaves the conflict
+ * visible. Syntax, check digits, uniqueness, the same-identifier-twice rule and
+ * the GRAI asset-type rule are not part of it and always apply.
+ */
+export type CoherencePolicy = Readonly<{ enforceGtinConsistency: boolean }>;
+export const defaultCoherencePolicy: CoherencePolicy = Object.freeze({ enforceGtinConsistency: true });
 
 /** Kannabi's own coherence rules for the set of identifiers on one Asset.
  *
@@ -434,16 +447,16 @@ export function canonicalIdentifiers(value: unknown): ExternalIdentifier[] {
 const conflictingGtins = 'Identifiers claim conflicting GTINs for one Asset';
 const conflictingAssetTypes = 'Identifiers claim conflicting GRAI asset types for one Asset';
 
-/** The trade item or asset-type series an Asset is already committed to, by
- * the component that names it. Requires nothing but the identifiers it is
- * given, and answers null when they commit to nothing. */
-function committedComponent(
-  identifiers: readonly ExternalIdentifier[], component: 'gtin' | 'assetType'): string | null {
-  for (const identifier of identifiers) {
+/** The trade items or asset-type series an Asset is already committed to, by
+ * the component that names them. Requires nothing but the identifiers it is
+ * given. Under the shipped rules this has at most one value; an instance that
+ * stopped enforcing GTIN consistency may have recorded several. */
+function committedComponents(
+  identifiers: readonly ExternalIdentifier[], component: 'gtin' | 'assetType'): string[] {
+  return [...new Set(identifiers.flatMap((identifier) => {
     const value = identifier.components[component];
-    if (typeof value === 'string') return value;
-  }
-  return null;
+    return typeof value === 'string' ? [value] : [];
+  }))];
 }
 
 /** Why issuing under this class key would be refused for an Asset already
@@ -463,16 +476,49 @@ function committedComponent(
  */
 export function classKeyConflictReason(
   classKey: { scheme: ClassKeyScheme; canonical: string } | null,
-  identifiers: readonly ExternalIdentifier[]): string | null {
+  identifiers: readonly ExternalIdentifier[],
+  policy: CoherencePolicy = defaultCoherencePolicy): string | null {
   if (!classKey) return null;
   const component = classKey.scheme === 'gtin' ? 'gtin' : 'assetType';
+  if (component === 'gtin' && !policy.enforceGtinConsistency) return null;
   const key = definition(classKey.scheme).parse(classKey.canonical)[component];
-  const committed = committedComponent(identifiers, component);
-  if (typeof key !== 'string' || committed === null || committed === key) return null;
+  if (typeof key !== 'string' || !committedComponents(identifiers, component).some((value) => value !== key)) {
+    return null;
+  }
   return component === 'gtin' ? conflictingGtins : conflictingAssetTypes;
 }
 
-export function assertCompatible(identifiers: readonly ExternalIdentifier[]): void {
+/** Whether one more identifier may join an Asset that already carries these.
+ *
+ * The rules of `assertCompatible`, judged on what the addition introduces. On
+ * an Asset whose identifiers are coherent the two answers are identical. They
+ * differ only on an Asset that already holds a GTIN conflict, recorded while an
+ * instance did not enforce the rule. Enforcement cannot resume while any Asset
+ * holds one, so under enforcement this is a defence rather than a path: it
+ * refuses any identifier that would disagree with a GTIN the Asset carries,
+ * while an identifier with no AI 01 at all is still accepted. The conflict
+ * already recorded is neither repaired nor a reason to refuse unrelated writes.
+ */
+export function assertAttachable(existing: readonly ExternalIdentifier[], identifier: ExternalIdentifier,
+  policy: CoherencePolicy = defaultCoherencePolicy): void {
+  assertCompatible([...existing, identifier], { enforceGtinConsistency: false });
+  const gtin = identifier.components.gtin;
+  if (policy.enforceGtinConsistency && typeof gtin === 'string'
+      && committedComponents(existing, 'gtin').some((value) => value !== gtin)) {
+    throw new ValidationError(conflictingGtins);
+  }
+}
+
+/** Whether these identifiers, taken together, name more than one trade item:
+ * every AI 01 counts, alone as a GTIN or inside an SGTIN, and several
+ * identifiers naming the same GTIN do not conflict. The one definition of a GTIN
+ * conflict, shared by enforcement and by the record of which Assets hold one. */
+export function hasGtinConflict(identifiers: readonly ExternalIdentifier[]): boolean {
+  return committedComponents(identifiers, 'gtin').length > 1;
+}
+
+export function assertCompatible(identifiers: readonly ExternalIdentifier[],
+  policy: CoherencePolicy = defaultCoherencePolicy): void {
   const seen = new Set<string>();
   for (const identifier of identifiers) {
     if (seen.has(identifier.canonical)) {
@@ -482,9 +528,9 @@ export function assertCompatible(identifiers: readonly ExternalIdentifier[]): vo
   }
   // An Asset is an instance of at most one trade item, so any AI 01 it carries
   // — alone as a GTIN or inside an SGTIN — must name the same trade item.
-  const gtins = new Set(identifiers.flatMap((identifier) =>
-    typeof identifier.components.gtin === 'string' ? [identifier.components.gtin] : []));
-  if (gtins.size > 1) throw new ValidationError(conflictingGtins);
+  // Configurable per instance (`CoherencePolicy`): an instance recording what a
+  // legacy source asserted may keep a conflict visible rather than refuse it.
+  if (policy.enforceGtinConsistency && hasGtinConflict(identifiers)) throw new ValidationError(conflictingGtins);
   // The same rule one scheme along. A GRAI asset type names a series of
   // identical returnable assets, so an Asset belongs to at most one: carrying
   // two would claim it is a member of one series and an instance within

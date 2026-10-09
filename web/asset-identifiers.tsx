@@ -6,6 +6,7 @@ import {
   type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
+import { displayInstant } from '../server/settings.js';
 import { Icon } from './icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -37,8 +38,11 @@ function SchemeName({ scheme }: { scheme: IdentifierScheme }) {
   </span>;
 }
 
-export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, justIssued, onDetach }: {
+export function IdentifierList({ identifiers, issuances, digitalLinks, showPolicyVersion, canEdit, busy, justIssued, onDetach,
+  displayTimezone = 'UTC' }: {
   identifiers: readonly AttachedIdentifier[];
+  /** The instance display timezone, for when each identifier was accepted. */
+  displayTimezone?: string;
   /** The canonical form of an identifier issued a moment ago, highlighted so a
    * successful issuance is visible where the reader was already looking. */
   justIssued?: string | null;
@@ -89,6 +93,18 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
         {issued.classKeyCanonical
           ? <> under class key <code>{issued.classKeyCanonical}</code> as serial <code>{issued.sequence}</code>.</>
           : <> as reference <code>{issued.sequence}</code>.</>}</p>}
+      {/* Who accepted this identifier onto the Asset and on what stated
+          basis. An acceptance, not a verification, and not issuance, which
+          the line above alone describes. Absent for an association recorded
+          before Kannabi kept this, and then nothing is claimed instead. */}
+      {identifier.attachment && <p className="mt-2 mb-0 text-[.82rem] text-muted-foreground">
+        Accepted by {identifier.attachment.acceptedBy.name}
+        {identifier.attachment.acceptedBy.status === 'deleted' ? ' (deleted account)' : ''}
+        {identifier.attachment.assertedBy ? <> via <q>{identifier.attachment.assertedBy.label}</q></> : null}
+        {' · '}<time dateTime={identifier.attachment.acceptedAt}>
+          {displayInstant(identifier.attachment.acceptedAt, displayTimezone)}</time>
+        {identifier.attachment.basis ? <> · basis <code className="break-all">{identifier.attachment.basis}</code></> : null}
+      </p>}
       {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>}
     </div>
     {/* An identifier is identity, not a mutable label, so the way to remove one
@@ -130,8 +146,12 @@ const issuanceOptions = [
  * replaces its control: issuance is idempotent per scheme, so there is no
  * second value of that scheme to offer — and no bar to issuing another scheme.
  */
-export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers, busy, error }: {
+export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers, busy, error,
+  enforceGtinConsistency = true }: {
   namespaces: readonly { key: string; gcp: string }[];
+  /** The instance's acceptance policy, so the UI offers exactly what the
+   * boundary would accept. */
+  enforceGtinConsistency?: boolean;
   classKeys: readonly IssuableClassKey[];
   issuances: readonly Gs1KeyIssuance[];
   identifiers: readonly AttachedIdentifier[];
@@ -143,8 +163,9 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
   // asset-type series, so a key naming a different one would be refused at the
   // boundary; asking the boundary in advance is what stops the UI offering a
   // choice it already knows cannot succeed.
+  const policy = { enforceGtinConsistency };
   const usable = (classKey: IssuableClassKey) =>
-    classKeyConflictReason(classKey, identifiers) === null;
+    classKeyConflictReason(classKey, identifiers, policy) === null;
   const available = issuanceOptions.filter((option) => !issued.has(option.scheme)
     && (option.classScheme === null
       ? namespaces.length > 0
@@ -160,7 +181,7 @@ export function IssueIdentifier({ namespaces, classKeys, issuances, identifiers,
     if (available.some((offer) => offer.scheme === entry.scheme)) return [];
     const conflict = classKeys
       .filter((classKey) => classKey.scheme === entry.classScheme)
-      .map((classKey) => classKeyConflictReason(classKey, identifiers))
+      .map((classKey) => classKeyConflictReason(classKey, identifiers, policy))
       .find((reason) => reason !== null);
     return conflict ? [{ label: entry.label, reason: conflict }] : [];
   });

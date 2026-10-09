@@ -11,6 +11,8 @@ import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
 import { Switch } from '../switch';
 import { notify } from '../notify';
+import { GtinConflictDialog } from '../gtin-conflict-dialog';
+import type { GtinConflictPage } from '../../server/identity-store';
 import type { Route } from './+types/settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -71,7 +73,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   try {
     if (intent === 'settings') {
       const ceiling = String(data.get('apiTokenMaxLifetimeDays') ?? '').trim();
-      const { settings } = await unwrap(await api.settings.$patch({ json: {
+      const response = await api.settings.$patch({ json: {
         requirePhoto: data.get('requirePhoto') === 'on', displayTimezone: String(data.get('displayTimezone') ?? ''),
         themeId: String(data.get('themeId') ?? '') as ThemeId,
         // Blank is the unconfigured state: no ceiling, so a token may be
@@ -80,7 +82,18 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         toastSeconds: Number(data.get('toastSeconds')),
         showAssetId: data.get('showAssetId') === 'on',
         showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
-      } }));
+        enforceGtinConsistency: data.get('enforceGtinConsistency') === 'on',
+      } });
+      // Enforcement refused because Assets still conflict: the body names
+      // them, which a plain error message cannot.
+      if (response.status === 409) {
+        const body = await response.json() as { error?: string; gtinConflicts?: GtinConflictPage };
+        if (body.gtinConflicts) {
+          return { kind: 'settings' as const, saved: false, error: String(body.error),
+            gtinConflicts: body.gtinConflicts };
+        }
+      }
+      const { settings } = await unwrap(response);
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
     if (intent === 'mail') {
@@ -253,6 +266,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
   const previous = useRef(settings);
   const [current, setCurrent] = useState(settings);
   const [previewMode, setPreviewMode] = useState<'light' | 'dark' | null>(null);
+  const [gtinConflicts, setGtinConflicts] = useState<GtinConflictPage | null>(null);
   const busy = fetcher.state !== 'idle';
   useEffect(() => () => setColorSchemePreview(null), [setColorSchemePreview]);
   useEffect(() => {
@@ -267,6 +281,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       setCurrent(fetcher.data.settings);
       notify('Instance settings saved');
     } else if (!fetcher.data.saved) {
+      if ('gtinConflicts' in fetcher.data && fetcher.data.gtinConflicts) setGtinConflicts(fetcher.data.gtinConflicts);
       persisted.current = previous.current;
       setCurrent(previous.current);
       setThemeId(previous.current.themeId);
@@ -281,7 +296,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
     void fetcher.submit({ intent: 'settings', requirePhoto: next.requirePhoto ? 'on' : '', displayTimezone: next.displayTimezone,
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
       toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
-      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '' },
+      showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '',
+      enforceGtinConsistency: next.enforceGtinConsistency ? 'on' : '' },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -296,7 +312,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       <div className="flex flex-wrap items-center gap-x-4 gap-y-[.6rem]"><h1>Instance settings</h1>
         <ActionStatus className="h-9 w-52 min-w-0 max-sm:w-44">
           {busy ? <StatusPill>Saving…</StatusPill>
-            : fetcher.data?.kind === 'settings' && fetcher.data.error
+            : fetcher.data?.kind === 'settings' && fetcher.data.error && !('gtinConflicts' in fetcher.data)
               ? <StatusPill tone="error" role="alert" title={fetcher.data.error}>Error: {fetcher.data.error}</StatusPill>
               : null}
         </ActionStatus>
@@ -317,6 +333,10 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
           label="Show identifier policy version on Asset pages" />
         <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
+        <Switch name="enforceGtinConsistency" checked={current.enforceGtinConsistency} disabled={busy}
+          onCheckedChange={(enforceGtinConsistency) => update({ enforceGtinConsistency })}
+          label="Enforce GTIN consistency" />
+        <p className={settingHelp}>Require GTINs associated with the same Asset to match, including those embedded in SGTINs.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />
         <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>
@@ -348,6 +368,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
     </Panel>
     <MailSettings mail={mail} />
+    <GtinConflictDialog conflicts={gtinConflicts} onClose={() => setGtinConflicts(null)} />
   </>;
 }
 

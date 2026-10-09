@@ -79,7 +79,8 @@ function Inventory({ initial, view, groups }: {
         // Live edits can move an Asset in the name ordering. Keep one row per native Asset identity.
         const assets = new Map(previous.assets.map((asset) => [asset.id, asset]));
         next.assets.forEach((asset) => assets.set(asset.id, asset));
-        return { ...next, assets: [...assets.values()] };
+        return { ...next, assets: [...assets.values()],
+          matchedFields: { ...previous.matchedFields, ...next.matchedFields } };
       });
     } catch {
       if (!controller.signal.aborted) setError(true);
@@ -112,12 +113,13 @@ function Inventory({ initial, view, groups }: {
         ? <Panel className="p-0"><EmptyState>
           <h2>{q || scope !== 'all' || filtered ? 'No matching Assets' : 'Your inventory starts here'}</h2>
           <p>{q || scope !== 'all' || filtered
-            ? 'Try another scope, adjust the view, or search by name.'
+            ? 'Try another scope, adjust the view, or search by name or source description.'
             : 'Report an Asset and choose a Group to collaborate with.'}</p>
           {!q && scope === 'all' && !filtered && <Link to="/assets/report">Report your first Asset →</Link>}
         </EmptyState></Panel>
         : <ul className="overflow-hidden rounded border bg-card">{page.assets.map((asset) =>
-          <AssetRow key={asset.id} asset={asset} detail={view.sort === 'reportedAt' ? 'reportedAt' : undefined} />)}</ul>}
+          <AssetRow key={asset.id} asset={asset} detail={view.sort === 'reportedAt' ? 'reportedAt' : undefined}
+            matchedFields={page.matchedFields[asset.id]} />)}</ul>}
       <div ref={sentinel} className="py-5 text-center text-[.85rem] text-muted-foreground [&>p]:flex [&>p]:items-center [&>p]:justify-center [&>p]:gap-3">
         {loading && <p role="status">
           <span aria-hidden="true" className="size-[1.1rem] animate-spin rounded-full border-2 border-border border-t-brand motion-reduce:animate-none" />

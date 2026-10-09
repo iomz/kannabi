@@ -18,6 +18,12 @@ import { boundedLabel, opaqueReference, record, ValidationError } from './identi
  * This is not a general provenance framework and must not become one. It is one
  * immutable attribution to one identified record, set when the Asset is
  * created and never afterwards.
+ *
+ * It quotes at most one piece of content: the source's own free-text
+ * description of the Asset as a whole. No second content field ever joins it.
+ * Any other source field — location, category, memo, status, quantity,
+ * contact, or a value extracted from the description — is either a fact
+ * Kannabi owns with its own semantics, or stays outside Kannabi.
  */
 export type SourceRecord = Readonly<{
   /** An opaque reference to the source record. Kannabi never generates,
@@ -34,6 +40,15 @@ export type SourceRecord = Readonly<{
    * tombstone, which means a User that once existed here — would assert a
    * membership that never happened. */
   recordedBy: string | null;
+  /** The descriptive text the source record states about the Asset, exactly
+   * as accepted, or null when no source description is recorded in Kannabi.
+   *
+   * Null is not evidence that the source had none: the source may have held
+   * text Kannabi refused. Quoted, so never edited, filtered or sorted on, and
+   * never Kannabi's own description of the Asset. Text search may match it,
+   * and says when it did, because a match against what a source said is not a
+   * match against a fact. */
+  description: string | null;
 }>;
 
 /** What a creation path may state about the record an Asset came from.
@@ -49,7 +64,44 @@ export type SourceRecordInput = Readonly<{
   reference: string;
   recordedAt?: string | null;
   recordedBy?: string | null;
+  description?: string | null;
 }>;
+
+/** How long a quoted description may be, in UTF-16 code units. A bound, not a
+ * claim about any source: generous against the 255 characters the depot this
+ * was designed for allowed, without leaving the field unbounded. */
+export const sourceDescriptionLimit = 4096;
+
+/** Control characters a quoted description may not contain. Tab and both line
+ * breaks are text; every other C0 control, DEL and every C1 control is not. */
+const forbiddenControl = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
+
+/** A description the source stated, accepted exactly or refused.
+ *
+ * Two rules, kept apart. Kannabi never alters a description it accepts: no
+ * trimming, no newline conversion and no Unicode normalization, because the
+ * attribution is immutable and any change would be permanent. And Kannabi need
+ * not accept every string a source holds: text that is not NFC, carries a
+ * control character or exceeds the bound is refused rather than repaired, the
+ * same stance `sourceInstant` takes. Blank text is no description and stores
+ * nothing; that is a decision about acceptance, not an edit, because nothing
+ * is kept.
+ */
+function sourceDescription(value: unknown, field: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new ValidationError(`${field} must be a string`);
+  if (value.trim() === '') return null;
+  if (value.normalize('NFC') !== value) {
+    throw new ValidationError(`${field} must already be in Unicode NFC; Kannabi does not normalize quoted text`);
+  }
+  if (forbiddenControl.test(value)) {
+    throw new ValidationError(`${field} may contain tabs and line breaks but no other control characters`);
+  }
+  if (value.length > sourceDescriptionLimit) {
+    throw new ValidationError(`${field} must be at most ${sourceDescriptionLimit} characters`);
+  }
+  return value;
+}
 
 /** An instant the source stated, and only an instant.
  *
@@ -120,6 +172,7 @@ export type SourceRecordParameters = Readonly<{
   sourceReference: string | null;
   sourceRecordedAt: string | null;
   sourceRecordedBy: string | null;
+  sourceDescription: string | null;
 }>;
 
 /** Flattens an attribution into the parameters the creating statement stamps.
@@ -127,14 +180,14 @@ export type SourceRecordParameters = Readonly<{
  * Flattened rather than stored as a map for the same reason a credential is:
  * the projection can rebuild it from ordinary properties, and a half-written
  * attribution is impossible because `sourceReference` is present exactly when
- * the attribution is. Absent input yields three nulls, which is how an Asset
- * that came from nowhere in particular is recorded.
+ * the attribution is. Absent input yields nulls throughout, which is how an
+ * Asset that came from nowhere in particular is recorded.
  */
 export function sourceRecordParams(value: unknown): SourceRecordParameters {
   if (value === undefined || value === null) {
-    return { sourceReference: null, sourceRecordedAt: null, sourceRecordedBy: null };
+    return { sourceReference: null, sourceRecordedAt: null, sourceRecordedBy: null, sourceDescription: null };
   }
-  const input = record(value, ['reference', 'recordedAt', 'recordedBy']);
+  const input = record(value, ['reference', 'recordedAt', 'recordedBy', 'description']);
   const absent = (field: unknown) => field === undefined || field === null;
   return {
     sourceReference: opaqueReference(input.reference, 'source record reference'),
@@ -142,5 +195,6 @@ export function sourceRecordParams(value: unknown): SourceRecordParameters {
       : sourceInstant(input.recordedAt, 'source record recordedAt'),
     sourceRecordedBy: absent(input.recordedBy) ? null
       : boundedLabel(input.recordedBy, 'source record recordedBy'),
+    sourceDescription: sourceDescription(input.description, 'source record description'),
   };
 }

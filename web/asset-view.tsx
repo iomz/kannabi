@@ -316,7 +316,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         <SubHeading>Recorded IDs</SubHeading>
         <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
           digitalLinks={digitalLinks} justIssued={justIssued}
-          showPolicyVersion={settings.showIdentifierPolicyVersion} canEdit={canEdit} busy={identifierBusy}
+          showPolicyVersion={settings.showIdentifierPolicyVersion} displayTimezone={settings.displayTimezone}
+          canEdit={canEdit} busy={identifierBusy}
           onDetach={(key) => setIdentifierToDetach(key)} />
       </>}
       {!asset.identifiers.length && <p className="mt-5 mb-0 text-[.875rem]">
@@ -326,7 +327,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           {identityFields}
           <IssueIdentifier namespaces={namespaces} classKeys={classKeys}
             issuances={asset.issuances} identifiers={asset.identifiers}
-            busy={issueBusy} error={issueResult?.error ?? null} />
+            enforceGtinConsistency={settings.enforceGtinConsistency} busy={issueBusy} error={issueResult?.error ?? null} />
         </issue.Form>}
         record={<identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
           {identityFields}
@@ -378,6 +379,15 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         <dt>Source states recorded by</dt>
         <dd>{asset.sourceRecord.recordedBy ?? 'Not stated by the source'}</dd>
         <dt>Source reference</dt><dd><code>{asset.sourceRecord.reference}</code></dd>
+        {/* Exactly as accepted, line breaks and spacing included, and set off
+            as a quotation so it never reads as Kannabi's description. Absent
+            means none is recorded here, which is not the same as the source
+            having had none, so nothing is claimed in its place. */}
+        {asset.sourceRecord.description !== null && <>
+          <dt>Source states description</dt>
+          <dd><blockquote className="m-0 border-l-2 border-border pl-3 whitespace-pre-wrap break-words">
+            {asset.sourceRecord.description}</blockquote></dd>
+        </>}
       </dl>
     </Section>}
     {/* Below the identifiers and closed by default: managing who collaborates

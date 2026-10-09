@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
-  allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertCompatible,
+  allocatedGtinFormat, allocatedSgtin, assertAiAssociations, assertAttachable, assertCompatible,
   assertReversibleSchemes, canIssueClassKey, canonicalGcp, canonicalGtin, canonicalIdentifier,
   canonicalIdentifiers, classKeyConflictReason, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
-  identifierSchemes, schemeInputs,
+  hasGtinConflict, identifierSchemes, schemeInputs,
   storedIdentifier,
 } from './gs1.js';
 import {
@@ -391,4 +391,61 @@ test('a GRAI asset type is committed to in the same way, and a GIAI never confli
   // A GIAI comes straight from the prefix and shares no component, so there is
   // no class key and nothing to conflict with.
   assert.equal(classKeyConflictReason(null, [carried]), null);
+});
+
+test('GTIN consistency is an acceptance policy that only the AI 01 rule obeys', () => {
+  const product = canonicalIdentifier({ scheme: 'gtin', gtin: '4901234567894' });
+  const labSgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '04589604681007', serial: '532' });
+  const off = { enforceGtinConsistency: false };
+  assert.throws(() => assertCompatible([product, labSgtin]), /conflicting GTINs/, 'enforced by default');
+  assert.doesNotThrow(() => assertCompatible([product, labSgtin], off));
+  assert.deepEqual(canonicalIdentifiers([
+    { scheme: 'gtin', gtin: '4901234567894' }, { scheme: 'sgtin', gtin: '04589604681007', serial: '532' },
+  ], off).map((identifier) => identifier.scheme), ['gtin', 'sgtin']);
+  // Everything else still applies with the policy off.
+  assert.throws(() => assertCompatible([product, product], off), /same identifier twice/);
+  assert.throws(() => assertCompatible([
+    canonicalIdentifier({ scheme: 'grai', assetType: '0614141234561', serial: '1' }),
+    canonicalIdentifier({ scheme: 'grai', assetType: '0614141234578', serial: '1' }),
+  ], off), /conflicting GRAI asset types/);
+  assert.throws(() => canonicalIdentifiers([{ scheme: 'gtin', gtin: '4901234567890' }], off),
+    ValidationError, 'check digits are not a policy');
+  assert.equal(classKeyConflictReason({ scheme: 'gtin', canonical: product.canonical }, [labSgtin], off), null);
+  assert.match(classKeyConflictReason({ scheme: 'gtin', canonical: product.canonical }, [labSgtin]) ?? '',
+    /conflicting GTINs/);
+});
+
+test('a GTIN conflict is more than one distinct AI 01 value, alone or inside an SGTIN', () => {
+  const product = canonicalIdentifier({ scheme: 'gtin', gtin: '4901234567894' });
+  const sameInSgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '04901234567894', serial: '1' });
+  const labSgtin = (serial: string) => canonicalIdentifier({ scheme: 'sgtin', gtin: '04589604681007', serial });
+  const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '4589604681ASSET' });
+  assert.equal(hasGtinConflict([]), false);
+  assert.equal(hasGtinConflict([product, giai]), false);
+  assert.equal(hasGtinConflict([product, sameInSgtin]), false, 'a GTIN-13 and its GTIN-14 form are one GTIN');
+  assert.equal(hasGtinConflict([labSgtin('1'), labSgtin('2')]), false, 'serials of one trade item');
+  assert.equal(hasGtinConflict([product, labSgtin('1')]), true);
+  assert.equal(hasGtinConflict([labSgtin('1'), sameInSgtin]), true, 'two SGTINs naming different GTINs');
+  // The same rule enforcement applies, so the two can never disagree.
+  assert.throws(() => assertCompatible([product, labSgtin('1')]), /conflicting GTINs/);
+  assert.doesNotThrow(() => assertCompatible([product, sameInSgtin]));
+});
+
+test('on an Asset already holding a conflict, a write is judged by what it adds', () => {
+  const product = canonicalIdentifier({ scheme: 'gtin', gtin: '4901234567894' });
+  const labSgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '04589604681007', serial: '532' });
+  const other = canonicalIdentifier({ scheme: 'gtin', gtin: '4512345678906' });
+  const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '4589604681ASSET' });
+  const recorded = [product, labSgtin];
+  // An identifier with no AI 01 adds no disagreement, so the conflict recorded
+  // while the rule was off is no reason to refuse it.
+  assert.doesNotThrow(() => assertAttachable(recorded, giai));
+  assert.throws(() => assertAttachable(recorded, other), /conflicting GTINs/);
+  assert.throws(() => assertAttachable(recorded, giai.canonical === product.canonical ? giai : product),
+    /same identifier twice/);
+  assert.doesNotThrow(() => assertAttachable(recorded, other, { enforceGtinConsistency: false }));
+  // On a coherent Asset it answers exactly as assertCompatible does.
+  assert.doesNotThrow(() => assertAttachable([product], canonicalIdentifier({
+    scheme: 'sgtin', gtin: '4901234567894', serial: '1' })));
+  assert.throws(() => assertAttachable([product], labSgtin), /conflicting GTINs/);
 });

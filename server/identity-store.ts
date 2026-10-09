@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Record as Neo4jRecord, Session } from 'neo4j-driver';
-import neo4j, { int } from 'neo4j-driver';
+import neo4j, { int, type Integer } from 'neo4j-driver';
 import {
   assetCursor, type AssetDirection, type AssetFilters, type AssetPageRequest, type AssetScope,
   type AssetSort,
@@ -10,17 +10,19 @@ import { assetLookupCursor, type AssetLookupRequest } from './asset-lookup.js';
 import { gs1LedgerCursor, type Gs1LedgerRequest } from './gs1-ledger.js';
 import { audienceParameters, type AudienceInput, type NamedAudienceInput } from './asset-audience.js';
 import { sourceRecordParams, type SourceRecord, type SourceRecordInput } from './source-record.js';
-import { assetId, assetIdPattern, newAssetId } from './asset-id.js';
+import { assetId, assetIdPattern, isAssetId, newAssetId } from './asset-id.js';
 import { record, requiredText, ValidationError } from './identity.js';
-import { changeParams, type ChangeOrigin, type ChangeProvenance } from './change-provenance.js';
+import {
+  changeParams, type AssertingCredential, type ChangeOrigin, type ChangeProvenance,
+} from './change-provenance.js';
 import { gravatarIdentifier } from './avatar.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
-  allocatedGtinFormat, allocatedSgtin, assertCompatible, canIssueClassKey, canonicalGcp,
+  allocatedGtinFormat, allocatedSgtin, assertAttachable, assertCompatible, canIssueClassKey, canonicalGcp,
   canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
-  issuanceClassScheme,
-  storedIdentifier, type ClassKeyScheme, type ExternalIdentifier, type IdentifierLevel,
+  hasGtinConflict, issuanceClassScheme,
+  storedIdentifier, type ClassKeyScheme, type CoherencePolicy, type ExternalIdentifier, type IdentifierLevel,
   type IdentifierScheme, type IssuanceScheme,
 } from './gs1.js';
 import {
@@ -35,6 +37,31 @@ export class ReferenceError extends Error {}
 export class AdministrationError extends Error {}
 export class LastAdministratorError extends Error {}
 export class LastCollaborationError extends Error {}
+
+/** One page of the Assets that currently carry a GTIN conflict, as one reader
+ * may see them.
+ *
+ * `total` counts every conflicting Asset in the instance, so the number that
+ * blocks enforcement is never understated; `assets` lists only those the reader
+ * can read, because system administration grants no Asset access, and
+ * `hidden` says how many of the total that leaves out. `next` continues the
+ * list after the last Asset shown, or is null when there are no more. */
+export type GtinConflictPage = Readonly<{
+  total: number;
+  hidden: number;
+  assets: readonly Readonly<{ id: string; name: string }>[];
+  next: string | null;
+}>;
+
+/** Enforcement was asked to resume while Assets still carry conflicting GTINs. */
+export class GtinConflictError extends Error {
+  constructor(readonly conflicts: GtinConflictPage) {
+    super('GTIN consistency cannot be enabled while Assets carry conflicting GTINs');
+  }
+}
+
+/** How many conflicting Assets one response lists. */
+export const gtinConflictPageSize = 20;
 /** A User an external principal resolved to. Deliberately thin: resolution
  * answers who is acting, and every later authorization decision is made from
  * the Group model as usual rather than from anything carried here. */
@@ -73,9 +100,29 @@ const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin
 // application identity in `id`; external identifiers never address the Asset.
 export type Entity = Readonly<{ key: string; name: string }>;
 export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'deleted' }>;
+/** Who accepted one Asset–identifier association, when, and on what stated
+ * basis.
+ *
+ * The same shape and meaning as Tier-1 change provenance, scoped to one
+ * association and fixed when it was made. It is an acceptance, never a
+ * verification: it says nothing about whether the identifier is correct, and
+ * nothing about who issued it, which the issuance ledger alone records. It
+ * lasts as long as the association; detaching removes both. */
+export type IdentifierAttachment = Readonly<{
+  acceptedBy: ReporterAttribution;
+  acceptedAt: string;
+  assertedBy: AssertingCredential | null;
+  basis: string | null;
+}>;
+
 /** An external identifier as carried by an Asset. `key` addresses this
- * attachment for detachment; everything else is derived by the GS1 boundary. */
-export type AttachedIdentifier = ExternalIdentifier & Readonly<{ key: string }>;
+ * attachment for detachment; everything else is derived by the GS1 boundary,
+ * except `attachment`, which is null for an association recorded before
+ * Kannabi kept it. */
+export type AttachedIdentifier = ExternalIdentifier & Readonly<{
+  key: string;
+  attachment: IdentifierAttachment | null;
+}>;
 
 export type Asset = Readonly<{
   id: string;
@@ -251,7 +298,8 @@ export function orderPhotos(photos: readonly Photo[]): Photo[] {
 }
 
 type StoredIdentifier = { key: string; canonical: string; scheme: string; policyVersion: string };
-type StoredAsset = Omit<Asset, 'identifiers'> & { identifiers: StoredIdentifier[] };
+type StoredAttachedIdentifier = StoredIdentifier & { attachment: IdentifierAttachment | null };
+type StoredAsset = Omit<Asset, 'identifiers'> & { identifiers: StoredAttachedIdentifier[] };
 /** A counter's three stored properties, named for the counter that owns them
  * so a reader never has to join to learn what a sequence counts. */
 const counterProperties = (counter: string) => ({
@@ -332,7 +380,8 @@ function byCanonical<T extends { canonical: string }>(left: T, right: T): number
 
 function assetFrom(stored: StoredAsset): Asset {
   const identifiers = stored.identifiers
-    .map((row) => ({ key: row.key, ...storedIdentifier(row.scheme, row.canonical, row.policyVersion) }))
+    .map((row) => ({ key: row.key, ...storedIdentifier(row.scheme, row.canonical, row.policyVersion),
+      attachment: row.attachment ?? null }))
     .sort(byCanonical);
   // Issued values are ordered by their canonical form rather than by the
   // sequence that produced them: a sequence is unique only within the counter
@@ -340,7 +389,16 @@ function assetFrom(stored: StoredAsset): Asset {
   const issuances = [...stored.issuances].sort(byCanonical);
   return { ...stored, identifiers, issuances, photos: orderPhotos(stored.photos) };
 }
-export type AssetPage = { assets: Asset[]; total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null };
+/** A searchable field free text can match. `sourceDescription` is quoted
+ * source text, so a match there is a match against what a source said. */
+export type MatchedField = 'name' | 'sourceDescription';
+export type AssetPage = {
+  assets: Asset[];
+  /** For each Asset on this page, by id, the fields the query text matched.
+   * Empty when the query has no text. */
+  matchedFields: Record<string, MatchedField[]>;
+  total: number; matching: number; scopes: Record<AssetScope, number>; nextCursor: string | null;
+};
 
 /** The resolved identity, echoed from the caller's own input so they can see
  * what it canonicalised to. It is derived before any Asset is read and
@@ -490,18 +548,35 @@ function identifierParams(identifiers: readonly ExternalIdentifier[]) {
   };
 }
 
-// Requires `a` in scope. The two labels record the GS1 level an identifier
-// already has; they add no meaning of their own. Individual identifiers are
-// CREATEd so the uniqueness constraint rejects a second Asset claiming them;
-// class identifiers are MERGEd so Assets share one node.
+// Requires `a` in scope, plus `$actorKey` and the parameters `changeParams`
+// produces, which every caller already binds for `recordChange`. The two labels
+// record the GS1 level an identifier already has; they add no meaning of their
+// own. Individual identifiers are CREATEd so the uniqueness constraint rejects a
+// second Asset claiming them; class identifiers are MERGEd so Assets share one
+// node.
+//
+// Each association records who accepted it, when, and on what stated basis, on
+// the relationship itself: the association is what the provenance describes,
+// and a shared class node cannot speak for one Asset. It is written in the same
+// statement as the association and as `recordChange`, so `acceptedAt` is the
+// same statement-clock instant as the Asset's `changeAcceptedAt`. It says
+// nothing about who issued the value or whether it is correct. `ON CREATE`
+// keeps an existing association's origin even if a repeat ever reached here;
+// `assertCompatible` refuses repeats before that.
 const attachIdentifiers = `
   FOREACH (i IN $individualIdentifiers |
-    CREATE (a)-[:IDENTIFIED_BY]->(:IndividualIdentifier {
-      key: i.key, canonical: i.canonical, scheme: i.scheme, policyVersion: i.policyVersion }))
+    CREATE (a)-[:IDENTIFIED_BY {
+        acceptedBy: $actorKey, acceptedAt: datetime(),
+        assertedById: $assertedById, assertedByLabel: $assertedByLabel, basis: $basis
+      }]->(:IndividualIdentifier {
+        key: i.key, canonical: i.canonical, scheme: i.scheme, policyVersion: i.policyVersion }))
   FOREACH (c IN $classIdentifiers |
     MERGE (n:ClassIdentifier {canonical: c.canonical})
       ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
-    MERGE (a)-[:CLASSIFIED_AS]->(n))`;
+    MERGE (a)-[r:CLASSIFIED_AS]->(n)
+      ON CREATE SET r.acceptedBy = $actorKey, r.acceptedAt = datetime(),
+        r.assertedById = $assertedById, r.assertedByLabel = $assertedByLabel,
+        r.basis = $basis, r.policyVersion = c.policyVersion)`;
 
 /** Public attribution for a stored actor key.
  *
@@ -556,11 +631,35 @@ const issuancesSubquery = `CALL {
     RETURN collect(${issuanceProjection}) AS issuances
   }`;
 
+/** Every identifier this Asset carries, each with the provenance of its
+ * association, as one list.
+ *
+ * A subquery for the same reasons as `issuancesSubquery`: the accepting User is
+ * resolved per association, and aggregating inside keeps an Asset with no
+ * identifiers to an empty list rather than a row of nulls. The policy stamp is
+ * the association's own where it has one, because a shared class node keeps
+ * only the stamp of whichever attachment created it.
+ *
+ * `attachment` is null for an association recorded before Kannabi kept this.
+ * It is never back-filled, so null never means "accepted by nobody".
+ */
+const identifiersSubquery = `CALL {
+    WITH a
+    MATCH (a)-[r:IDENTIFIED_BY|CLASSIFIED_AS]->(x)
+    WHERE x:IndividualIdentifier OR x:ClassIdentifier
+    OPTIONAL MATCH (identifierAcceptor:User {key: r.acceptedBy})
+    RETURN collect(x { .key, .canonical, .scheme,
+      policyVersion: coalesce(r.policyVersion, x.policyVersion),
+      attachment: CASE WHEN r.acceptedAt IS NULL THEN null ELSE {
+        acceptedBy: ${attribution('identifierAcceptor', 'r.acceptedBy')},
+        acceptedAt: toString(r.acceptedAt),
+        assertedBy: CASE WHEN r.assertedById IS NULL THEN null
+          ELSE { id: r.assertedById, label: r.assertedByLabel } END,
+        basis: r.basis } END }) AS identifiers
+  }`;
+
 const identifierProjection = `
-    identifiers: [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) |
-        x { .key, .canonical, .scheme, .policyVersion }]
-      + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) |
-        y { .key, .canonical, .scheme, .policyVersion }],
+    identifiers: identifiers,
     issuances: issuances,`
 
 /** Resolves the accepting User of the Asset's most recent canonical change.
@@ -584,7 +683,7 @@ const changeProjection = `CASE WHEN a.changeAcceptedAt IS NULL THEN null ELSE {
  * with, or ordered by anything — it is evidence, read and nothing else. */
 const sourceRecordProjection = `CASE WHEN a.sourceReference IS NULL THEN null ELSE {
       reference: a.sourceReference, recordedAt: toString(a.sourceRecordedAt),
-      recordedBy: a.sourceRecordedBy } END`;
+      recordedBy: a.sourceRecordedBy, description: a.sourceDescription } END`;
 
 /** Stamps a newly created Asset with the record it came from. Requires `a` in
  * scope plus the parameters `sourceRecordParams` produces.
@@ -593,7 +692,17 @@ const sourceRecordProjection = `CASE WHEN a.sourceReference IS NULL THEN null EL
  * these, which is what makes the attribution immutable: a later edit has its
  * own `basis`, and replacing where a record came from is not an edit. */
 const recordSource = `SET a.sourceReference = $sourceReference,
-    a.sourceRecordedAt = datetime($sourceRecordedAt), a.sourceRecordedBy = $sourceRecordedBy`;
+    a.sourceRecordedAt = datetime($sourceRecordedAt), a.sourceRecordedBy = $sourceRecordedBy,
+    a.sourceDescription = $sourceDescription`;
+
+/** The instance's identifier acceptance policy. Requires `s`, the instance
+ * Settings node. An instance that predates the setting enforces. */
+const coherencePolicyProjection = '{ enforceGtinConsistency: coalesce(s.enforceGtinConsistency, true) }';
+
+/** Every identifier one Asset carries, in the shape `storedIdentifier` reads.
+ * Requires `a` in scope. */
+const assetIdentifierRows = `[(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
+  + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }]`;
 
 /** Stamps the Asset with who made this change true. Requires `a` in scope plus
  * `$actorKey` and the parameters `changeParams` produces.
@@ -663,20 +772,39 @@ function orderClause(sort: AssetSort, dir: AssetDirection): string {
   return `ORDER BY ${sortExpressions[sort].order} ${direction}, a.id ${direction}`;
 }
 
+/** The text a free-text query matches, as Cypher. Requires `a` and `$text`.
+ *
+ * A plain case-insensitive substring of the Asset name or of the source
+ * record's quoted description: no ranking, stemming or inference. The
+ * description is what a source said, so a match on it is a match against
+ * quoted text and never against a fact Kannabi holds; `matchedFieldsExpression`
+ * reports which field matched so a caller can say so. */
+const textPredicate = `(toLower(a.name) CONTAINS toLower($text)
+  OR toLower(coalesce(a.sourceDescription, '')) CONTAINS toLower($text))`;
+
+/** Which searchable fields the query text matched, in a fixed order. Empty for
+ * an empty query, which matches everything and so matched no field. */
+const matchedFieldsExpression = `[field IN ['name', 'sourceDescription'] WHERE $text <> ''
+    AND toLower(CASE field WHEN 'name' THEN a.name ELSE coalesce(a.sourceDescription, '') END)
+      CONTAINS toLower($text)]`;
+
 /** Projects a page of Assets already narrowed and ordered by the caller.
  * Requires `a` in scope and yields `rows`. Shared so browse and lookup cannot
- * drift into returning different Asset representations. */
-const assetRowsProjection = (order: string) => `
+ * drift into returning different Asset representations. With `textMatch`, each
+ * row also carries `matchedFields`, which requires `$text`. */
+const assetRowsProjection = (order: string, textMatch = false) => `
   MATCH (a)-[:REPORTED_BY]->(u:User)
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${issuancesSubquery}
+  ${identifiersSubquery}
   ${changeMatch}
-  WITH a, u, o, issuances, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, issuances, identifiers, acceptor, collect(g { .key, .name }) AS groups
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
-    sourceRecord: ${sourceRecordProjection},
+    sourceRecord: ${sourceRecordProjection},${textMatch ? `
+    matchedFields: ${matchedFieldsExpression},` : ''}
     owner: o { .key, .name }, groups: groups, photos: [(a)-[:HAS_PHOTO]->(m:Media) |
       m { .key, .contentType, size: toFloat(m.size), createdAt: toString(m.createdAt) }]}) AS rows`;
 
@@ -772,8 +900,9 @@ const assetProjection = `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${issuancesSubquery}
+  ${identifiersSubquery}
   ${changeMatch}
-  WITH a, u, o, issuances, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, issuances, identifiers, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     sourceRecord: ${sourceRecordProjection},
@@ -810,8 +939,9 @@ export class IdentityStore {
       for (const statement of retiredConstraints) await session.run(statement);
       await session.run(`MERGE (s:Settings {key: 'instance'})
         ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0,
-          s.showAssetId = false, s.showIdentifierPolicyVersion = false
+          s.showAssetId = false, s.showIdentifierPolicyVersion = false, s.enforceGtinConsistency = true
         SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
+      await IdentityStore.reconcileGtinConflicts(driver);
       await session.run(`MERGE (m:MailConfiguration {key: 'instance'})
         ON CREATE SET m.enabled = false, m.transport = 'smtp', m.revision = 0
         SET m.verificationStatus = coalesce(m.verificationStatus, 'not-verified')`);
@@ -1298,7 +1428,10 @@ export class IdentityStore {
     origin: ChangeOrigin = {}): Promise<Asset> {
     const input = record(value, ['name', 'identifiers', 'ownerKey', 'sourceRecord']);
     const actor = record(context, ['actorKey', 'groupKey']);
-    const identifiers = canonicalIdentifiers(input.identifiers);
+    // Every rule but the configurable AI 01 one is checked here, before the
+    // transaction opens; that one is an instance policy, so it is read and
+    // applied inside the transaction below.
+    const identifiers = canonicalIdentifiers(input.identifiers, { enforceGtinConsistency: false });
     const params = {
       assetId: newAssetId(),
       name: requiredText(input.name, 'name'),
@@ -1315,8 +1448,10 @@ export class IdentityStore {
     };
     try {
       return await this.write(async (tx) => {
-        const policy = await tx.run("MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1 RETURN s.requirePhoto AS required");
+        const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
+          RETURN s.requirePhoto AS required, ${coherencePolicyProjection} AS coherence`);
         if (!photoKey && policy.records[0].get('required')) throw new ValidationError('A photo is required when reporting an Asset');
+        assertCompatible(identifiers, policy.records[0].get('coherence') as CoherencePolicy);
         if (photoKey) await this.consumePhoto(tx, photoKey);
         const result = await tx.run(`
           MATCH (u:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
@@ -1337,6 +1472,7 @@ export class IdentityStore {
         if (!result.records.length) {
           throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
         }
+        await IdentityStore.recordGtinConflict(tx, params.assetId);
         return assetFrom(result.records[0].get('asset'));
       });
     } catch (error) {
@@ -1458,7 +1594,7 @@ export class IdentityStore {
         CALL {
           MATCH (a:Asset)
           WHERE ${readableAsset}
-          WITH a, (toLower(a.name) CONTAINS toLower($text) AND ${filterPredicate}) AS matches,
+          WITH a, (${textPredicate} AND ${filterPredicate}) AS matches,
             ${collaboration} AS inGroup,
             EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) } AS mine
           RETURN count(a) AS total,
@@ -1469,25 +1605,26 @@ export class IdentityStore {
         }
         CALL {
           MATCH (a:Asset)
-          WHERE ${readableAsset} AND toLower(a.name) CONTAINS toLower($text)
+          WHERE ${readableAsset} AND ${textPredicate}
             AND ${filterPredicate}
             AND ($scope = 'all' OR ($scope = 'public' AND a.isPublic = true)
               OR ($scope = 'group' AND a.isPublic = false AND ${collaboration})
               OR ($scope = 'mine' AND EXISTS { MATCH (a)-[:REPORTED_BY]->(:User {key: $actorKey}) }))
             AND ${keysetPredicate(sort, dir)}
           WITH a ${order} LIMIT $fetchSize
-          ${assetRowsProjection(order)}
+          ${assetRowsProjection(order, true)}
         }
         RETURN total, scopes, rows`,
       { text, scope, after, fetchSize: int(limit + 1),
         ...audienceParameters(audience), ...filterParameters(filters) }));
       const row = result.records[0];
-      const rows = row.get('rows') as StoredAsset[];
-      const assets = rows.slice(0, limit).map(assetFrom);
+      const rows = (row.get('rows') as (StoredAsset & { matchedFields: MatchedField[] })[]).slice(0, limit);
+      const assets = rows.map(({ matchedFields: _matched, ...stored }) => assetFrom(stored));
+      const matchedFields = Object.fromEntries(rows.map((stored) => [stored.id, stored.matchedFields]));
       const scopes = Object.fromEntries(Object.entries(row.get('scopes')).map(([key, value]) =>
         [key, (value as { toNumber(): number }).toNumber()])) as Record<AssetScope, number>;
-      return { assets, total: row.get('total').toNumber(), scopes, matching: scopes[scope],
-        nextCursor: rows.length > limit ? assetCursor(request, assets.at(-1)!) : null };
+      return { assets, matchedFields, total: row.get('total').toNumber(), scopes, matching: scopes[scope],
+        nextCursor: (row.get('rows') as unknown[]).length > limit ? assetCursor(request, assets.at(-1)!) : null };
     } finally { await session.close(); }
   }
 
@@ -1782,7 +1919,8 @@ export class IdentityStore {
         apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays),
         toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)),
         showAssetId: coalesce(s.showAssetId, false),
-        showIdentifierPolicyVersion: coalesce(s.showIdentifierPolicyVersion, false) } AS settings`,
+        showIdentifierPolicyVersion: coalesce(s.showIdentifierPolicyVersion, false),
+        enforceGtinConsistency: coalesce(s.enforceGtinConsistency, true) } AS settings`,
     { defaultToastSeconds }));
     return result.records[0].get('settings');
   }
@@ -1790,12 +1928,28 @@ export class IdentityStore {
   async updateSettings(actorKey: string, value: unknown): Promise<Settings> {
     const settings = validateSettings(value);
     return this.write(async (tx) => {
+      // The Settings lock is taken before the conflict set is read, and every
+      // identifier write takes it before judging and recording, so a conflict
+      // either committed before this check and blocks it, or is judged by the
+      // policy this commits.
+      const state = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
+        SET s.revision = s.revision + 1
+        RETURN coalesce(s.enforceGtinConsistency, true) AS enforcing`, { actorKey });
+      if (!state.records.length) throw new ReferenceError('Administrator access required');
+      // Resuming enforcement is refused while any Asset holds a conflict, and
+      // nothing is reconciled to make it succeed. An instance already
+      // enforcing is not blocked from saving its other settings.
+      if (settings.enforceGtinConsistency && !state.records[0].get('enforcing')) {
+        const conflicts = await IdentityStore.gtinConflictPage(tx, actorKey, null);
+        if (conflicts.total > 0) throw new GtinConflictError(conflicts);
+      }
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
-        SET s.revision = s.revision + 1, s.requirePhoto = $settings.requirePhoto,
+        SET s.requirePhoto = $settings.requirePhoto,
           s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
           s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
           s.toastSeconds = $settings.toastSeconds, s.showAssetId = $settings.showAssetId,
-          s.showIdentifierPolicyVersion = $settings.showIdentifierPolicyVersion
+          s.showIdentifierPolicyVersion = $settings.showIdentifierPolicyVersion,
+          s.enforceGtinConsistency = $settings.enforceGtinConsistency
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;
@@ -1904,13 +2058,17 @@ export class IdentityStore {
     change: ReturnType<typeof changeParams>): Promise<void> {
     await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
-      RETURN [(a)-[:IDENTIFIED_BY]->(x:IndividualIdentifier) | x { .canonical, .scheme, .policyVersion }]
-        + [(a)-[:CLASSIFIED_AS]->(y:ClassIdentifier) | y { .canonical, .scheme, .policyVersion }] AS identifiers`,
+      RETURN ${assetIdentifierRows} AS identifiers`,
     { assetId: assetKey, actorKey });
     if (!current.records.length) throw new ReferenceError('Asset access not found');
     const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
       .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
-    assertCompatible([...existing, identifier]);
+    // Read under the Settings lock, as reporting does, so an attachment and a
+    // change of policy are ordered: a write that commits after enforcement is
+    // switched back on has been judged by it.
+    const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
+      RETURN ${coherencePolicyProjection} AS coherence`);
+    assertAttachable(existing, identifier, policy.records[0].get('coherence') as CoherencePolicy);
     // A value Kannabi issued may only ever return to the Asset it was issued
     // for. One check for every scheme, matched on the canonical form: an
     // externally assigned value has no ledger row and keeps the ordinary
@@ -1926,6 +2084,92 @@ export class IdentityStore {
       ${recordChange}
       ${attachIdentifiers}`,
     { assetId: assetKey, actorKey, ...change, ...identifierParams([identifier]) });
+    await IdentityStore.recordGtinConflict(tx, assetKey);
+  }
+
+  /** Brings one Asset's membership of the GTIN conflict set into line with the
+   * identifiers it carries now.
+   *
+   * The set is `(:Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(:Asset)`:
+   * references to the Assets whose AI 01 values name more than one trade item,
+   * hung off the node that holds the policy they block. Every path that changes
+   * an Asset's identifiers calls this in the same transaction, after the
+   * change and under the Asset lock, and it reads the identifiers back rather
+   * than being told what they are, so membership is derived from the
+   * relationships themselves and cannot be computed from a stale picture.
+   * Whether they conflict is `hasGtinConflict`, the same rule enforcement
+   * applies. Deleting an Asset takes the relationship with it. */
+  private static async recordGtinConflict(tx: ManagedTransaction, assetKey: string): Promise<void> {
+    const current = await tx.run(`${assetMatch} RETURN ${assetIdentifierRows} AS identifiers`,
+      { assetId: assetKey });
+    const identifiers = (current.records[0].get('identifiers') as StoredIdentifier[])
+      .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+    await tx.run(hasGtinConflict(identifiers)
+      ? `MATCH (s:Settings {key: 'instance'}) ${assetMatch} MERGE (s)-[:HAS_GTIN_CONFLICT]->(a)`
+      : `MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(:Asset {id: $assetId}) DELETE c`,
+    { assetId: assetKey });
+  }
+
+  /** Rebuilds the GTIN conflict set from the identifiers every Asset carries.
+   *
+   * Runs on every startup, after the Settings node exists, so a database
+   * written before the set was kept — or by a release that did not keep it —
+   * starts out with every conflict it already holds, never with an empty set
+   * that would let enforcement resume over them. Idempotent: it adds what is
+   * missing, removes what no longer conflicts and leaves the rest. It reads
+   * identifiers and writes only the set; no identifier association is changed.
+   * It holds the Settings lock for the whole rebuild, so no identifier write or
+   * policy change interleaves with it. Only Assets carrying two or more
+   * identifiers can conflict, so only those are read. */
+  private static async reconcileGtinConflicts(driver: Driver): Promise<void> {
+    const session = driver.session();
+    try {
+      await session.executeWrite(async (tx) => {
+        await tx.run("MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1 RETURN s.key");
+        const candidates = await tx.run(`MATCH (a:Asset)
+          WHERE COUNT { (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() } > 1
+          RETURN a.id AS id, ${assetIdentifierRows} AS identifiers`);
+        const conflicting = candidates.records
+          .filter((row) => hasGtinConflict((row.get('identifiers') as StoredIdentifier[])
+            .map((stored) => storedIdentifier(stored.scheme, stored.canonical, stored.policyVersion))))
+          .map((row) => row.get('id') as string);
+        await tx.run(`MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(a:Asset)
+          WHERE NOT a.id IN $conflicting DELETE c`, { conflicting });
+        await tx.run(`MATCH (s:Settings {key: 'instance'})
+          UNWIND $conflicting AS id MATCH (a:Asset {id: id}) MERGE (s)-[:HAS_GTIN_CONFLICT]->(a)`, { conflicting });
+      });
+    } finally { await session.close(); }
+  }
+
+  /** One page of the conflicting Assets this reader can read, with the total
+   * across the instance. Requires the Settings lock or a read transaction. */
+  private static async gtinConflictPage(tx: ManagedTransaction, actorKey: string,
+    after: string | null): Promise<GtinConflictPage> {
+    const counts = await tx.run(`MATCH (s:Settings {key: 'instance'})
+      OPTIONAL MATCH (s)-[:HAS_GTIN_CONFLICT]->(a:Asset)
+      RETURN count(a) AS total, count(CASE WHEN ${readableByViewer} THEN a END) AS readable`, { actorKey });
+    const total = (counts.records[0].get('total') as Integer).toNumber();
+    const readable = (counts.records[0].get('readable') as Integer).toNumber();
+    const page = await tx.run(`MATCH (:Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(a:Asset)
+      WHERE ${readableByViewer} AND ($after IS NULL OR a.id > $after)
+      RETURN a { .id, .name } AS asset ORDER BY a.id LIMIT $limit`,
+    { actorKey, after, limit: int(gtinConflictPageSize + 1) });
+    const assets = page.records.map((row) => row.get('asset') as { id: string; name: string });
+    const more = assets.length > gtinConflictPageSize;
+    if (more) assets.pop();
+    return { total, hidden: total - readable, assets, next: more ? assets[assets.length - 1].id : null };
+  }
+
+  /** The Assets that block enforcing GTIN consistency, for an administrator.
+   * Paged by native Asset ID; `after` is the `next` of the previous page. */
+  async gtinConflicts(actorKey: string, after: unknown): Promise<GtinConflictPage> {
+    if (after !== undefined && after !== null && !isAssetId(after)) throw new ValidationError('Invalid cursor');
+    if (!await this.isAdministrator(actorKey)) throw new AdministrationError('Administrator access required');
+    const session = this.driver.session({ defaultAccessMode: neo4j.session.READ });
+    try {
+      return await session.executeRead((tx) =>
+        IdentityStore.gtinConflictPage(tx, actorKey, (after as string | undefined) ?? null));
+    } finally { await session.close(); }
   }
 
   /** GS1 namespaces the audience can reach, ordered by prefix. */
@@ -2377,6 +2621,7 @@ export class IdentityStore {
       if (!detached.records.length) throw new ReferenceError('Asset access or identifier not found');
       await tx.run(`MATCH (c:ClassIdentifier {key: $key})
         WHERE NOT EXISTS { ()-[:CLASSIFIED_AS]->(c) } DELETE c`, { key: identifierKey });
+      await IdentityStore.recordGtinConflict(tx, assetKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
       return assetFrom(result.records[0].get('asset'));
