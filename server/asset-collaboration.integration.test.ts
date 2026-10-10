@@ -294,4 +294,29 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     const page = await store.findAssets(dual.key, assetPageRequest({}));
     assert.equal(page.assets.filter((entry) => entry.id === asset.id).length, 1);
   });
+
+  await t.test('a repeated Group filter applies every value it names over HTTP', async () => {
+    // Its own User and Groups, so nothing above changes what it can read.
+    const filterer = await person('filterer');
+    const first = await store.createReportingGroup('Filter first', filterer.key);
+    const second = await store.createReportingGroup('Filter second', filterer.key);
+    const third = await store.createReportingGroup('Filter third', filterer.key);
+    const made = await Promise.all([first, second, third].map((group, n) =>
+      store.reportAsset({ name: `Filtered ${n}` }, { actorKey: filterer.key, groupKey: group.key })));
+    const ids = async (query: string) =>
+      ((await (await filterer.call('/assets?' + query)).json()).assets as { id: string }[])
+        .map((entry) => entry.id).sort();
+    const both = [made[0].id, made[1].id].sort();
+    // Repeated entries and one comma-separated value are the same filter state.
+    assert.deepEqual(await ids(`group=${first.key}&group=${second.key}`), both);
+    assert.deepEqual(await ids(`group=${first.key},${second.key}`), both);
+    assert.deepEqual(await ids(`group=${second.key}`), [made[1].id]);
+    // A cursor taken under the repeated form continues under it.
+    const paged = await (await filterer.call(`/assets?group=${first.key}&group=${second.key}&limit=1`)).json();
+    assert.ok(paged.nextCursor);
+    const next = await filterer.call(`/assets?group=${first.key}&group=${second.key}&limit=1&cursor=`
+      + encodeURIComponent(paged.nextCursor));
+    assert.equal(next.status, 200, await next.clone().text());
+    assert.deepEqual([paged.assets[0].id, (await next.json()).assets[0].id].sort(), both);
+  });
 });

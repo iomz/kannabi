@@ -128,10 +128,11 @@ function list(value: string | readonly string[] | undefined): string[] {
 
 /** A single-valued parameter, however the caller spelled it.
  *
- * A query string reaches this code in two shapes: the API hands over scalars,
- * while a browser URL is read with `getAll`, which always yields an array. Both
- * must mean the same thing. An empty value means the filter is unset, so a
- * hand-edited `?identified=` behaves exactly like omitting it.
+ * A query string reaches this code in two shapes: MCP hands over scalars for
+ * single-valued fields, while the HTTP API and a browser URL read every value,
+ * which always yields an array. Both must mean the same thing. An empty value
+ * means the filter is unset, so a hand-edited `?identified=` behaves exactly
+ * like omitting it.
  */
 function single(value: string | readonly string[] | undefined): string | undefined {
   const first = Array.isArray(value) ? value[0] : value as string | undefined;
