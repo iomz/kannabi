@@ -367,7 +367,10 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     })
     .get('/assets', async (c) => {
       const key = actor(c.get('user'));
-      return c.json(await store.findAssets(key, assetPageRequest(c.req.query())));
+      // Every value of every parameter: `group` and `scheme` repeat, and
+      // `query()` keeps only the first, so the request would apply less than
+      // the URL asks for.
+      return c.json(await store.findAssets(key, assetPageRequest(c.req.queries())));
     })
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an
