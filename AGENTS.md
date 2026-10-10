@@ -103,6 +103,8 @@ Settings persistence: Simple discrete preferences persist on selection/change. C
 # Implementation
 
 Use SemVer for releases. PATCH covers fixes and compatible improvements within an existing capability; MINOR adds or meaningfully expands a user-visible, domain, or API capability. During `0.x`, intentional breaking changes may ship in a MINOR release and must be identified as breaking. Choose the level by capability/contract change, not PR size or effort. Reserve `1.0.0` for a future explicit stability commitment. `package.json` is the canonical software version source; keep release tags aligned with it.
+A pull request that changes what Kannabi ships — server, UI, HTTP API, MCP or persistence behaviour — must include the version bump that change warrants in `package.json`, and merging it is the release: the merge commit is tagged `vX.Y.Z` and published as a GitHub release. A pull request that ships nothing — documentation, tests, CI or agent instructions — does not bump. When two open pull requests claim the same version, the one merged second takes the next version when it is updated.
+A standalone release pull request is the exception, for releasing work already on `main`; its description contains `@coderabbitai ignore`, because a version change alone has nothing to review.
 
 Use Hono for server behavior, React Router v7 Framework Mode for UI, and Neo4j for master data.
 Style the UI with Tailwind CSS and shadcn/ui components on Base UI; do not reintroduce a hand-written application stylesheet.
