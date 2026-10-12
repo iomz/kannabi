@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { GroupName } from './group-destination';
 import { Icon } from './icon';
 import { Hint, IconButton, NativeSelect, Section, SubHeading } from './ui';
 
@@ -22,8 +23,10 @@ type Group = { key: string; name: string };
  * These affordances explain current authority; every mutation rechecks it in
  * Neo4j, and nothing here is permission.
  */
-export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy, error, onChange }: {
+export function AssetCollaboration({ groups, controlled, reachableGroups = [], canEdit, canGrant, busy, error, onChange }: {
   groups: readonly Group[]; controlled: readonly Group[]; canEdit: boolean; canGrant: boolean;
+  /** Groups whose page this reader can open, so their names link there. */
+  reachableGroups?: readonly string[];
   busy: boolean; error: string | null;
   onChange: (groupKey: string, grant: boolean) => void;
 }) {
@@ -60,7 +63,7 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
       <caption className="sr-only">Groups associated with this Asset</caption>
       <tbody>
         {groups.map((group) => <tr key={group.key} className="border-b last:border-b-0">
-          <td className="py-2">{group.name}</td>
+          <td className="py-2"><GroupName group={group} reachable={reachableGroups.includes(group.key)} /></td>
           {/* Fixed to icon width, so the name takes the card. */}
           <td className="w-10 py-2 text-right">
             {controlled.some((g) => g.key === group.key) && <IconButton tone="destructive"
@@ -87,8 +90,8 @@ export function AssetCollaboration({ groups, controlled, canEdit, canGrant, busy
           <AlertDialogTitle>Choose Group</AlertDialogTitle>
           <AlertDialogDescription>
             {associable.length
-              ? 'Groups you control that are not associated with this Asset yet.'
-              : 'You control no Group that is not already associated with this Asset.'}
+              ? 'Groups you manage that are not associated with this Asset yet.'
+              : 'You manage no Group that is not already associated with this Asset.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {associable.length > 0 && <NativeSelect aria-label="Group to associate" value={chosen}

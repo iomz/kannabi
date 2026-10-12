@@ -6,10 +6,10 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import Administration, { clientAction as adminSettingsAction } from '../web/routes/settings.js';
 import { mount, settle, withTheme } from './dom-render.js';
 import { GtinConflictDialog } from '../web/gtin-conflict-dialog.js';
-import { defaultToastSeconds, validateSettings } from './settings.js';
+import { defaultSettings, defaultToastSeconds } from './settings.js';
 
 test('instance presentation settings default hidden and render as independent choices', () => {
-  const settings = validateSettings({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
+  const settings = { ...defaultSettings };
   assert.equal(settings.showAssetId, false);
   assert.equal(settings.showIdentifierPolicyVersion, false);
   const mail = {
@@ -40,7 +40,9 @@ test('instance presentation settings default hidden and render as independent ch
     assert.deepEqual([...general.querySelectorAll('label')].map((label) => label.textContent?.trim()), [
       'Require photo when reporting an Asset', 'Show Kannabi ID on Asset pages',
       'Show identifier policy version on Asset pages', 'Enforce GTIN consistency',
-      'Display timezone',
+      'Everybody can find everybody, with their email address',
+      'Everybody can find everybody, by name only',
+      'People find only those they share a Group with', 'Display timezone',
       'Longest API token lifetime (days)', 'How long a message stays on screen (seconds)',
     ]);
     const theme = [...document.querySelectorAll('h2')].filter((heading) => heading.textContent === 'Theme');
@@ -101,6 +103,47 @@ test('the GTIN consistency switch saves its own state and nothing else', async (
       }) } as never);
     }
     assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [false, true]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('the People directory is shown as the instance has them, and saved as chosen', async () => {
+  const mail = {
+    revision: 0, enabled: false, transport: 'smtp' as const, smtpHost: null, smtpPort: null,
+    smtpSecurity: null, smtpUsername: null, senderAddress: null, senderName: null,
+    verificationStatus: 'not-verified' as const, verificationObservedAt: null,
+    passwordState: 'none' as const, operationalState: 'disabled' as const,
+    masterKeySource: 'file' as const, masterKeyState: 'available' as const,
+  };
+  const router = createMemoryRouter([{ path: '/admin/settings', element: withTheme(
+    createElement(Administration, { loaderData: { settings: { ...defaultSettings, peopleDirectory: 'names' }, mail } } as never)) }],
+  { initialEntries: ['/admin/settings'] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    const legend = [...document.querySelectorAll('legend')].find((node) => node.textContent === 'People directory');
+    const choices = [...legend!.closest('fieldset')!.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+    assert.deepEqual(choices.map((choice) => [choice.value, choice.checked]),
+      [['everyone', false], ['names', true], ['shared', false]]);
+  } finally { view.stop(); router.dispose(); }
+
+  const originalFetch = globalThis.fetch;
+  const sent: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    sent.push(body);
+    return new Response(JSON.stringify({ settings: body }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    for (const peopleDirectory of ['shared', 'everyone']) {
+      const data = new FormData();
+      for (const [name, field] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
+        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on',
+        peopleDirectory })) data.set(name, field);
+      await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
+        method: 'POST', body: data,
+      }) } as never);
+    }
+    assert.deepEqual(sent.map((body) => body.peopleDirectory), ['shared', 'everyone']);
+    assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [true, true], 'nothing else moves');
   } finally { globalThis.fetch = originalFetch; }
 });
 

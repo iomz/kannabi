@@ -171,7 +171,7 @@ Locating a GS1 Company Prefix inside an arbitrary key requires the GS1 GCP Lengt
 ## GS1 identifier issuance
 
 A Group may configure GS1 Company Prefix namespaces and let Kannabi issue GS1 identifiers under them.
-Configuring a prefix records an assertion by a member who controls the Group, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
+Configuring a prefix records an assertion by one of the Group's Group Managers, with who made it and when; Kannabi cannot verify GS1 licensing and never implies that it did.
 General Specifications 26.0 §1.5 states that a licensed GS1 Company Prefix entitles its holder to allocate any GS1 identification key, which is why one namespace serves all three schemes below.
 
 Four operations stay permanently distinct, and the UI keeps them distinct too — each has its own control, because collapsing two of them into one form where an empty field meant "allocate" hid exactly the difference the domain protects:
@@ -244,9 +244,9 @@ Allocating a GTIN does not make Kannabi a product catalogue.
 Kannabi says so where a GTIN is allocated, and models no product data.
 
 One managed GCP belongs to one Group; this is a Kannabi authority boundary, not a GS1 organizational claim.
-Configuring a namespace, managing class keys in it and issuing from it require membership **and** control of that Group, so a collaborator invited for Asset work does not thereby acquire the power to allocate under the operator's prefix.
+Configuring a namespace, managing class keys in it and issuing from it require being a Group Manager of that Group, so a collaborator invited as a member for Asset work does not thereby acquire the power to allocate under the operator's prefix.
 Reading a namespace and its class keys stays with membership, because the prefixes a Group manages are not secret from its members and hiding them would only stop somebody finding out who to ask.
-Class-key management touches no Asset and grants no Asset access; issuing an individual key additionally requires that the managing Group collaborates on the Asset, which control never substitutes for.
+Class-key management touches no Asset and grants no Asset access; issuing an individual key additionally requires that the managing Group collaborates on the Asset, which the Group Manager role never substitutes for.
 
 Kannabi accepts normative 4–12 digit GS1 Company Prefixes for GS1 key allocation.
 The EPC Tag Data Standard imposes additional treatment for 4- and 5-digit prefixes; EPC binary encoding and EPC URI generation are outside this release and tracked separately.
@@ -440,7 +440,9 @@ Authentication uses the same `User` nodes as domain provenance, with a server-as
 This avoids a second application database and a custom authentication adapter.
 The adapter and Better Auth versions are pinned; upgrades must pass the real Neo4j integration tests.
 
-Create an account, open Groups from the sidebar to create a Group or ask a Group controller to add your member key, then report an Asset from the Assets workspace.
+Create an account, open Groups from the sidebar to create a Group or ask a Group Manager to add you, then report an Asset from the Assets workspace.
+Kannabi does not verify email addresses, so an address is display context rather than evidence of who somebody is.
+Help in the sidebar (`/help`, readable signed out) explains Assets, Groups, roles and the People directory.
 The persistent header searches accessible Assets by name on Enter; ⌘K or Ctrl+K focuses search and Escape blurs it.
 The account menu provides Profile and sign-out.
 Profile lets signed-in Users update their display name, change their email or password after current-password confirmation, and choose System, Light, or Dark appearance.
@@ -454,20 +456,51 @@ The Assets workspace shows compact photo rows and loads more inventory as you sc
 All, Mine, Group access, and Public filter readable Assets; their overlapping counts reflect the current search.
 Mine means originally reported by you and never grants access.
 Identifiers, ownership, and photos remain within each Asset workflow.
-A Group controller (initially its creator) can add an existing User; ordinary Group members cannot add others. Group control remains after its controller leaves membership and does not itself grant Asset or namespace access. Users can leave their own Groups.
-An administrator can identify Groups with no controller through `GET /api/admin/groups/uncontrolled` and assign control to an existing active User with `POST /api/admin/groups/{key}/recover` (`{ "userKey": "..." }`). This recovery does not add membership or let the administrator read private Assets; the controller can subsequently grant membership, which does grant access.
+A Group Manager (initially its creator) can add an active User as a member or a Group Manager; members cannot add others. Users can leave their own Groups, and any role goes with the membership.
+An administrator can identify Groups with no Group Manager through `GET /api/admin/groups/unmanaged` and promote one of that Group's existing members with `POST /api/admin/groups/{key}/recover` (`{ "userKey": "..." }`). Recovery never adds a membership, so it never opens a Group's Assets to anybody, the administrator included; a Group with no members stays unmanaged.
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
 An Asset can have several collaboration Groups while keeping one Asset ID and one inventory entry.
-On the Asset page, **Manage collaboration** — a disclosure below the identifiers, closed until it is asked for, because changing who collaborates is an occasional act while the Groups themselves are already stated in **Details** — lets a User who belongs to and controls an existing collaboration Group grant another Group they control access.
-Control of the receiving Group supplies its consent; belonging to both Groups alone is insufficient.
-This bounded workflow requires one User with both control authorities; there is no invitation/acceptance workflow between separate controllers.
-A controller with current Group-derived Asset access can remove the Group they control, including the Group initially selected when reporting.
-They cannot remove another Group merely by controlling their own, and at least one collaboration Group must remain, even for a public Asset.
+On the Asset page, **Manage collaboration** — a disclosure below the identifiers, closed until it is asked for, because changing who collaborates is an occasional act while the Groups themselves are already stated in **Details** — lets a Group Manager of an existing collaboration Group grant access to another Group they also manage.
+Managing the receiving Group supplies its consent; being a member of both Groups alone is insufficient.
+This bounded workflow requires one User who manages both Groups; there is no invitation/acceptance workflow between separate Group Managers.
+A Group Manager with current Group-derived Asset access can remove the Group they manage, including the Group initially selected when reporting.
+They cannot remove another Group merely by managing their own, and at least one collaboration Group must remain, even for a public Asset.
 Removing your last source of private access returns you to the inventory; other memberships and public read access still apply.
-Empty or uncontrolled Groups retain collaboration, and account deletion never transfers authority.
+Empty or unmanaged Groups retain collaboration, and account deletion never transfers authority.
 Collaboration does not grant access to another Group's identifier namespaces.
 The API uses `PUT /api/assets/{id}/collaboration/{groupKey}` to grant and `DELETE` at the same path to revoke, returning `{ "changed": true }` for a change or `{ "changed": false }` for an authorized no-op.
+
+### Member and Group Manager
+
+Everybody in a Group is a member, and each has one role in it: **Member**, or **Group Manager** — a member who also looks after the Group itself, its people and its GS1 Company Prefixes.
+There is no managing a Group without belonging to it, and no role outlives its membership.
+The store keeps the role on the membership (`MEMBER_OF {role: 'member' | 'manager'}`), and startup refuses Group data recorded any other way: a development database from before roles is reseeded with `pnpm demo:reset`.
+
+| In a Group, you can | As a Member | As a Group Manager |
+| --- | --- | --- |
+| Read and edit the Group's private Assets | yes | yes |
+| Report new Assets into the Group | yes | yes |
+| See everybody in the Group and their role | yes | yes |
+| Leave the Group | yes | yes |
+| Add or remove people | no | yes |
+| Make someone a Group Manager, or remove the role | no | yes |
+| Manage the Group's GS1 Company Prefixes | no | yes |
+
+Every row is enforced by the server, not by what the UI shows: Asset reads, edits and reports follow membership, and the people operations and managed GS1 operations follow the Group Manager role.
+Group Managers are peers: any of them may change anybody's role, their own included, and a Group may deliberately be left with none; an administrator can then promote one of its members.
+
+On a Group's **People** page, everybody in the Group sees the roster with each person's role; a Group Manager changes roles and removes people through each person's **Change** menu, and anything that takes access or authority away is confirmed first.
+**Add people** searches the People directory and adds the person chosen as a member or a Group Manager.
+Where the directory is limited to shared Groups, somebody who shares none with anybody yet is added by the member key they copy from their Groups page.
+
+### People directory
+
+Signed-in people can find one another on **People**, and when adding people to a Group, by name — and by email address where addresses are shown.
+An administrator chooses the directory under Instance settings: everybody, with email addresses (the default); everybody, by name only; or only people who already share a Group.
+Being findable never says which Groups somebody is in: a profile shows only the Groups the viewer shares with that person, and a Group's roster is readable only by its own members.
+Anonymous visitors reach none of it, and a search matches an email address only where that address is shown.
+Results are bounded: a search narrows rather than pages through the instance.
 Both operations recheck current authority; a retry after losing access returns 404, and removing the final Group returns 409.
 `reportedBy` grants no access and remains unchanged after the reporter leaves the Group.
 Marking an Asset public permits anyone with its Asset URI to read the full Asset representation, never to edit it.
@@ -504,6 +537,8 @@ For the containerized application, use `docker compose exec app node dist/server
 Reload the application and open Settings under Administration in the sidebar to see Instance settings.
 Administration permits changing the photo-on-report policy, instance display timezone, built-in instance theme, and mail delivery; it grants no Asset access.
 The defaults are optional photos, UTC display, and the `default` theme.
+**People directory** chooses who people can find, and whether they see email addresses; it is enforced in every API response that names people, and the administrative account views are unaffected.
+A settings change names only the settings it changes: anything a request leaves out stays as it is.
 The photo requirement applies to new reports, including direct API requests, and requires a photo in the same reporting submission.
 Existing Assets remain editable without a photo when the policy changes.
 All stored timestamps remain absolute instants; the configured timezone only affects presentation.
@@ -538,7 +573,7 @@ Failure cleanup removes bytes while retaining a retry record through the ten-min
 Expired or failed uploads are retried on startup and every minute; attached photos are excluded.
 If storage is unavailable, cleanup waits for recovery and the pending photo is never exposed as an Asset photo.
 
-To evaluate an empty deployment, sign up, create a Group or join through a Group controller, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
+To evaluate an empty deployment, sign up, create a Group or join through a Group Manager, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
 ## Capability surfaces
@@ -572,10 +607,16 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | **GS1 Digital Link** | | | |
 | Dereference a supported address | yes | document address, not an `/api` route | path returned, never dereferenced |
 | **Groups** | | | |
-| Create, add a member, leave | yes | `POST /api/groups`, `POST /api/groups/{key}/members`, `DELETE /api/groups/{key}/membership` | no |
-| List | yes | `GET /api/groups`, `GET /api/groups/controlled` | `list_groups` |
-| Read who controls a Group | not yet | `GET /api/groups/{key}/control` | no |
-| Grant or withdraw control | not yet | `PUT`/`DELETE /api/groups/{key}/control/{userKey}` | no |
+| Create, leave | yes | `POST /api/groups`, `DELETE /api/groups/{key}/membership` | no |
+| List your Groups with your role | yes | `GET /api/groups` | `list_groups`, without roles |
+| Open a Group's page | yes | `GET /api/groups/{key}` | no |
+| Read who is in a Group and their roles, as a member | yes | `GET /api/groups/{key}/members` | no |
+| Add someone as a member or a Group Manager, as a Group Manager | yes | `POST /api/groups/{key}/members` | no |
+| Change someone's role, as a Group Manager | yes | `PATCH /api/groups/{key}/members/{userKey}` | no |
+| Remove someone, as a Group Manager | yes | `DELETE /api/groups/{key}/members/{userKey}` | no |
+| **People** | | | |
+| Search the People directory | yes | `GET /api/people?q=` | no |
+| Open a person's profile | yes | `GET /api/users/{key}` | no |
 | Grant or remove Asset collaboration | yes | `PUT`/`DELETE /api/assets/{id}/collaboration/{groupKey}` | no |
 | **Photos** | | | |
 | Upload, read, delete | yes | `POST`/`GET`/`DELETE /api/assets/{id}/photos` | metadata only, never bytes |
@@ -584,6 +625,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | API tokens | yes | `/api/api-tokens*` | no |
 | Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
 | Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
+| Choose the People directory | yes | `PATCH /api/settings` | no |
 | List Assets blocking GTIN consistency | yes, when enabling is refused | `GET /api/admin/gtin-conflicts`, and the `409` refusing `PATCH /api/settings` | no |
 
 ### What the absences mean
@@ -604,7 +646,9 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 **A Digital Link address is a document address.** Kannabi dereferences the forms it supports by serving the Asset page at them, outside `/api`; there is no JSON endpoint that takes one. MCP reports the path an identifier corresponds to and does not resolve it, because resolving it would grant nothing a `get_asset` call does not already answer.
 
-**Group control has no web surface yet.** Granting and withdrawing it are API operations, and the Groups page still shows only membership. The control plane is reachable and testable where it is decided; putting it in front of people is a separate question about who should be doing this and what they need to see, and belongs with the Group destination (#67) and the managed-authority redesign (#58) rather than being bolted onto a page about membership.
+**A Group's page and its people are web and HTTP only.** `/groups/{key}` is reachable by the Group's members, and answers everybody else, an administrator included, as for a Group that does not exist. Every member reads who is in it and their roles; Group Managers add people, change roles and remove people. Its GS1 Company Prefixes are a view of the Group's page, pending their redesign (#58). MCP lists the reader's Groups and nothing more: it writes nothing, and who manages or belongs to a Group is administration, not a question about Assets an agent is asked to answer.
+
+**The People directory never reaches MCP.** Finding a person and their address serves somebody deciding whom to add or contact; an agent answering questions about Assets has no use for one, and MCP names no people beyond Asset provenance.
 
 **MCP returns photo metadata and never photo bytes.** The keys identify the images within Kannabi; the images themselves stay behind the HTTP photo routes and their authorization.
 

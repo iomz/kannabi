@@ -172,7 +172,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal((await call(`/assets/${foreignAsset}`, 'PATCH', { name: 'Taken' })).status, 404);
     assert.equal((await call(`/assets/${ownedAsset}`)).status, 200);
     // Group membership is read live, so a change lands on the next request.
-    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[:MEMBER_OF]->(g)`,
+    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[m:MEMBER_OF]->(g) ON CREATE SET m.role = 'member'`,
       { userKey: people.owner.key, groupKey: outsiderGroup });
     assert.equal((await call(`/assets/${foreignAsset}`)).status, 200);
     await query(`MATCH (:User {key: $userKey})-[m:MEMBER_OF]->(:Group {key: $groupKey}) DELETE m`,
@@ -371,11 +371,16 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     assert.equal(mine.name, 'Token owner');
     assert.equal(mine.self, true);
     assert.ok(mine.reportedAssets >= 1);
-    // Never an address or a complete Group list. Shared Groups are the only
-    // membership context this viewer receives.
+    // Never a complete Group list. Shared Groups are the only membership
+    // context this viewer receives; the address follows the instance setting
+    // (email-visibility.integration.test.ts).
     assert.deepEqual(Object.keys(mine).sort(),
-      ['avatarHash', 'key', 'name', 'reportedAssets', 'self', 'sharedGroups']);
+      ['avatarHash', 'email', 'key', 'name', 'reportedAssets', 'self', 'sharedGroups']);
 
+    // Profiles here follow a directory limited to shared Groups, which is the
+    // setting under which sharing nothing hides a person; the default,
+    // instance-wide directory is proved in people-directory.integration.
+    await query("MATCH (s:Settings {key: 'instance'}) SET s.peopleDirectory = 'shared'");
     // Two unrelated, non-administrator accounts that share nothing.
     const stranger = client();
     const bystander = client();
@@ -400,7 +405,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
 
     // Sharing a Group makes the Workspace profile reachable. Count remains the
     // viewer's own and does not expose private work elsewhere.
-    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[:MEMBER_OF]->(g)`,
+    await query(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey}) MERGE (u)-[m:MEMBER_OF]->(g) ON CREATE SET m.role = 'member'`,
       { userKey: strangerKey, groupKey: ownerGroup });
     const visible = await profile(stranger, people.owner.key);
     assert.equal(visible.status, 200);
@@ -422,6 +427,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
 
     // Anonymous callers have no User pages at all.
     assert.equal((await client().request(`/users/${people.owner.key}`)).status, 401);
+    await query("MATCH (s:Settings {key: 'instance'}) SET s.peopleDirectory = 'everyone'");
   });
 
   await t.test('allocation authority stays independent of the asserting credential', async () => {

@@ -1,6 +1,9 @@
 import { record, ValidationError } from './identity.js';
 import { isThemeId, type ThemeId } from '../shared/theme.js';
 
+export const peopleDirectories = ['everyone', 'names', 'shared'] as const;
+export type PeopleDirectory = (typeof peopleDirectories)[number];
+
 export type Settings = {
   requirePhoto: boolean;
   displayTimezone: string;
@@ -40,6 +43,19 @@ export type Settings = {
    * removes nothing to make it succeed. Syntax, check digits,
    * uniqueness and the same-identifier-twice rule do not depend on it. */
   enforceGtinConsistency: boolean;
+  /** Who a signed-in person can find in the People directory, and
+   * whether they see email addresses there.
+   *
+   * `everyone`: every active person, with names and email addresses.
+   * `names`: every active person, by name only; addresses stay with their
+   * owner and with administration.
+   * `shared`: only people who share a Group with the viewer, with addresses.
+   *
+   * It decides who is discoverable and what is shown about them, never Group
+   * membership: which Groups somebody belongs to is shown only where the
+   * viewer belongs too. Anonymous visitors never reach it.
+   */
+  peopleDirectory: PeopleDirectory;
 };
 
 /** The shipped lifetime, and the one every existing deployment keeps. */
@@ -73,34 +89,54 @@ export function apiTokenLifetimeDays(value: unknown, field: string): number {
   return value;
 }
 
-export function validateSettings(value: unknown): Settings {
-  const input = record(value, ['requirePhoto', 'displayTimezone', 'themeId', 'apiTokenMaxLifetimeDays',
-    'toastSeconds', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency']);
-  if (typeof input.requirePhoto !== 'boolean' || typeof input.displayTimezone !== 'string'
-      || !isThemeId(input.themeId)
-      || (input.showAssetId !== undefined && typeof input.showAssetId !== 'boolean')
-      || (input.showIdentifierPolicyVersion !== undefined && typeof input.showIdentifierPolicyVersion !== 'boolean')
-      || (input.enforceGtinConsistency !== undefined && typeof input.enforceGtinConsistency !== 'boolean')) {
-    throw new ValidationError('Photo requirement, display timezone, and supported theme are required');
+/** What a new instance starts with: the one place a default is decided. They
+ * are written when the instance's settings are created, and read back as
+ * stored. */
+export const defaultSettings: Settings = Object.freeze({
+  requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
+  toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false, enforceGtinConsistency: true,
+  peopleDirectory: 'everyone',
+}) as Settings;
+
+const booleanSettings = ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency'] as const;
+
+/** A change to some settings: each field present is validated, and each field
+ * absent is left as it is. Omission never resets, widens or narrows anything,
+ * so a client that does not know a setting cannot change it by accident. */
+export function validateSettingsChange(value: unknown): Partial<Settings> {
+  const input = record(value, [...booleanSettings, 'displayTimezone', 'themeId', 'apiTokenMaxLifetimeDays',
+    'toastSeconds', 'peopleDirectory']);
+  const change: Partial<Settings> = {};
+  for (const name of booleanSettings) {
+    if (input[name] === undefined) continue;
+    if (typeof input[name] !== 'boolean') throw new ValidationError(`${name} must be true or false`);
+    change[name] = input[name];
   }
-  try { new Intl.DateTimeFormat('en', { timeZone: input.displayTimezone }); }
-  catch { throw new ValidationError('Unknown display timezone'); }
-  const ceiling = input.apiTokenMaxLifetimeDays === undefined || input.apiTokenMaxLifetimeDays === null
-    ? null : apiTokenLifetimeDays(input.apiTokenMaxLifetimeDays, 'apiTokenMaxLifetimeDays');
-  return {
-    requirePhoto: input.requirePhoto, displayTimezone: input.displayTimezone,
-    themeId: input.themeId, apiTokenMaxLifetimeDays: ceiling,
-    // Absent means an instance that predates the setting, which is the shipped
-    // lifetime rather than an error.
-    toastSeconds: input.toastSeconds === undefined || input.toastSeconds === null
-      ? defaultToastSeconds : toastSeconds(input.toastSeconds, 'toastSeconds'),
-    showAssetId: input.showAssetId === true,
-    showIdentifierPolicyVersion: input.showIdentifierPolicyVersion === true,
-    // Absent keeps the shipped rule, so a client that predates the setting can
-    // never switch enforcement off by omission.
-    enforceGtinConsistency: input.enforceGtinConsistency !== false,
-  };
+  if (input.displayTimezone !== undefined) {
+    if (typeof input.displayTimezone !== 'string') throw new ValidationError('Unknown display timezone');
+    try { new Intl.DateTimeFormat('en', { timeZone: input.displayTimezone }); }
+    catch { throw new ValidationError('Unknown display timezone'); }
+    change.displayTimezone = input.displayTimezone;
+  }
+  if (input.themeId !== undefined) {
+    if (!isThemeId(input.themeId)) throw new ValidationError('Unsupported theme');
+    change.themeId = input.themeId;
+  }
+  // Null is a value here — no ceiling — and is distinct from leaving it alone.
+  if (input.apiTokenMaxLifetimeDays !== undefined) {
+    change.apiTokenMaxLifetimeDays = input.apiTokenMaxLifetimeDays === null
+      ? null : apiTokenLifetimeDays(input.apiTokenMaxLifetimeDays, 'apiTokenMaxLifetimeDays');
+  }
+  if (input.toastSeconds !== undefined) change.toastSeconds = toastSeconds(input.toastSeconds, 'toastSeconds');
+  if (input.peopleDirectory !== undefined) {
+    if (!(peopleDirectories as readonly unknown[]).includes(input.peopleDirectory)) {
+      throw new ValidationError(`peopleDirectory must be one of ${peopleDirectories.join(', ')}`);
+    }
+    change.peopleDirectory = input.peopleDirectory as PeopleDirectory;
+  }
+  return change;
 }
+
 /** Kannabi's own date-only presentation.
  *
  * ISO field order with `/` separators, which reads unambiguously for this

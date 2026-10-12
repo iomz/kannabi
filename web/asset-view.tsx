@@ -1,5 +1,5 @@
 import { Link, redirect, useFetcher, useLocation } from 'react-router';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { displayInstant } from '../server/settings.js';
 import { api, unwrap } from './api';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri';
@@ -11,6 +11,7 @@ import { publicShellHandle } from './anonymous-shell';
 import { AssetUri } from './asset-uri';
 import { AssetName } from './asset-name';
 import { AssetCollaboration } from './asset-collaboration';
+import { GroupName } from './group-destination';
 import { AssetVisibility } from './asset-visibility';
 import { DetachIdentifierConfirmation } from './detach-identifier-confirmation';
 import { Icon } from './icon';
@@ -36,10 +37,12 @@ export async function loadAsset(id: string, request: Request) {
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
   const { settings } = await unwrap(await api.settings.$get());
   const groupKeys = new Set(result.asset.groups.map((group) => group.key));
-  const [{ groups: memberships }, { groups: controlled }] = account.user
-    ? await Promise.all([api.groups.$get().then(unwrap), api.groups.controlled.$get().then(unwrap)])
-    : [{ groups: [] }, { groups: [] }];
-  const canGrant = memberships.some((g) => groupKeys.has(g.key) && controlled.some((c) => c.key === g.key));
+  const { groups: memberships } = account.user ? await unwrap(await api.groups.$get()) : { groups: [] };
+  // The Groups this reader manages. Managing carries membership, so these are
+  // a subset of the memberships, never a second source of reach.
+  const controlled = memberships.filter((group) => group.role === 'manager')
+    .map((group) => ({ key: group.key, name: group.name }));
+  const canGrant = controlled.some((g) => groupKeys.has(g.key));
   const absolute = (path: string) => new URL(path, request.url).toString();
   // A Digital Link URI is shown only where Kannabi also answers it, so a
   // class-level identifier gets none: `/01/{gtin}` is constructible and valid,
@@ -48,9 +51,9 @@ export async function loadAsset(id: string, request: Request) {
     .filter((identifier) => identifier.level === 'individual')
     .map((identifier) => [identifier.key, absolute(digitalLinkPath(identifier))]));
   // Only namespaces this Asset's Groups manage, only active ones, and only
-  // those whose managing Group this reader controls. Issuing is authority over
-  // what a Group manages, so membership alone no longer carries it (#20); a
-  // member without control can still see the namespace and still cannot issue
+  // those whose managing Group this reader is a Group Manager of. Issuing is
+  // authority over what a Group manages, so membership alone does not carry
+  // it (#20); a member can still see the namespace and still cannot issue
   // from it. The server re-checks the Group join, the control and the active
   // state on every issuance; this narrows what is offered, never what is
   // permitted.
@@ -70,8 +73,11 @@ export async function loadAsset(id: string, request: Request) {
       scheme: classKey.scheme, canonical: classKey.canonical,
     }));
   }))).flat();
+  // The Groups whose page this reader can open: their memberships, exactly as
+  // the Group destination decides it.
+  const reachableGroups = memberships.map((group) => group.key);
   return { ...result, settings, authenticated: account.user !== null,
-    controlled, canGrant,
+    controlled, canGrant, reachableGroups,
     namespaces: eligible,
     classKeys,
     digitalLinks,
@@ -220,7 +226,7 @@ export async function submitAsset(request: Request) {
 export type AssetViewData = Awaited<ReturnType<typeof loadAsset>>;
 
 export function AssetView({ asset, canEdit, canViewReporterProfile, settings, authenticated,
-  nativeUri, surfacedUri, digitalLinks, namespaces, classKeys, controlled, canGrant }: AssetViewData) {
+  nativeUri, surfacedUri, digitalLinks, namespaces, classKeys, controlled, canGrant, reachableGroups = [] }: AssetViewData) {
   const collaboration = useFetcher<typeof submitAsset>();
   const upload = useFetcher<typeof submitAsset>();
   const edit = useFetcher<typeof submitAsset>();
@@ -350,7 +356,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         <dt>Owner</dt>
         <dd>{asset.owner?.name
           ?? <span className="text-muted-foreground italic">Not implemented yet</span>}</dd>
-        <dt>Groups</dt><dd>{asset.groups.map((g) => g.name).join(', ')}</dd>
+        <dt>Groups</dt><dd>{asset.groups.map((g, index) => <Fragment key={g.key}>{index > 0 && ', '}
+          <GroupName group={g} reachable={reachableGroups.includes(g.key)} /></Fragment>)}</dd>
         <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
           link={canViewReporterProfile} />{' · '}
         <time dateTime={asset.reportedAt}>{displayInstant(asset.reportedAt, settings.displayTimezone)}</time>
@@ -392,7 +399,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     </Section>}
     {/* Below the identifiers and closed by default: managing who collaborates
         is an occasional administrative act, not what the page is about. */}
-    <AssetCollaboration groups={asset.groups} controlled={controlled} canEdit={canEdit} canGrant={canGrant}
+    <AssetCollaboration groups={asset.groups} controlled={controlled} reachableGroups={reachableGroups} canEdit={canEdit} canGrant={canGrant}
       busy={collaboration.state !== 'idle'} error={collaboration.data?.error ?? null}
       onChange={(groupKey, grant) => collaboration.submit({ ...identity, groupKey,
         intent: grant ? 'grant-collaboration' : 'revoke-collaboration' }, { method: 'post' })} />

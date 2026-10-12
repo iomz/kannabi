@@ -133,9 +133,9 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
           throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected ${scope} Assets`);
         }
       }
-      const members = (await store.listMembers(users[index])).map((person) => users.indexOf(person.key));
+      const members = (await store.listPeople(users[index], { limit: 100 })).people.map((person) => users.indexOf(person.key));
       if (JSON.stringify([...members].sort((a, b) => a - b)) !== JSON.stringify(demoMembers(index))) {
-        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected Members`);
+        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected People`);
       }
       for (const [target] of demoAccounts.entries()) {
         if ((await store.userProfile(users[index], users[target]) !== null) !== demoDiscoverable(index).includes(target)) {
