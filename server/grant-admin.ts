@@ -7,7 +7,8 @@ const driver = neo4j.driver(process.env.NEO4J_URI ?? 'bolt://127.0.0.1:7687',
 const session = driver.session();
 try {
   const result = await session.executeWrite((tx) => tx.run(
-    "MATCH (u:User {email: $email}) WHERE u.id IS NOT NULL SET u.role = 'admin' REMOVE u.isAdmin RETURN u.key", { email }));
+    "MATCH (u:User {email: $email}) WHERE u.id IS NOT NULL SET u.role = 'admin', u.approvedAt = coalesce(u.approvedAt, $now) RETURN u.key",
+    { email, now: new Date().toISOString() }));
   if (result.records.length !== 1) throw new Error('Expected one existing local account');
-  console.log('Administrator access granted. Asset access still requires Group membership.');
+  console.log('Administrator access granted, and the account approved. Asset access still requires Group membership.');
 } finally { await session.close(); await driver.close(); }

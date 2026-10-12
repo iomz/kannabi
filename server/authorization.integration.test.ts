@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -14,6 +15,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver);
+  await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const secret = randomUUID() + randomUUID();
   const auth = await createAuth(driver, origin, secret);

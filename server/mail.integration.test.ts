@@ -9,6 +9,7 @@ import neo4j from 'neo4j-driver';
 import { SMTPServer } from 'smtp-server';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
@@ -23,6 +24,7 @@ test('mail configuration, authorization, encrypted persistence, recovery, and SM
     const data = mkdtempSync(join(tmpdir(), 'kannabi-mail-integration-'));
     t.after(() => rmSync(data, { recursive: true, force: true }));
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const keyManager = await MasterKeyManager.open(await store.hasEncryptedSecrets(), { KANNABI_DATA_DIR: data });
     const mail = new MailService(store, keyManager);
     const origin = 'http://localhost:3000';

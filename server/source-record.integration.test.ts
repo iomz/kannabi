@@ -5,6 +5,7 @@ import neo4j from 'neo4j-driver';
 import { Hono } from 'hono';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
@@ -29,6 +30,7 @@ test('an Asset attributed to the record it came from', { skip: !uri || !password
   await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
   await session.close();
   const store = await IdentityStore.open(driver);
+  await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
   const tokens = new ApiTokenService(auth, store);

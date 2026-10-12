@@ -69,6 +69,13 @@ function changeOrigin(c: Context<Env>): ChangeOrigin {
   };
 }
 
+/** What an account waiting for approval may still reach: itself, and the
+ * public settings every visitor reads. */
+function ownAccountPath(pathname: string): boolean {
+  const path = pathname.replace(/^\/api/, '');
+  return path === '/me' || path === '/settings' || path === '/profile' || path.startsWith('/profile/');
+}
+
 function memberAuthError(error: unknown, fallback: string): never {
   if (!isAPIError(error)) throw error;
   if (error.statusCode === 401) throw new HTTPException(401, { message: 'Sign in required' });
@@ -115,8 +122,15 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         ? { id: session.session.id, label, admin: session.session.apiTokenAdmin === true } : null;
       const authenticated = bearer ? Boolean(token) : Boolean(session);
       c.set('token', token);
-      c.set('user', authenticated && session && key
-        ? { key, name: session.user.name, email: session.user.email } : null);
+      const user = authenticated && session && key
+        ? { key, name: session.user.name, email: session.user.email } : null;
+      // An account waiting for approval is signed in to its own account and to
+      // nothing else: everywhere else it is answered as an anonymous visitor,
+      // so it reads public Assets exactly as anybody may and reaches no
+      // directory, Group or change. Read per request, so approval or deletion
+      // takes effect at once.
+      const pending = user !== null && !await store.isParticipant(user.key);
+      c.set('user', pending && !ownAccountPath(new URL(c.req.url).pathname) ? null : user);
       await next();
     })
     // Administrator operations are reachable with a browser session, or with a
@@ -194,6 +208,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         } });
         await auth.api.requestPasswordReset({ body: { email: created.user.email } });
         const createdUser = created.user as typeof created.user & { key: string };
+        // An administrator creating an account has already decided it belongs.
+        await store.approveUser(actor(c.get('user')), createdUser.key);
         return c.json({ user: await store.profile(createdUser.key), recoveryRequested: true }, 201);
       } catch (error) { memberAuthError(error, 'User could not be created'); }
     })
@@ -237,6 +253,10 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeFor(actor(c.get('user')), c.req.param('key'), c.req.param('id'));
       return c.json({ revoked: true });
     })
+    // Approving lets a waiting account take part. Rejecting is the deletion
+    // below: a rejected applicant keeps no account.
+    .post('/admin/users/:key/approval', async (c) => c.json(
+      await store.approveUser(actor(c.get('user')), c.req.param('key'))))
     .delete('/admin/users/:key', async (c) => {
       await store.deactivateUser(actor(c.get('user')), c.req.param('key'));
       return c.json({ deleted: true });
@@ -327,7 +347,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       return c.json({ revoked: true });
     })
     // The People directory, and individual User profiles, share one boundary:
-    // the instance's People directory setting.
+    // the instance's People directory setting, for approved accounts only.
     // A search narrows it; there is no paging through the whole instance.
     .get('/people', async (c) => {
       const limit = c.req.query('limit');

@@ -14,6 +14,7 @@ import { WorkspaceHeader } from './workspace-header';
 import { notify } from './notify';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { Toaster } from '@/components/ui/sonner';
+import { AwaitingApproval, awaitsApproval } from './awaiting-approval';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -46,6 +47,8 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const handles = matches.map((match) => match.handle);
   const publicContent = handles.some(isPublicShellHandle);
   const anonymousShell = usesAnonymousShell(handles, user !== null);
+  const awaiting = awaitsApproval({ signedIn: user !== null, approved: loaderData.approved, publicContent,
+    pathname: location.pathname });
   const busy = useNavigation().state !== 'idle';
   // The navigation width is a per-device viewing preference, so it is read
   // from local storage rather than fetched; reading it in the initializer
@@ -79,7 +82,10 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   return <ThemeRuntimeContext.Provider value={{ themeId, setThemeId, appearance, setAppearance,
     colorScheme, setColorSchemePreview }}>
     <Toaster seconds={loaderData.toastSeconds} />
-    {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
+    {awaiting ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy} error={actionData?.error}>
+      <AwaitingApproval name={user!.name} />
+    </AnonymousShell>
+      : anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
       error={actionData?.error} publicContent={publicContent} />
       : <SidebarProvider open={!collapsed}
         onOpenChange={(open) => { setCollapsed(!open); cacheSidebarCollapsed(!open); }}

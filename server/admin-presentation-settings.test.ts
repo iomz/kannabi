@@ -40,8 +40,9 @@ test('instance presentation settings default hidden and render as independent ch
     assert.deepEqual([...general.querySelectorAll('label')].map((label) => label.textContent?.trim()), [
       'Require photo when reporting an Asset', 'Show Kannabi ID on Asset pages',
       'Show identifier policy version on Asset pages', 'Enforce GTIN consistency',
-      'Everybody can find everybody, with their email address',
-      'Everybody can find everybody, by name only',
+      'Require approval for new accounts',
+      'Everybody approved can find everybody, with their email address',
+      'Everybody approved can find everybody, by name only',
       'People find only those they share a Group with', 'Display timezone',
       'Longest API token lifetime (days)', 'How long a message stays on screen (seconds)',
     ]);
@@ -106,7 +107,7 @@ test('the GTIN consistency switch saves its own state and nothing else', async (
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('the People directory is shown as the instance has them, and saved as chosen', async () => {
+test('admission and the People directory are shown as the instance has them, and saved as chosen', async () => {
   const mail = {
     revision: 0, enabled: false, transport: 'smtp' as const, smtpHost: null, smtpPort: null,
     smtpSecurity: null, smtpUsername: null, senderAddress: null, senderName: null,
@@ -119,6 +120,8 @@ test('the People directory is shown as the instance has them, and saved as chose
   { initialEntries: ['/admin/settings'] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
+    assert.equal(document.querySelector<HTMLInputElement>('input[name="requireApproval"]')?.checked, true,
+      'approval is required by default');
     const legend = [...document.querySelectorAll('legend')].find((node) => node.textContent === 'People directory');
     const choices = [...legend!.closest('fieldset')!.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
     assert.deepEqual(choices.map((choice) => [choice.value, choice.checked]),
@@ -133,16 +136,17 @@ test('the People directory is shown as the instance has them, and saved as chose
     return new Response(JSON.stringify({ settings: body }), { headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    for (const peopleDirectory of ['shared', 'everyone']) {
+    for (const [requireApproval, peopleDirectory] of [['', 'shared'], ['on', 'everyone']]) {
       const data = new FormData();
       for (const [name, field] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
-        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on',
+        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on', requireApproval,
         peopleDirectory })) data.set(name, field);
       await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
         method: 'POST', body: data,
       }) } as never);
     }
-    assert.deepEqual(sent.map((body) => body.peopleDirectory), ['shared', 'everyone']);
+    assert.deepEqual(sent.map((body) => [body.requireApproval, body.peopleDirectory]),
+      [[false, 'shared'], [true, 'everyone']]);
     assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [true, true], 'nothing else moves');
   } finally { globalThis.fetch = originalFetch; }
 });

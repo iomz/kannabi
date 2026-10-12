@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { isAssetId } from './asset-id.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { defaultSettings } from './settings.js';
 import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
@@ -26,6 +27,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   // older development database takes its default, and nothing stored is
   // replaced.
   assert.deepEqual(await store.settings(), { ...defaultSettings, requirePhoto: false, displayTimezone: 'UTC' });
+  await admitSignups(driver);
   const storage = storageFromEnv();
   await storage.check();
   const media = new MediaService(store, storage);
@@ -61,7 +63,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: user.key });
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
     // A change names only what it changes; everything it leaves out stays.
-    assert.deepEqual(await store.settings(), { ...defaultSettings,
+    assert.deepEqual(await store.settings(), { ...defaultSettings, requireApproval: false,
       requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue' });
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', showAssetId: true,

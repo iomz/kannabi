@@ -138,8 +138,8 @@ test('the demo cast makes the People directory inspectable', () => {
   // the seed has always verified.
   assert.deepEqual(demoScopes(0), evaluatorScopes);
 
-  // The People directory is instance-wide by default, so each demo account
-  // finds every other. Administration still grants no
+  // The People directory is instance-wide by default: every demo account is
+  // approved, so each finds every other. Administration still grants no
   // Asset access, and which Groups somebody is in is never part of it.
   for (const viewer of demoAccounts.keys()) {
     assert.deepEqual(demoMembers(viewer), [...demoAccounts.keys()]);

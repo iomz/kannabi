@@ -39,6 +39,9 @@ export async function createAuth(driver: Driver, baseURL: string, secret: string
       additionalFields: {
         // Same User node as the domain model. Never accepted from signup input.
         key: { type: 'string', required: false, input: false, unique: true },
+        // When an administrator approved this account, as an instant; absent
+        // while it waits. Never accepted from signup input.
+        approvedAt: { type: 'string', required: false, input: false },
       },
     },
     session: {
@@ -70,8 +73,14 @@ export async function createAuth(driver: Driver, baseURL: string, secret: string
     },
     databaseHooks: {
       user: { create: { before: async (user) => {
-        try { return { data: { ...user, name: requiredText(user.name, 'name'), key: randomUUID() } }; }
+        let name: string;
+        try { name = requiredText(user.name, 'name'); }
         catch { throw new APIError('BAD_REQUEST', { message: 'A valid name is required' }); }
+        // A new account takes part at once only where the instance does not
+        // require approval. Without readable settings it waits: an account
+        // that should have waited and did not is the failure to avoid.
+        const approvedAt = await approvalRequired(driver) ? undefined : new Date().toISOString();
+        return { data: { ...user, name, key: randomUUID(), ...approvedAt ? { approvedAt } : {} } };
       } } },
     },
     rateLimit: { enabled: true },
@@ -92,3 +101,12 @@ export async function createAuth(driver: Driver, baseURL: string, secret: string
 }
 
 export type Auth = Awaited<ReturnType<typeof createAuth>>;
+
+async function approvalRequired(driver: Driver): Promise<boolean> {
+  const session = driver.session();
+  try {
+    const result = await session.run(`OPTIONAL MATCH (s:Settings {key: 'instance'})
+      RETURN coalesce(s.requireApproval, true) AS required`);
+    return result.records[0]?.get('required') !== false;
+  } finally { await session.close(); }
+}

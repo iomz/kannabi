@@ -160,13 +160,14 @@ export function demoScopes(account: number) {
 }
 
 /** Which profiles this account may open: the People directory, which by
- * default is every account on the instance. */
+ * default is every approved account on the instance. */
 export function demoDiscoverable(viewer: number): number[] {
   return demoMembers(viewer);
 }
 
-/** The People directory under the default setting: every demo account. Which
- * Groups each belongs to stays private to those Groups. */
+/** The People directory under the default setting: every demo account, all of
+ * them approved by the seed. Which Groups each belongs to stays private to
+ * those Groups. */
 export function demoMembers(_viewer: number): number[] {
   return demoAccounts.map((_, index) => index);
 }

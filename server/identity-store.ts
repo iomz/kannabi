@@ -67,7 +67,9 @@ export const gtinConflictPageSize = 20;
  * the Group model as usual rather than from anything carried here. */
 export type ResolvedUser = Readonly<{ key: string; name: string }>;
 export type UserAccount = { key: string; name: string; email: string; isAdmin: boolean;
-  credentialState: 'pending' | 'established'; createdAt: string | null };
+  credentialState: 'pending' | 'established'; createdAt: string | null;
+  /** When an administrator approved this account, or null while it waits. */
+  approvedAt: string | null };
 export type ManagedUserAccount = UserAccount & { id: string };
 /** What one User may learn about another: who they are, and how much of their
  * work this particular viewer can already see. */
@@ -87,6 +89,9 @@ export type UserProfile = Readonly<{
 
 export type AccountState = {
   isAdmin: boolean;
+  /** Whether this account takes part in the instance. A signed-in account that
+   * is not approved yet reaches its own account and public Assets only. */
+  approved: boolean;
   appearance: AppearancePreference;
   /** Whether this User asked Kannabi to use Gravatar for their own avatar. */
   gravatar: boolean;
@@ -97,7 +102,7 @@ export type AccountState = {
 };
 const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
-    THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
+    THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt), .approvedAt }`;
 
 // Entity keys are internal references. An Asset carries its own native
 // application identity in `id`; external identifiers never address the Asset.
@@ -722,7 +727,7 @@ const coherencePolicyProjection = '{ enforceGtinConsistency: s.enforceGtinConsis
  * numbers rather than driver integers. */
 const settingsProjection = `s { .requirePhoto, .displayTimezone, .themeId,
   apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays), toastSeconds: toFloat(s.toastSeconds),
-  .showAssetId, .showIdentifierPolicyVersion, .enforceGtinConsistency, .peopleDirectory }`;
+  .showAssetId, .showIdentifierPolicyVersion, .enforceGtinConsistency, .peopleDirectory, .requireApproval }`;
 
 /** Every identifier one Asset carries, in the shape `storedIdentifier` reads.
  * Requires `a` in scope. */
@@ -889,13 +894,15 @@ const sharesGroupWithViewer = `EXISTS {
   WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(shared) }
 }`;
 
-/** An account that takes part in the instance: active. Requires `u`. */
-const participant = `(${activeUser})`;
+/** An account that takes part in the instance: active, and approved by an
+ * administrator (or created while approval was not required). A pending
+ * account is signed in but is nobody's colleague yet. Requires `u`. */
+const participant = `(${activeUser} AND u.approvedAt IS NOT NULL)`;
 
-/** An account that may be in a Group: not deleted. Requires `u`. Narrower
- * than `participant` only in not asking for a credential, so a domain-only
- * User made by the store itself can take part in Groups. */
-const approvedAccount = `(u.accountDeletedAt IS NULL)`;
+/** An account that may be in a Group: not deleted, and approved. Requires `u`.
+ * Narrower than `participant` only in not asking for a credential, so a
+ * domain-only User made by the store itself can take part in Groups. */
+const approvedAccount = `(u.accountDeletedAt IS NULL AND u.approvedAt IS NOT NULL)`;
 
 /** Whether the instance's People directory is set to this value, read in the
  * statement that uses it, so a change takes effect on the next response. */
@@ -910,12 +917,12 @@ const directoryIs = (value: 'names' | 'shared') =>
  * Groups, in which case somebody you share a Group with.
  *
  * Asset readability and system administration never broaden it; instance-wide
- * account administration belongs to `/admin/users`. A tombstone is not a
- * person to find.
+ * account administration belongs to `/admin/users`. A tombstone or a pending
+ * account is not a person to find.
  */
 const inDirectory = `(${participant} AND EXISTS {
   MATCH (viewer:User {key: $actorKey})
-  WHERE viewer.accountDeletedAt IS NULL
+  WHERE viewer.accountDeletedAt IS NULL AND viewer.approvedAt IS NOT NULL
 } AND (u.key = $actorKey OR NOT ${directoryIs('shared')} OR ${sharesGroupWithViewer}))`;
 
 /** A person's address, for somebody already in this viewer's directory, as
@@ -1273,8 +1280,15 @@ export class IdentityStore {
   }
 
   /** A domain-only User, with no credential: for tests and tooling that need a
-   * person in the graph without an account to sign in to. */
-  createUser(name: string) { return this.createEntity('User', name); }
+   * person in the graph without an account to sign in to. It is approved, so
+   * it can take part in Groups. */
+  async createUser(name: string): Promise<Entity> {
+    const entity = { key: randomUUID(), name: requiredText(name, 'name') };
+    await this.write(async (tx) => {
+      await tx.run('CREATE (u:User $entity) SET u.approvedAt = $now', { entity, now: new Date().toISOString() });
+    });
+    return entity;
+  }
   createGroup(name: string) { return this.createEntity('Group', name); }
   createOwner(name: string) { return this.createEntity('Owner', name); }
 
@@ -1423,7 +1437,8 @@ export class IdentityStore {
 
   /** Add somebody to a Group, as one of its Group Managers.
    *
-   * The target User is locked before the Group, the order every Group write takes,
+   * Only a participant: a pending account takes no part in any Group. The
+   * target User is locked before the Group, the order every Group write takes,
    * so an addition racing a deletion or a role change leaves one coherent
    * result. Adding somebody already in the Group changes nothing — their role
    * is changed deliberately, with `setMemberRole`, never as a side effect. */
@@ -1832,9 +1847,9 @@ export class IdentityStore {
   }
 
   async accountState(actorKey: string | null): Promise<AccountState> {
-    if (!actorKey) return { isAdmin: false, appearance: 'system', gravatar: false, avatarHash: null };
+    if (!actorKey) return { isAdmin: false, approved: false, appearance: 'system', gravatar: false, avatarHash: null };
     const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
-      RETURN u.role = 'admin' AS isAdmin,
+      RETURN u.role = 'admin' AS isAdmin, u.approvedAt IS NOT NULL AS approved,
         coalesce(u.appearance, 'system') AS appearance,
         coalesce(u.gravatar, false) AS gravatar, u.email AS email`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
@@ -1845,7 +1860,8 @@ export class IdentityStore {
     const gravatar = result.records[0].get('gravatar') === true;
     const email = result.records[0].get('email');
     const avatarHash = gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null;
-    return { isAdmin: result.records[0].get('isAdmin') === true, appearance, gravatar, avatarHash };
+    return { isAdmin: result.records[0].get('isAdmin') === true, approved: result.records[0].get('approved') === true,
+      appearance, gravatar, avatarHash };
   }
 
   /** A User as another User may see them.
@@ -1969,7 +1985,9 @@ export class IdentityStore {
         if (count.records[0].get('count').toNumber() <= 1) throw new LastAdministratorError('The final system administrator cannot be removed');
       }
       const result = await tx.run(`MATCH (u:User {key: $targetKey})
-        SET u.role = $role, u.updatedAt = $updatedAt
+        SET u.role = $role, u.updatedAt = $updatedAt,
+          // An administrator takes part in the instance they administer.
+          u.approvedAt = CASE WHEN $role = 'admin' THEN coalesce(u.approvedAt, $updatedAt) ELSE u.approvedAt END
         RETURN ${userAccountProjection} AS user`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
       return result.records[0].get('user');
     });
@@ -2035,6 +2053,32 @@ export class IdentityStore {
       WHERE u.accountDeletedAt IS NULL AND u.id IS NOT NULL RETURN u.key`,
     { actorKey: requiredText(actorKey, 'actorKey') }));
     return result.records.length > 0;
+  }
+
+  /** Whether this account takes part in the instance, read on every request
+   * so an approval or a deletion takes effect immediately. */
+  async isParticipant(actorKey: string): Promise<boolean> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE ${participant}
+      RETURN u.key`, { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length > 0;
+  }
+
+  /** Let a waiting account take part in the instance. Approving an account
+   * already approved changes nothing. Rejecting one is deleting it, through
+   * the ordinary administrator deletion, so a rejected applicant leaves no
+   * account behind and may apply again. */
+  async approveUser(actorKey: string, targetKey: string): Promise<{ changed: boolean }> {
+    return this.write(async (tx) => {
+      const allowed = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
+        WHERE admin.accountDeletedAt IS NULL RETURN admin.key`, { actorKey });
+      if (!allowed.records.length) throw new AdministrationError('Administrator access required');
+      const result = await tx.run(`MATCH (u:User {key: $targetKey}) WHERE ${activeUser}
+        WITH u, u.approvedAt IS NULL AS waiting
+        SET u.approvedAt = coalesce(u.approvedAt, $now)
+        RETURN waiting`, { targetKey, now: new Date().toISOString() });
+      if (!result.records.length) throw new ReferenceError('User not found');
+      return { changed: result.records[0].get('waiting') === true };
+    });
   }
 
   async settings(): Promise<Settings> {

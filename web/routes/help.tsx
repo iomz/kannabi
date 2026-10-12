@@ -8,15 +8,15 @@ import type { Route } from './+types/help';
 /** A short guide to what Kannabi is and how its Groups work.
  *
  * Readable signed in or not, like a public Asset: it explains rules, and
- * reveals nothing about this instance beyond its People directory setting,
- * which the public settings read already says. It says the
+ * reveals nothing about this instance beyond its People directory and
+ * approval settings, which the public settings read already says. It says the
  * same as the README; when one changes, so does the other.
  */
 export const handle = publicShellHandle;
 
 export async function clientLoader() {
   const { settings } = await unwrap(await api.settings.$get());
-  return { directory: settings.peopleDirectory };
+  return { directory: settings.peopleDirectory, requireApproval: settings.requireApproval };
 }
 
 /** Verified against the server's authorization, not inferred from labels:
@@ -33,14 +33,14 @@ const roles: [string, boolean, boolean][] = [
 ];
 
 const directoryText: Record<PeopleDirectory, string> = {
-  everyone: 'everybody on this instance can find everybody else, by name or email',
-  names: 'everybody on this instance can find everybody else by name; email addresses are not shown',
+  everyone: 'everybody approved on this instance can find everybody else, by name or email',
+  names: 'everybody approved on this instance can find everybody else by name; email addresses are not shown',
   shared: 'people find only those they already share a Group with, and add anybody else by member key',
 };
 
 const prose = 'max-w-3xl text-[.95rem] leading-relaxed [&_h2]:mb-3 [&_p]:mb-3 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:ps-5';
 
-export default function Help({ loaderData: { directory } }: Route.ComponentProps) {
+export default function Help({ loaderData: { directory, requireApproval } }: Route.ComponentProps) {
   const mark = (value: boolean) => value ? <span>Yes</span> : <span className="text-muted-foreground">No</span>;
   return <>
     <PageHeading eyebrow="Help" title="How Kannabi works"
@@ -50,6 +50,9 @@ export default function Help({ loaderData: { directory } }: Route.ComponentProps
       <h2>What Kannabi does</h2>
       <p>Kannabi keeps a shared record of physical Assets — equipment, tools, devices — and of who can see and
         change each one. Every Asset has a stable Kannabi ID, and may also carry identifiers such as GS1 keys.</p>
+      <p>{requireApproval
+        ? 'On this instance, a new account waits until an administrator approves it. Until then it can read public Assets and change its own account, and nothing else.'
+        : 'On this instance, a new account takes part as soon as it signs up.'}</p>
     </Panel>
 
     <Panel className={prose}>
@@ -106,7 +109,7 @@ export default function Help({ loaderData: { directory } }: Route.ComponentProps
     <Panel className={prose}>
       <h2>People and email addresses</h2>
       <p>On this instance, {directoryText[directory]}. An administrator chooses this. Which Groups somebody belongs to
-        is shown only to people in the same Group.</p>
+        is shown only to people in the same Group, and accounts waiting for approval appear to nobody.</p>
     </Panel>
   </>;
 }

@@ -43,19 +43,24 @@ export type Settings = {
    * removes nothing to make it succeed. Syntax, check digits,
    * uniqueness and the same-identifier-twice rule do not depend on it. */
   enforceGtinConsistency: boolean;
-  /** Who a signed-in person can find in the People directory, and
+  /** Who a signed-in, approved person can find in the People directory, and
    * whether they see email addresses there.
    *
-   * `everyone`: every active person, with names and email addresses.
-   * `names`: every active person, by name only; addresses stay with their
+   * `everyone`: every approved person, with names and email addresses.
+   * `names`: every approved person, by name only; addresses stay with their
    * owner and with administration.
    * `shared`: only people who share a Group with the viewer, with addresses.
    *
    * It decides who is discoverable and what is shown about them, never Group
    * membership: which Groups somebody belongs to is shown only where the
-   * viewer belongs too. Anonymous visitors never reach it.
+   * viewer belongs too. Anonymous and pending accounts never reach it.
    */
   peopleDirectory: PeopleDirectory;
+  /** Whether a new account waits for an administrator before it takes part
+   * in the instance. On by default: signing up is open to anybody who can
+   * reach the instance, and the directory would otherwise be open to them
+   * too. Accounts an administrator creates are approved when created. */
+  requireApproval: boolean;
 };
 
 /** The shipped lifetime, and the one every existing deployment keeps. */
@@ -95,10 +100,11 @@ export function apiTokenLifetimeDays(value: unknown, field: string): number {
 export const defaultSettings: Settings = Object.freeze({
   requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
   toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false, enforceGtinConsistency: true,
-  peopleDirectory: 'everyone',
+  peopleDirectory: 'everyone', requireApproval: true,
 }) as Settings;
 
-const booleanSettings = ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency'] as const;
+const booleanSettings = ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency',
+  'requireApproval'] as const;
 
 /** A change to some settings: each field present is validated, and each field
  * absent is left as it is. Omission never resets, widens or narrows anything,

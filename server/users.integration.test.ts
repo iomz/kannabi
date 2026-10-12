@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import type { Mailer, MailMessage } from './mail.js';
 
@@ -35,6 +36,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const mailer = new CaptureMailer();
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID(), mailer);
@@ -83,7 +85,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
     });
 
     await t.test('the People directory is the instance’s, the same for users and administrators', async () => {
-      // By default every active person finds every other, an administrator
+      // By default every approved person finds every other, an administrator
       // no more than anybody else, and no Group is shown that is not shared.
       for (const caller of [admin, member]) {
         const listed = (await (await caller('/people')).json()).people as { key: string; sharedGroups: unknown[] }[];

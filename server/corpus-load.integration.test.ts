@@ -5,6 +5,7 @@ import neo4j from 'neo4j-driver';
 import { Hono } from 'hono';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
@@ -56,6 +57,7 @@ test('an existing Asset corpus loads over the public HTTP API',
     // Nothing is seeded by hand: opening the store is what a deployment does,
     // and it leaves the instance ready for a client to use.
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const storage = storageFromEnv();
     await storage.check();
     const origin = 'http://localhost:3000';

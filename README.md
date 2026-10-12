@@ -440,8 +440,9 @@ Authentication uses the same `User` nodes as domain provenance, with a server-as
 This avoids a second application database and a custom authentication adapter.
 The adapter and Better Auth versions are pinned; upgrades must pass the real Neo4j integration tests.
 
-Create an account, open Groups from the sidebar to create a Group or ask a Group Manager to add you, then report an Asset from the Assets workspace.
-Kannabi does not verify email addresses, so an address is display context rather than evidence of who somebody is.
+Create an account and, unless the instance has turned approval off, wait for an administrator to approve it under Administration → Users; then open Groups from the sidebar to create a Group or ask a Group Manager to add you, and report an Asset from the Assets workspace.
+Until it is approved, an account reaches only its own account settings and public Assets, exactly as an anonymous visitor would read them, and appears in nobody's People directory.
+Kannabi does not verify email addresses, so an administrator approves people they recognise rather than trusting an address's domain; verified addresses, and signup restricted to a domain, are separate work.
 Help in the sidebar (`/help`, readable signed out) explains Assets, Groups, roles and the People directory.
 The persistent header searches accessible Assets by name on Enter; ⌘K or Ctrl+K focuses search and Escape blurs it.
 The account menu provides Profile and sign-out.
@@ -456,7 +457,7 @@ The Assets workspace shows compact photo rows and loads more inventory as you sc
 All, Mine, Group access, and Public filter readable Assets; their overlapping counts reflect the current search.
 Mine means originally reported by you and never grants access.
 Identifiers, ownership, and photos remain within each Asset workflow.
-A Group Manager (initially its creator) can add an active User as a member or a Group Manager; members cannot add others. Users can leave their own Groups, and any role goes with the membership.
+A Group Manager (initially its creator) can add an approved User as a member or a Group Manager; members cannot add others. Users can leave their own Groups, and any role goes with the membership.
 An administrator can identify Groups with no Group Manager through `GET /api/admin/groups/unmanaged` and promote one of that Group's existing members with `POST /api/admin/groups/{key}/recover` (`{ "userKey": "..." }`). Recovery never adds a membership, so it never opens a Group's Assets to anybody, the administrator included; a Group with no members stays unmanaged.
 A sole Group is selected automatically, but reporting always sends an explicit Group key.
 Group members can read and edit its private Assets.
@@ -496,10 +497,10 @@ Where the directory is limited to shared Groups, somebody who shares none with a
 
 ### People directory
 
-Signed-in people can find one another on **People**, and when adding people to a Group, by name — and by email address where addresses are shown.
-An administrator chooses the directory under Instance settings: everybody, with email addresses (the default); everybody, by name only; or only people who already share a Group.
+Approved people can find one another on **People**, and when adding people to a Group, by name — and by email address where addresses are shown.
+An administrator chooses the directory under Instance settings: everybody approved, with email addresses (the default); everybody approved, by name only; or only people who already share a Group.
 Being findable never says which Groups somebody is in: a profile shows only the Groups the viewer shares with that person, and a Group's roster is readable only by its own members.
-Anonymous visitors reach none of it, and a search matches an email address only where that address is shown.
+Anonymous visitors and accounts awaiting approval reach none of it, and a search matches an email address only where that address is shown.
 Results are bounded: a search narrows rather than pages through the instance.
 Both operations recheck current authority; a retry after losing access returns 404, and removing the final Group returns 409.
 `reportedBy` grants no access and remains unchanged after the reporter leaves the Group.
@@ -537,7 +538,8 @@ For the containerized application, use `docker compose exec app node dist/server
 Reload the application and open Settings under Administration in the sidebar to see Instance settings.
 Administration permits changing the photo-on-report policy, instance display timezone, built-in instance theme, and mail delivery; it grants no Asset access.
 The defaults are optional photos, UTC display, and the `default` theme.
-**People directory** chooses who people can find, and whether they see email addresses; it is enforced in every API response that names people, and the administrative account views are unaffected.
+**Require approval for new accounts** (on by default) makes every signup wait under Users until an administrator approves or rejects it; rejecting deletes the waiting account.
+**People directory** chooses who approved people can find, and whether they see email addresses; it is enforced in every API response that names people, and the administrative account views are unaffected.
 A settings change names only the settings it changes: anything a request leaves out stays as it is.
 The photo requirement applies to new reports, including direct API requests, and requires a photo in the same reporting submission.
 Existing Assets remain editable without a photo when the policy changes.
@@ -625,7 +627,8 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | API tokens | yes | `/api/api-tokens*` | no |
 | Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
 | Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
-| Choose the People directory | yes | `PATCH /api/settings` | no |
+| Require approval for new accounts, choose the People directory | yes | `PATCH /api/settings` | no |
+| Approve or reject a waiting account | yes | `POST /api/admin/users/{key}/approval`, `DELETE /api/admin/users/{key}` | no |
 | List Assets blocking GTIN consistency | yes, when enabling is refused | `GET /api/admin/gtin-conflicts`, and the `409` refusing `PATCH /api/settings` | no |
 
 ### What the absences mean

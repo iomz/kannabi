@@ -9,9 +9,9 @@ import { activeDestination } from '../web/app-sidebar.js';
 import { isPublicShellHandle } from '../web/anonymous-shell.js';
 import { mount } from './dom-render.js';
 
-function show(directory: 'everyone' | 'names' | 'shared') {
+function show(directory: 'everyone' | 'names' | 'shared', requireApproval = true) {
   const router = createMemoryRouter([{ path: '/help',
-    element: createElement(Help, { loaderData: { directory } } as never) }], { initialEntries: ['/help'] });
+    element: createElement(Help, { loaderData: { directory, requireApproval } } as never) }], { initialEntries: ['/help'] });
   return { view: mount(createElement(RouterProvider, { router })), router };
 }
 
@@ -33,12 +33,14 @@ test('Help explains the two roles with the verified table, and this instance’s
     assert.deepEqual(rows['Make someone a Group Manager, or remove the role'], ['No', 'Yes']);
     assert.deepEqual(rows['Manage the Group’s GS1 Company Prefixes'], ['No', 'Yes']);
     assert.match(view.text(), /can find everybody else, by name or email/);
+    assert.match(view.text(), /a new account waits until an administrator approves it/);
   } finally { view.stop(); router.dispose(); }
 
-  const shared = show('shared');
+  const shared = show('shared', false);
   try {
     assert.match(shared.view.text(), /add anybody else by member key/);
     assert.ok([...document.querySelectorAll('h2')].some((h) => h.textContent === 'The member key'));
+    assert.match(shared.view.text(), /takes part as soon as it signs up/);
   } finally { shared.view.stop(); shared.router.dispose(); }
 });
 
@@ -49,7 +51,7 @@ test('Help is reachable from the navigation and readable signed out', async (t) 
   assert.ok(isPublicShellHandle(handle));
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
-  globalThis.fetch = async () => new Response(JSON.stringify({ settings: { peopleDirectory: 'names' } }),
+  globalThis.fetch = async () => new Response(JSON.stringify({ settings: { peopleDirectory: 'names', requireApproval: true } }),
     { headers: { 'Content-Type': 'application/json' } });
-  assert.deepEqual(await clientLoader(), { directory: 'names' });
+  assert.deepEqual(await clientLoader(), { directory: 'names', requireApproval: true });
 });

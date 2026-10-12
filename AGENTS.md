@@ -31,7 +31,8 @@ Preserve the README naming story at the bottom of README.
 - Per-resource separation of duties is deliberately not modelled: the Group Manager role carries every privileged operation over everything the Group manages, so a deployment cannot yet distinguish somebody who may administer a GS1 namespace from somebody who may recruit members. That distinction is real and may be introduced if a concrete deployment requires it; until then a second Group is how authority is scoped separately.
 - Account deletion removes memberships, and their roles, without deleting Groups or requiring an automatic successor. Empty or unmanaged Groups remain valid.
 - A system administrator can promote an existing active member to Group Manager only for a Group with no Group Manager. Recovery never adds Group membership or grants Asset access, so a Group with no members stays unmanaged.
-- The People directory is an instance setting enforced by the server: every active person, with or without email addresses, or only people sharing a Group. It decides who is findable and what is shown about them, never Group membership — which Groups somebody belongs to is shown only where the viewer belongs too — and anonymous visitors never reach it. A search may match an email address only where that address is shown.
+- A new account takes part in the instance only once approved: by an administrator, or at signup when the instance does not require approval. Until then it reaches its own account and public Assets, as an anonymous visitor would, and nothing else. Approval is participation, never Asset access, and administrator-created accounts are approved when created.
+- The People directory is an instance setting enforced by the server: every approved person, with or without email addresses, or only people sharing a Group. It decides who is findable and what is shown about them, never Group membership — which Groups somebody belongs to is shown only where the viewer belongs too — and anonymous and pending accounts never reach it. A search may match an email address only where that address is shown.
 - Kannabi does not verify email addresses. An address is what its owner typed, so it is display context and never evidence of who somebody is or which organisation they belong to.
 - A public Asset's full representation is readable without authentication through its public URI; public visibility never grants edit access.
 - Do not introduce per-field public/private filtering.
@@ -118,7 +119,7 @@ Prefer the browser's own control where it already does the job; add a scripted o
 UI tests assert roles, accessible names and behaviour rather than class names or markup shape. A surface anchored in a portal — a dialog, a menu, a toast — is opened in a real document and read back, never asserted against static markup.
 Keep one package and ordinary files until a concrete need requires more structure.
 Keep object bytes behind the small S3 storage interface and photo metadata in Neo4j.
-Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, the API token lifetime ceiling, toast lifetime, the two identifier presentation choices, GTIN consistency enforcement, and the People directory; store timestamps as absolute instants.
+Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, the API token lifetime ceiling, toast lifetime, the two identifier presentation choices, GTIN consistency enforcement, whether new accounts require approval, and the People directory; store timestamps as absolute instants.
 System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 

@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -15,13 +16,14 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
  * Who a viewer can find, and whether they see an address, is the instance's
  * setting, enforced in the server's responses. Being findable never says
  * which Groups somebody is in beyond those the viewer shares, and nobody who
- * is deleted or anonymous takes part in it from either side.
+ * is pending, deleted or anonymous takes part in it from either side.
  */
 test('the People directory follows its setting, and only ever widens what is shown about the findable',
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
     const app = new Hono().route('/api', createInventoryApi(store, auth, origin));
@@ -50,8 +52,9 @@ test('the People directory follows its setting, and only ever widens what is sho
     };
 
     // viewer and colleague share a Group; stranger shares none; admin is an
-    // administrator in no Group; departed is deleted.
-    const names = ['viewer', 'colleague', 'stranger', 'admin', 'departed'] as const;
+    // administrator in no Group; pending signed up and waits; departed is
+    // deleted.
+    const names = ['viewer', 'colleague', 'stranger', 'admin', 'pending', 'departed'] as const;
     type Name = (typeof names)[number];
     const people = Object.fromEntries(names.map((name) => [name, client()])) as Record<Name, ReturnType<typeof client>>;
     const key = {} as Record<Name, string>;
@@ -63,7 +66,8 @@ test('the People directory follows its setting, and only ever widens what is sho
       key[name] = (await json(people[name]('/me'))).user.key;
     }
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: key.admin });
-    const { viewer, colleague, stranger, admin, departed } = people;
+    await query('MATCH (u:User {key: $key}) REMOVE u.approvedAt', { key: key.pending });
+    const { viewer, colleague, stranger, admin, pending, departed } = people;
     const team = (await json(viewer('/groups', 'POST', { name: 'Team' }))).group;
     const hidden = (await json(colleague('/groups', 'POST', { name: 'Secret prototype' }))).group;
     await json(viewer(`/groups/${team.key}/members`, 'POST', { userKey: key.colleague }));
@@ -77,12 +81,12 @@ test('the People directory follows its setting, and only ever widens what is sho
     const found = async (call: ReturnType<typeof client>, q?: string) =>
       (await json(call(`/people${q ? `?q=${encodeURIComponent(q)}` : ''}`))).people as Found[];
     const keys = (list: Found[]) => list.map((person) => person.key).sort();
-    const everybodyActive = [key.viewer, key.colleague, key.stranger, key.admin].sort();
+    const everybodyApproved = [key.viewer, key.colleague, key.stranger, key.admin].sort();
 
-    await t.test('the default finds every active person, with their address', async () => {
+    await t.test('the default finds every approved person, with their address', async () => {
       assert.equal((await json(viewer('/settings'))).settings.peopleDirectory, 'everyone');
       const seen = await found(viewer);
-      assert.deepEqual(keys(seen), everybodyActive, 'nobody deleted');
+      assert.deepEqual(keys(seen), everybodyApproved, 'nobody pending or deleted');
       for (const person of seen) assert.equal(person.email, email[names.find((name) => key[name] === person.key)!]);
       // Being findable never says which Groups somebody is in.
       const colleagueSeen = (await found(stranger)).find((person) => person.key === key.colleague)!;
@@ -92,12 +96,14 @@ test('the People directory follows its setting, and only ever widens what is sho
       assert.ok(!JSON.stringify(await json(stranger(`/users/${key.colleague}`))).includes(hidden.key));
       // A profile is reachable exactly when the person is findable.
       assert.equal((await stranger(`/users/${key.viewer}`)).status, 200);
+      assert.equal((await stranger(`/users/${key.pending}`)).status, 404);
       assert.equal((await stranger(`/users/${key.departed}`)).status, 404);
     });
 
     await t.test('search matches names, and addresses only where addresses are shown', async () => {
       assert.deepEqual(keys(await found(stranger, 'directory colleague')), [key.colleague]);
       assert.deepEqual(keys(await found(stranger, email.colleague.slice(0, 30))), [key.colleague]);
+      assert.deepEqual(keys(await found(stranger, email.pending)), [], 'a pending account is never found');
       await directory('names');
       assert.deepEqual(keys(await found(stranger, email.colleague.slice(0, 30))), [],
         'an address nobody may see is no way to find anybody');
@@ -108,7 +114,7 @@ test('the People directory follows its setting, and only ever widens what is sho
     await t.test('names only: everybody findable, nobody’s address shown but your own', async () => {
       await directory('names');
       const seen = await found(stranger);
-      assert.deepEqual(keys(seen), everybodyActive);
+      assert.deepEqual(keys(seen), everybodyApproved);
       for (const person of seen) {
         assert.equal(person.email, person.key === key.stranger ? email.stranger : null);
       }
@@ -131,10 +137,12 @@ test('the People directory follows its setting, and only ever widens what is sho
       await directory('everyone');
     });
 
-    await t.test('nobody signed out reaches the directory', async () => {
+    await t.test('nobody signed out or waiting reaches the directory', async () => {
       const anonymous = client();
       assert.equal((await anonymous('/people')).status, 401);
       assert.equal((await anonymous(`/users/${key.viewer}`)).status, 401);
+      assert.equal((await pending('/people')).status, 401);
+      assert.equal((await pending(`/users/${key.viewer}`)).status, 401);
       assert.equal((await departed('/people')).status, 401);
     });
 

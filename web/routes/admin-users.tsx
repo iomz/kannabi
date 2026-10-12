@@ -2,6 +2,7 @@ import { Form, Link, redirect, useNavigation } from 'react-router';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, unwrap } from '../api';
 import { DestructiveConfirmation } from '../destructive-confirmation';
+import { ConfirmedAct } from '../group-destination';
 import { displayInstant } from '../../server/settings';
 import { filterUsers } from '../user-filter';
 import { userAccessLabel } from '../user-access';
@@ -55,6 +56,16 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
       await unwrap(await api.admin.users[':key'].recovery.$post({ param: { key } }));
       return { intent, key, saved: true, message: 'Email requested.', error: null };
     }
+    if (intent === 'approve') {
+      const { changed } = await unwrap(await api.admin.users[':key'].approval.$post({ param: { key } }));
+      return { intent, key, saved: true, message: changed ? `${String(data.get('name') ?? 'Account')} approved.` : 'Already approved.', error: null };
+    }
+    // Rejecting a waiting account is deleting it: it has taken part in
+    // nothing, so nothing of it needs keeping, and its owner may apply again.
+    if (intent === 'reject') {
+      await unwrap(await api.admin.users[':key'].$delete({ param: { key } }));
+      return { intent, key, saved: true, message: `${String(data.get('name') ?? 'Account')} rejected.`, error: null };
+    }
     if (intent === 'delete') {
       await unwrap(await api.admin.users[':key'].$delete({ param: { key } }));
       return { intent, key, saved: true, message: 'User deleted.', error: null };
@@ -71,10 +82,44 @@ function Feedback({ actionData, intent, userKey }: { actionData?: UserAction; in
 }
 
 function AccessBadge({ user }: { user: UserAccount }) {
+  if (!user.approvedAt) return <Badge variant="outline">Waiting for approval</Badge>;
   const established = user.credentialState === 'established';
   return <Badge variant="secondary"
     className={established ? 'bg-success-surface text-success-text' : undefined}>
     {userAccessLabel(user.credentialState)}</Badge>;
+}
+
+/** Accounts that signed up and wait for an administrator.
+ *
+ * Kannabi does not verify email addresses yet, so an address here is what the
+ * applicant typed, not proof they own it: approve people you recognise. A
+ * waiting account reaches only its own account and public Assets. */
+function Approvals({ waiting, actionData }: { waiting: UserAccount[]; actionData?: UserAction }) {
+  const busy = useNavigation().state !== 'idle';
+  const [rejecting, setRejecting] = useState<UserAccount | null>(null);
+  if (!waiting.length) return null;
+  return <section aria-labelledby="approvals-heading" className="mb-6 rounded-lg border border-warning-border bg-card p-4">
+    <h2 id="approvals-heading" className="mt-0 text-base">Waiting for approval</h2>
+    <Hint className="mb-3">Email addresses are not verified: an address is what the person typed. Approve people
+      you recognise.</Hint>
+    <ul className="grid gap-2">{waiting.map((user) => <li key={user.key}
+      className="flex flex-wrap items-center justify-between gap-3 border-t pt-2 first:border-t-0 first:pt-0">
+      <span className="grid min-w-0"><strong className="[overflow-wrap:anywhere]">{user.name}</strong>
+        <span className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{user.email}</span></span>
+      <span className="flex gap-2">
+        <Form method="post"><input type="hidden" name="intent" value="approve" />
+          <input type="hidden" name="key" value={user.key} /><input type="hidden" name="name" value={user.name} />
+          <Button type="submit" size="sm" disabled={busy} aria-label={`Approve ${user.name}`}>Approve</Button></Form>
+        <Button type="button" size="sm" variant="outline" disabled={busy} aria-label={`Reject ${user.name}`}
+          onClick={() => setRejecting(user)}>Reject</Button>
+      </span>
+      <Feedback actionData={actionData} intent="approve" userKey={user.key} />
+    </li>)}</ul>
+    <ConfirmedAct open={rejecting !== null} onClose={() => setRejecting(null)} confirmLabel="Reject"
+      title={`Reject ${rejecting?.name ?? ''}?`}
+      description="Their account is deleted. They have taken part in nothing, so nothing of it is kept, and they may sign up again."
+      fields={{ intent: 'reject', key: rejecting?.key ?? '', name: rejecting?.name ?? '' }} />
+  </section>;
 }
 
 /** A section of a User account, each saved on its own. */
@@ -167,6 +212,7 @@ export default function Users({ loaderData: { users, settings, actorKey }, actio
     <PageHeading eyebrow="Administration" title="Users" description={`${users.length} active users`}>
       <Button onClick={() => setCreating(true)}>Create user</Button>
     </PageHeading>
+    <Approvals waiting={users.filter((user) => !user.approvedAt)} actionData={actionData} />
     <div className="mb-4 flex max-w-[40rem] items-center gap-4 max-sm:flex-col max-sm:items-stretch max-sm:gap-[.45rem]">
       <Label htmlFor="user-search" className="sr-only">Search users by name or email</Label>
       <Input id="user-search" type="search" className="bg-card" placeholder="Search users by name or email…"
