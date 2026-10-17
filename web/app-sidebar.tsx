@@ -85,6 +85,20 @@ function Destination({ item, active, close }: {
   </SidebarMenuItem>;
 }
 
+/** What an account waiting for approval is offered: the guide, and nothing
+ * the server would refuse it. Its own account stays in the account menu. */
+const awaitingApproval: readonly Destination[] = [{ to: '/help', icon: 'info', label: 'Help' }];
+
+function Awaiting({ active }: { active: string | null }) {
+  const { setOpenMobile } = useSidebar();
+  return <SidebarGroup>
+    <SidebarMenu>
+      {awaitingApproval.map((item) => <Destination key={item.to} item={item} active={active}
+        close={() => setOpenMobile(false)} />)}
+    </SidebarMenu>
+  </SidebarGroup>;
+}
+
 function Workspace({ active }: { active: string | null }) {
   const { setOpenMobile, state } = useSidebar();
   const close = () => setOpenMobile(false);
@@ -162,8 +176,8 @@ function Brand() {
  * opens. A menu is anchored instead, so the thing just clicked stays where it
  * was clicked.
  */
-function Account({ user, avatarHash, busy }: {
-  user: ShellUser; avatarHash?: string | null; busy: boolean;
+function Account({ user, approved, avatarHash, busy }: {
+  user: ShellUser; approved: boolean; avatarHash?: string | null; busy: boolean;
 }) {
   const { setOpenMobile } = useSidebar();
   const submit = useSubmit();
@@ -188,7 +202,9 @@ function Account({ user, avatarHash, busy }: {
         <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
           {user.email}
         </DropdownMenuLabel>
-        <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>
+        {/* A profile page is a People directory page, which a waiting
+            account does not reach yet. */}
+        {approved && <DropdownMenuItem render={<Link to={`/users/${user.key}`} onClick={close} />}>View profile</DropdownMenuItem>}
         <DropdownMenuItem render={<Link to="/settings" onClick={close} />}>Settings</DropdownMenuItem>
       </DropdownMenuGroup>
       <DropdownMenuSeparator />
@@ -202,8 +218,11 @@ function Account({ user, avatarHash, busy }: {
   </DropdownMenu>;
 }
 
-export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
-  user: ShellUser | null; isAdmin: boolean; avatarHash?: string | null; busy: boolean;
+export function AppSidebar({ user, approved = true, isAdmin, avatarHash, busy }: {
+  user: ShellUser | null;
+  /** False for a signed-in account still waiting for approval. */
+  approved?: boolean;
+  isAdmin: boolean; avatarHash?: string | null; busy: boolean;
 }) {
   const location = useLocation();
   const active = activeDestination(location.pathname);
@@ -220,14 +239,14 @@ export function AppSidebar({ user, isAdmin, avatarHash, busy }: {
       </div>
     </SidebarHeader>
     <SidebarContent>
-      <Workspace active={active} />
-      {isAdmin && <Administration active={active} />}
+      {user && !approved ? <Awaiting active={active} /> : <Workspace active={active} />}
+      {isAdmin && approved && <Administration active={active} />}
     </SidebarContent>
     <SidebarFooter>
       <SidebarMenu>
         <SidebarMenuItem>
           {user
-            ? <Account user={user} avatarHash={avatarHash} busy={busy} />
+            ? <Account user={user} approved={approved} avatarHash={avatarHash} busy={busy} />
             : location.pathname !== '/signin'
               ? <SidebarMenuButton size="lg" tooltip="Sign in" render={<Link to="/signin" />}>
                 <span>Sign in</span></SidebarMenuButton>

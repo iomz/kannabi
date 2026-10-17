@@ -77,3 +77,37 @@ test('a signed-in account that waits is told so everywhere but its settings and 
     assert.ok(view.button('Sign out'));
   } finally { view.stop(); router.dispose(); }
 });
+
+test('the waiting screen asks again on request, so approval changes the shell without a reload', async () => {
+  let loads = 0;
+  const router = createMemoryRouter([{ path: '/', loader: () => ++loads,
+    element: createElement(AwaitingApproval, { name: 'Waiting Applicant' }) }]);
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    await settle();
+    const before = loads;
+    await settle(() => view.button('Check again')!.click());
+    await settle();
+    assert.equal(loads, before + 1, 'asking again re-reads the account');
+  } finally { view.stop(); router.dispose(); }
+});
+
+test('a waiting account reads a public Asset as a visitor does, asking for no Groups or namespaces', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const asked: string[] = [];
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input), 'https://kannabi.test').pathname;
+    asked.push(path);
+    const body = path === '/api/me' ? { user: { key: 'waiting', name: 'Waiting', email: 'w@example.test' }, approved: false }
+      : path === '/api/settings' ? { settings: defaultSettings }
+        : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers: [] },
+          canEdit: false } : null;
+    return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
+  };
+  const { loadAsset } = await import('../web/asset-view.js');
+  const loaded = await loadAsset('a', new Request('https://kannabi.test/asset/a'));
+  assert.equal(loaded.asset.name, 'Public rig');
+  assert.equal(loaded.authenticated, false, 'no workspace chrome for an account that takes no part yet');
+  assert.deepEqual(asked.filter((path) => path === '/api/groups' || path === '/api/gs1-namespaces'), []);
+});

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import People from '../web/routes/people.js';
-import { mount } from './dom-render.js';
+import { mount, settle } from './dom-render.js';
 
 const colleague = {
   key: 'colleague', name: 'Colleague', avatarHash: null, reportedAssets: 3, self: false,
@@ -47,4 +47,23 @@ test('the directory says what it covers, says when to narrow, and shows nothing 
     assert.match(shared.view.text(), /People you share a Group with/);
     assert.match(shared.view.text(), /Nobody you can find matches “zed”/);
   } finally { shared.view.stop(); shared.router.dispose(); }
+});
+
+test('your own card speaks of you, and a person nobody may find is not called an Asset', async () => {
+  const { view, router } = show({ people: [{ ...colleague, key: 'me', self: true, reportedAssets: 10, sharedGroups: [] }],
+    more: false, q: '', directory: 'everyone' });
+  try {
+    assert.match(view.text(), /You reported 10 Assets you can read/);
+    assert.doesNotMatch(view.text(), /this person/);
+  } finally { view.stop(); router.dispose(); }
+  const { PersonError } = await import('../web/route-error.js');
+  const missing = createMemoryRouter([{ path: '/users/:key', element: null, errorElement: createElement(PersonError),
+    loader: () => { throw new Response('', { status: 404 }); } }], { initialEntries: ['/users/alex'] });
+  const page = mount(createElement(RouterProvider, { router: missing }));
+  try {
+    await settle(); await settle();
+    assert.match(page.text(), /Person unavailable/);
+    assert.doesNotMatch(page.text(), /Asset/);
+    assert.equal(document.querySelector('a[href="/people"]')?.textContent, 'Back to People');
+  } finally { page.stop(); missing.dispose(); }
 });

@@ -91,9 +91,11 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
         onOpenChange={(open) => { setCollapsed(!open); cacheSidebarCollapsed(!open); }}
         style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.25rem' } as CSSProperties}>
         <a href="#workspace" className="fixed left-4 top-[-5rem] z-30 rounded-md bg-card px-3 py-2 text-foreground shadow-md focus:top-4">Skip to content</a>
-        <AppSidebar user={user} isAdmin={isAdmin} avatarHash={loaderData.avatarHash} busy={busy} />
+        <AppSidebar user={user} approved={loaderData.approved} isAdmin={isAdmin} avatarHash={loaderData.avatarHash}
+          busy={busy} />
         <SidebarInset className="min-w-0">
-          <WorkspaceHeader enabled={user !== null} search={workspaceHeader} />
+          {/* Asset search is participation, so a waiting account is not offered it. */}
+          <WorkspaceHeader enabled={user !== null} search={workspaceHeader && (user === null || loaderData.approved)} />
           <main id="workspace" tabIndex={-1} aria-busy={busy}
             className="mx-auto w-full max-w-[88rem] px-4 pt-8 pb-16 focus:outline-none sm:px-6 lg:px-10">
             {actionData?.error && <p role="alert">{actionData.error}</p>}<Outlet />

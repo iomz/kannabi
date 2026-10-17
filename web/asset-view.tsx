@@ -29,15 +29,18 @@ export async function loadAsset(id: string, request: Request) {
     api.assets[':id'].$get({ param: { id } }),
     unwrap(await api.me.$get()),
   ]);
+  // A waiting account reads an Asset as a visitor does: it has no Groups or
+  // namespaces yet, and the server refuses to list them.
+  const participant = account.user !== null && account.approved;
   // Display only: the server re-checks the Group join on every issuance.
-  const { namespaces } = account.user
+  const { namespaces } = participant
     ? await unwrap(await api['gs1-namespaces'].$get()) : { namespaces: [] };
   if (!response.ok) throw new Response('Asset not found or access unavailable.', { status: response.status });
   const result = await response.json();
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
   const { settings } = await unwrap(await api.settings.$get());
   const groupKeys = new Set(result.asset.groups.map((group) => group.key));
-  const { groups: memberships } = account.user ? await unwrap(await api.groups.$get()) : { groups: [] };
+  const { groups: memberships } = participant ? await unwrap(await api.groups.$get()) : { groups: [] };
   // The Groups this reader manages. Managing carries membership, so these are
   // a subset of the memberships, never a second source of reach.
   const controlled = memberships.filter((group) => group.role === 'manager')
@@ -76,7 +79,7 @@ export async function loadAsset(id: string, request: Request) {
   // The Groups whose page this reader can open: their memberships, exactly as
   // the Group destination decides it.
   const reachableGroups = memberships.map((group) => group.key);
-  return { ...result, settings, authenticated: account.user !== null,
+  return { ...result, settings, authenticated: participant,
     controlled, canGrant, reachableGroups,
     namespaces: eligible,
     classKeys,

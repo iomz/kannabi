@@ -177,3 +177,12 @@ test('narrowing the navigation leaves every surface reachable', () => {
   act(() => root.unmount());
   host.remove();
 });
+
+test('a waiting account is offered Help and its own account, and nothing the server would refuse it', () => {
+  const markup = render({ user, approved: false, isAdmin: false, avatarHash: null, busy: false });
+  assert.match(markup, />Help</);
+  for (const label of ['Inventory', 'Assets', 'Lookup', 'Groups', 'People', 'Users', 'Instance settings']) {
+    assert.doesNotMatch(markup, new RegExp(`>${label}<`), `${label} is not offered`);
+  }
+  assert.match(markup, /aria-label="Account menu"/, 'its own account stays reachable');
+});

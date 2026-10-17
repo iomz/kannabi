@@ -46,4 +46,4 @@ export default function UserPage({ loaderData: { profile } }: Route.ComponentPro
     </Panel>
   </>;
 }
-export { WorkspaceError as ErrorBoundary } from '../route-error';
+export { PersonError as ErrorBoundary } from '../route-error';

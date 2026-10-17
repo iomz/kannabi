@@ -25,6 +25,13 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   return { ...found, q, directory: settings.peopleDirectory };
 }
 
+/** How many of somebody's reported Assets the viewer can read, said as the
+ * viewer would say it of themself or of somebody else. */
+export function reportedHint(count: number, self: boolean): string {
+  const assets = count === 1 ? '1 Asset' : `${count} Assets`;
+  return self ? `You reported ${assets} you can read` : `${assets} reported by this person that you can read`;
+}
+
 export default function People({ loaderData: { people, more, q, directory } }: Route.ComponentProps) {
   const busy = useNavigation().state !== 'idle';
   return <>
@@ -53,9 +60,7 @@ export default function People({ loaderData: { people, more, q, directory } }: R
               {/* Text, not a link: the whole card already leads to the profile,
                   where the address is a mail link. */}
               {person.email && <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{person.email}</span>}
-              <Hint>{person.reportedAssets === 1
-                ? '1 Asset reported by this person that you can read'
-                : `${person.reportedAssets} Assets reported by this person that you can read`}</Hint>
+              <Hint>{reportedHint(person.reportedAssets, person.self)}</Hint>
               {person.sharedGroups.length > 0 && <span className="flex flex-wrap gap-1">
                 <span className="sr-only">Shared Groups: </span>
                 {person.sharedGroups.map((group) =>

@@ -26,4 +26,4 @@ export default function AssetPage({ loaderData }: Route.ComponentProps) {
   return <AssetView {...loaderData} />;
 }
 
-export { WorkspaceError as ErrorBoundary } from '../route-error';
+export { AssetError as ErrorBoundary } from '../route-error';

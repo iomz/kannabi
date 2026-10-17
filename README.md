@@ -625,7 +625,8 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | **Account and administration** | | | |
 | Profile, appearance, account deletion | yes | `/api/profile*` | no |
 | API tokens | yes | `/api/api-tokens*` | no |
-| Users, settings, mail, Group recovery | yes | `/api/admin/*`, `/api/settings` | no |
+| Users, settings, mail | yes | `/api/admin/*`, `/api/settings` | no |
+| Recover a Group with no Group Manager | no | `GET /api/admin/groups/unmanaged`, `POST /api/admin/groups/{key}/recover` | no |
 | Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
 | Require approval for new accounts, choose the People directory | yes | `PATCH /api/settings` | no |
 | Approve or reject a waiting account | yes | `POST /api/admin/users/{key}/approval`, `DELETE /api/admin/users/{key}` | no |
@@ -650,6 +651,8 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 **A Digital Link address is a document address.** Kannabi dereferences the forms it supports by serving the Asset page at them, outside `/api`; there is no JSON endpoint that takes one. MCP reports the path an identifier corresponds to and does not resolve it, because resolving it would grant nothing a `get_asset` call does not already answer.
 
 **A Group's page and its people are web and HTTP only.** `/groups/{key}` is reachable by the Group's members, and answers everybody else, an administrator included, as for a Group that does not exist. Every member reads who is in it and their roles; Group Managers add people, change roles and remove people. Its GS1 Company Prefixes are a view of the Group's page, pending their redesign (#58). MCP lists the reader's Groups and nothing more: it writes nothing, and who manages or belongs to a Group is administration, not a question about Assets an agent is asked to answer.
+
+**Group recovery is HTTP only, for now.** It is rare, and what it should be able to do for a Group with no member left to promote is undecided (#87); a web surface waits for that decision rather than building the narrower one first.
 
 **The People directory never reaches MCP.** Finding a person and their address serves somebody deciding whom to add or contact; an agent answering questions about Assets has no use for one, and MCP names no people beyond Asset provenance.
 
