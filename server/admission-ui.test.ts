@@ -111,3 +111,25 @@ test('a waiting account reads a public Asset as a visitor does, asking for no Gr
   assert.equal(loaded.authenticated, false, 'no workspace chrome for an account that takes no part yet');
   assert.deepEqual(asked.filter((path) => path === '/api/groups' || path === '/api/gs1-namespaces'), []);
 });
+
+test('an administrator orders Users by a column, and the header says which way', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const { view, router } = open([]);
+  try {
+    const rows = () => [...document.querySelectorAll('tbody tr')].map((row) => row.querySelector('td')!.textContent);
+    const header = (name: string) => [...document.querySelectorAll('th')].find((th) => th.textContent?.startsWith(name))!;
+    assert.deepEqual(rows(), ['Admin', 'Waiting Applicant'], 'loaded order until somebody chooses');
+    assert.equal(header('Name').getAttribute('aria-sort'), 'none');
+    await settle(() => header('Name').querySelector('button')!.click());
+    assert.equal(header('Name').getAttribute('aria-sort'), 'ascending');
+    await settle(() => header('Name').querySelector('button')!.click());
+    assert.equal(header('Name').getAttribute('aria-sort'), 'descending');
+    assert.deepEqual(rows(), ['Waiting Applicant', 'Admin']);
+    await settle(() => header('Access').querySelector('button')!.click());
+    assert.equal(header('Name').getAttribute('aria-sort'), 'none', 'one column orders the table at a time');
+    assert.deepEqual(rows(), ['Waiting Applicant', 'Admin'], 'waiting first');
+    assert.ok([...document.querySelectorAll('select option')].some((option) => option.textContent === 'Name, A–Z'),
+      'the same choice where the headers are not shown');
+  } finally { view.stop(); router.dispose(); }
+});
