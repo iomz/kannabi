@@ -148,6 +148,17 @@ test('a new account waits for approval, and reaches only itself and public Asset
       assert.equal((await json((await signUp('later')).call('/me'))).approved, false);
     });
 
+    await t.test('an administrator from before approval existed is approved at startup, and nobody else', async () => {
+      const veteran = await signUp('veteran');
+      const member = await signUp('member');
+      await query("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.approvedAt", { key: veteran.key });
+      await query('MATCH (u:User {key: $key}) REMOVE u.approvedAt', { key: member.key });
+      await IdentityStore.open(driver);
+      assert.equal((await json(veteran.call('/me'))).approved, true, 'administration stays reachable');
+      assert.equal((await veteran.call('/admin/users')).status, 200);
+      assert.equal((await json(member.call('/me'))).approved, false, 'an ordinary account still waits');
+    });
+
     await t.test('only an administrator changes admission', async () => {
       assert.equal((await applicant.call('/settings', 'PATCH', { requireApproval: false })).ok, false);
       assert.equal((await store.settings()).requireApproval, true);

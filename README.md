@@ -442,6 +442,7 @@ The adapter and Better Auth versions are pinned; upgrades must pass the real Neo
 
 Create an account and, unless the instance has turned approval off, wait for an administrator to approve it under Administration → Users; then open Groups from the sidebar to create a Group or ask a Group Manager to add you, and report an Asset from the Assets workspace.
 Until it is approved, an account reaches only its own account settings and public Assets, exactly as an anonymous visitor would read them, and appears in nobody's People directory.
+An administrator is always approved: on being made one, and at startup for an administrator account that predates approval, so administration stays reachable to approve everybody else.
 Kannabi does not verify email addresses, so an administrator approves people they recognise rather than trusting an address's domain; verified addresses, and signup restricted to a domain, are separate work.
 Help in the sidebar (`/help`, readable signed out) explains Assets, Groups, roles and the People directory.
 The persistent header searches accessible Assets by name on Enter; ⌘K or Ctrl+K focuses search and Escape blurs it.
@@ -471,6 +472,11 @@ Removing your last source of private access returns you to the inventory; other 
 Empty or unmanaged Groups retain collaboration, and account deletion never transfers authority.
 Collaboration does not grant access to another Group's identifier namespaces.
 The API uses `PUT /api/assets/{id}/collaboration/{groupKey}` to grant and `DELETE` at the same path to revoke, returning `{ "changed": true }` for a change or `{ "changed": false }` for an authorized no-op.
+Both operations recheck current authority; a retry after losing access returns 404, and removing the final Group returns 409.
+`reportedBy` grants no access and remains unchanged after the reporter leaves the Group.
+Marking an Asset public permits anyone with its Asset URI to read the full Asset representation, never to edit it.
+`Asset.id` is not a secret and grants no authorization; mutations remain Group-authorized.
+New Assets are private, and there are no direct User-to-Asset ACLs.
 
 ### Member and Group Manager
 
@@ -502,11 +508,6 @@ An administrator chooses the directory under Instance settings: everybody approv
 Being findable never says which Groups somebody is in: a profile shows only the Groups the viewer shares with that person, and a Group's roster is readable only by its own members.
 Anonymous visitors and accounts awaiting approval reach none of it, and a search matches an email address only where that address is shown.
 Results are bounded: a search narrows rather than pages through the instance.
-Both operations recheck current authority; a retry after losing access returns 404, and removing the final Group returns 409.
-`reportedBy` grants no access and remains unchanged after the reporter leaves the Group.
-Marking an Asset public permits anyone with its Asset URI to read the full Asset representation, never to edit it.
-`Asset.id` is not a secret and grants no authorization; mutations remain Group-authorized.
-New Assets are private, and there are no direct User-to-Asset ACLs.
 
 `GET /api/assets` keeps case-insensitive name-substring search through `q` and returns `assets`, `total`, `matching`, `scopes`, and `nextCursor`.
 Counts include only Assets the signed-in User can read; pages default to 30 entries, with `limit` between 1 and 100.

@@ -126,7 +126,8 @@ const sortChoices: [string, string][] = [
   ['name ascending', 'Name, A–Z'], ['name descending', 'Name, Z–A'],
   ['email ascending', 'Email, A–Z'], ['email descending', 'Email, Z–A'],
   ['joined descending', 'Joined, newest first'], ['joined ascending', 'Joined, oldest first'],
-  ['access ascending', 'Access, waiting first'], ['role ascending', 'Role, administrators first'],
+  ['access ascending', 'Access, waiting first'], ['access descending', 'Access, established first'],
+  ['role ascending', 'Role, administrators first'], ['role descending', 'Role, administrators last'],
 ];
 
 /** A column header that orders the table. The header names the column and

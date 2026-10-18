@@ -995,6 +995,13 @@ export class IdentityStore {
       await session.run(`MATCH (u:User) WHERE u.id IS NOT NULL
         SET u.role = CASE WHEN u.isAdmin = true THEN 'admin' ELSE coalesce(u.role, 'user') END
         REMOVE u.isAdmin`);
+      // An administrator takes part in the instance they administer, as one
+      // made an administrator is approved then. Accounts from before approval
+      // existed otherwise wait for one, so this keeps administration
+      // reachable to approve them.
+      await session.run(`MATCH (u:User {role: 'admin'})
+        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL AND u.approvedAt IS NULL
+        SET u.approvedAt = $now`, { now: new Date().toISOString() });
       await IdentityStore.verifyConstraints(session);
       await IdentityStore.verifyGroupRoles(session);
     } finally {
