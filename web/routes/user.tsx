@@ -17,8 +17,9 @@ export async function clientLoader({ params }: Route.ClientLoaderArgs) {
  *
  * It shows what Kannabi already tells anybody who can see this person's work,
  * and one number that is counted through the viewer's own readability. There
- * is no biography, no address and no Group list, because Kannabi does not hold
- * the first and is not entitled to publish the others.
+ * is no biography and no Group list, because Kannabi does not hold the first
+ * and is not entitled to publish the second. The address appears unless the
+ * People directory shows names only.
  */
 export default function UserPage({ loaderData: { profile } }: Route.ComponentProps) {
   return <>
@@ -33,7 +34,9 @@ export default function UserPage({ loaderData: { profile } }: Route.ComponentPro
       {profile.self && <Button render={<Link to="/settings" />}>Settings</Button>}
     </div>
     <Panel>
-      <dl className="grid grid-cols-[11rem_1fr] gap-[.8rem] text-[.9rem] [&_dd]:m-0 [&_dt]:text-muted-foreground">
+      <dl className="grid grid-cols-1 gap-x-[.8rem] gap-y-1 text-[.9rem] sm:grid-cols-[11rem_minmax(0,1fr)] sm:gap-y-[.8rem] [&_dd]:m-0 max-sm:[&_dd]:mb-3 [&_dt]:text-muted-foreground">
+        {profile.email && <><dt>Email</dt>
+          <dd className="min-w-0 [overflow-wrap:anywhere]"><a href={`mailto:${profile.email}`}>{profile.email}</a></dd></>}
         <dt>Assets reported</dt>
         <dd>{profile.reportedAssets}</dd>
       </dl>
@@ -43,4 +46,4 @@ export default function UserPage({ loaderData: { profile } }: Route.ComponentPro
     </Panel>
   </>;
 }
-export { WorkspaceError as ErrorBoundary } from '../route-error';
+export { PersonError as ErrorBoundary } from '../route-error';

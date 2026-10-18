@@ -91,6 +91,28 @@ test('the bar stops when Sonner stops, and keeps running when reduced motion is 
   assert.doesNotMatch(stylesheet, /motion-reduce[^\n]*kannabi-toast-lifetime/);
 });
 
+test('the toast rules outrank Sonner’s own, and keep the close button whole inside the toast', async () => {
+  // Sonner's stylesheet is injected unlayered, and an unlayered rule beats any
+  // layered one. Kept in a layer, the bar lost to Sonner's hover bridge and the
+  // close button stayed clipped in the corner.
+  for (const [, body] of stylesheet.matchAll(/@layer \w+ \{([\s\S]*?)\n\}/g)) {
+    assert.doesNotMatch(body, /data-sonner/, 'no toast rule inside a cascade layer');
+  }
+  assert.match(stylesheet, /\[data-sonner-toaster\] \[data-sonner-toast\]\[data-expanded="true"\]::after/);
+  const close = /\[data-close-button\] \{([^}]*)\}/.exec(stylesheet)?.[1] ?? '';
+  assert.match(close, /inset: \.5rem \.5rem auto auto/, 'inside the top-right corner');
+  assert.match(close, /transform: none/, 'not hung over the corner');
+  assert.match(close, /width: 1\.75rem/);
+  assert.match(stylesheet, /\[data-styled="true"\] \{ padding-inline-end: 2\.75rem; \}/, 'text never runs under it');
+  // Both kinds of toast get the button, and it dismisses.
+  for (const raiseOne of [() => notify('Saved'), () => notifyFailure('Refused')]) {
+    const view = await raise(raiseOne);
+    const button = document.querySelector<HTMLButtonElement>('[data-sonner-toast] [data-close-button]');
+    assert.ok(button?.getAttribute('aria-label'), 'the button has a name');
+    view.stop();
+  }
+});
+
 test('the instance decides how long a toast lives, within a readable range', () => {
   assert.equal(defaultToastSeconds, 5, 'the shipped lifetime is unchanged');
   assert.equal(minToastSeconds, 2);

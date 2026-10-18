@@ -14,6 +14,7 @@ import { WorkspaceHeader } from './workspace-header';
 import { notify } from './notify';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { Toaster } from '@/components/ui/sonner';
+import { AwaitingApproval, awaitsApproval } from './awaiting-approval';
 
 export async function clientLoader() {
   const [account, { settings }] = await Promise.all([
@@ -46,6 +47,8 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   const handles = matches.map((match) => match.handle);
   const publicContent = handles.some(isPublicShellHandle);
   const anonymousShell = usesAnonymousShell(handles, user !== null);
+  const awaiting = awaitsApproval({ signedIn: user !== null, approved: loaderData.approved, publicContent,
+    pathname: location.pathname });
   const busy = useNavigation().state !== 'idle';
   // The navigation width is a per-device viewing preference, so it is read
   // from local storage rather than fetched; reading it in the initializer
@@ -79,15 +82,20 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
   return <ThemeRuntimeContext.Provider value={{ themeId, setThemeId, appearance, setAppearance,
     colorScheme, setColorSchemePreview }}>
     <Toaster seconds={loaderData.toastSeconds} />
-    {anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
+    {awaiting ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy} error={actionData?.error}>
+      <AwaitingApproval name={user!.name} />
+    </AnonymousShell>
+      : anonymousShell ? <AnonymousShell themeId={theme.id} colorScheme={colorScheme} busy={busy}
       error={actionData?.error} publicContent={publicContent} />
       : <SidebarProvider open={!collapsed}
         onOpenChange={(open) => { setCollapsed(!open); cacheSidebarCollapsed(!open); }}
         style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.25rem' } as CSSProperties}>
         <a href="#workspace" className="fixed left-4 top-[-5rem] z-30 rounded-md bg-card px-3 py-2 text-foreground shadow-md focus:top-4">Skip to content</a>
-        <AppSidebar user={user} isAdmin={isAdmin} avatarHash={loaderData.avatarHash} busy={busy} />
+        <AppSidebar user={user} approved={loaderData.approved} isAdmin={isAdmin} avatarHash={loaderData.avatarHash}
+          busy={busy} />
         <SidebarInset className="min-w-0">
-          <WorkspaceHeader enabled={user !== null} search={workspaceHeader} />
+          {/* Asset search is participation, so a waiting account is not offered it. */}
+          <WorkspaceHeader enabled={user !== null} search={workspaceHeader && (user === null || loaderData.approved)} />
           <main id="workspace" tabIndex={-1} aria-busy={busy}
             className="mx-auto w-full max-w-[88rem] px-4 pt-8 pb-16 focus:outline-none sm:px-6 lg:px-10">
             {actionData?.error && <p role="alert">{actionData.error}</p>}<Outlet />

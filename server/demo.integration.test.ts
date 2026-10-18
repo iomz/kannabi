@@ -94,19 +94,21 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     // the fixture rather than from the query, so the two have to agree about
     // every account without either being able to explain the other away.
     for (const [index, account] of demoAccounts.entries()) {
-      const seen = await store.listMembers(users[index]);
+      const seen = (await store.listPeople(users[index], { limit: 100 })).people;
       assert.deepEqual(seen.map((person) => users.indexOf(person.key)).sort((a, b) => a - b),
         demoMembers(index), account.email);
-      // Workspace profiles use exactly the same boundary as Members.
+      // Profiles use exactly the same boundary as the directory.
       for (const [other] of demoAccounts.entries()) {
         const reachable = demoDiscoverable(index).includes(other);
         assert.equal(await store.userProfile(users[index], users[other]) !== null, reachable,
           `${account.email} -> ${demoAccounts[other].email}`);
       }
-      // Discovery never produces an address, however the person was reached.
+      // The default directory shows each person's address, and nothing else
+      // that carries one.
       for (const person of seen) {
-        assert.ok(!Object.values(person).some((value) =>
-          typeof value === 'string' && value.includes('@')), 'no address in the directory');
+        assert.equal(person.email, demoAccounts[users.indexOf(person.key)].email);
+        assert.ok(!Object.entries(person).some(([field, value]) => field !== 'email'
+          && typeof value === 'string' && value.includes('@')), 'no address outside its own field');
       }
     }
     let cursor: string | null = null;

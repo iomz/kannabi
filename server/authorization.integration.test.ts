@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -14,6 +15,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver);
+  await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const secret = randomUUID() + randomUUID();
   const auth = await createAuth(driver, origin, secret);
@@ -208,8 +210,10 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal('role' in result.asset.reportedBy, false);
       assert.equal('password' in result.asset.reportedBy, false);
       assert.equal(result.canEdit, false);
-      assert.equal(result.canViewReporterProfile, false,
-        'public Asset readability does not make reporter profile reachable');
+      // The People directory decides who may open a profile, never the Asset:
+      // a signed-in participant finds the reporter, a visitor finds nobody.
+      assert.equal(result.canViewReporterProfile, caller === stranger,
+        'public Asset readability neither grants nor withholds a profile');
       assert.equal((await caller.request(assetPath, 'PATCH', { name: 'Denied' })).status, editStatus);
     }
     assert.equal((await member.request(assetPath, 'PATCH', { isPublic: false })).status, 200);
@@ -217,15 +221,15 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   });
 
   await t.test('GIAI allocation is Group-authorized and idempotent over the API', async () => {
-    // Configuring a prefix takes membership and control of the managing Group;
+    // Configuring a prefix takes being a Group Manager of the managing Group;
     // outsiders cannot reach it, and since #20 neither can an ordinary member.
     assert.equal((await stranger.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 404);
     assert.equal((await anonymous.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 401);
     assert.equal((await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST', { gcp: '0614141' })).status, 404,
       'membership alone is no longer namespace authority');
-    // The Group's creator controls it and grants that control, which is how
+    // The Group's creator manages it and promotes the member, which is how
     // authority is obtained; the rest of this test then proceeds as before.
-    assert.equal((await reporter.request(`/groups/${groupKey}/control/${people[1].key}`, 'PUT')).status, 200);
+    assert.equal((await reporter.request(`/groups/${groupKey}/members/${people[1].key}`, 'PATCH', { role: 'manager' })).status, 200);
     const configured = await member.request(`/groups/${groupKey}/gs1-namespaces`, 'POST',
       { gcp: '0614141', giaiExclusions: [{ from: 1, to: 4 }] });
     assert.equal(configured.status, 201, await configured.clone().text());

@@ -5,16 +5,18 @@ import neo4j from 'neo4j-driver';
 import { Hono } from 'hono';
 import { createAuth } from './auth.js';
 import { IdentityStore, ReferenceError as AccessError, LastCollaborationError } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { assetPageRequest } from './asset-page.js';
 import { ApiTokenService } from './api-token.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
-test('multi-Group collaboration is explicit bilateral control, never ownership', { skip: !uri || !password }, async (t) => {
+test('multi-Group collaboration is explicit bilateral management, never ownership', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver);
+  await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
   const tokens = new ApiTokenService(auth, store);
@@ -64,13 +66,12 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     await store.updateAsset(asset.id, { isPublic: false }, aOnly.key);
   });
 
-  await t.test('both controls required; target control needs no target membership', async () => {
+  await t.test('both sides must be managed by the actor: source and receiving Group', async () => {
     const foreign = await store.createReportingGroup('Foreign', outsider.key);
     assert.equal((await bridge.call(edge(foreign.key), 'PUT')).status, 404, 'source control cannot replace receiver consent');
     await store.addGroupMember(bridge.key, a.key, outsider.key);
     assert.equal((await outsider.call(edge(foreign.key), 'PUT')).status, 404, 'target control plus ordinary source membership is insufficient');
     await store.leaveGroup(outsider.key, a.key);
-    await store.leaveGroup(bridge.key, b.key);
     const granted = await bridge.call(edge(b.key), 'PUT');
     assert.equal(granted.status, 200, await granted.clone().text());
     assert.deepEqual(await granted.json(), { changed: true });
@@ -158,7 +159,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     const results = await Promise.all(Array.from({ length: 6 }, () =>
       store.setAssetCollaboration(asset.id, bridge.key, b.key, true)));
     assert.equal(results.filter((r) => r.changed).length, 1);
-    await query('MATCH (u:User {key: $user}), (g:Group {key: $group}) CREATE (u)-[:CONTROLS]->(g)',
+    await query("MATCH (:User {key: $user})-[m:MEMBER_OF]->(:Group {key: $group}) SET m.role = 'manager'",
       { user: dual.key, group: b.key });
     const removals = await Promise.allSettled([
       store.setAssetCollaboration(asset.id, bridge.key, a.key, false),
@@ -172,16 +173,16 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     // Restore A then B using an actor who still has the required membership.
     await store.addGroupMember(bridge.key, b.key, bridge.key);
     for (const group of [a, b]) await store.setAssetCollaboration(asset.id, bridge.key, group.key, true);
-    await query('MATCH (:User {key: $user})-[r:CONTROLS]->(:Group {key: $group}) DELETE r',
+    await query("MATCH (:User {key: $user})-[m:MEMBER_OF]->(:Group {key: $group}) SET m.role = 'member'",
       { user: dual.key, group: b.key });
   });
 
   await t.test('writes waiting behind revocation recheck access before changing anything', async () => {
-    // bOnly is a member of B but not a controller, so since #20 it holds no
-    // authority over what B manages. bridge controls B and grants it, which is
-    // how authority is now obtained; this test is about writes racing a
+    // bOnly is a member of B but not a Group Manager, so since #20 it holds no
+    // authority over what B manages. bridge manages B and promotes it, which is
+    // how authority is obtained; this test is about writes racing a
     // revocation, not about who may configure.
-    await store.setGroupControl(bridge.key, b.key, bOnly.key, true);
+    await store.setMemberRole(bridge.key, b.key, bOnly.key, 'manager');
     const namespace = await store.configureGs1Namespace(bOnly.key, b.key, { gcp: '9521234' });
     const target = await store.reportAsset({ name: 'Revocation race' }, { actorKey: bridge.key, groupKey: a.key });
     await store.setAssetCollaboration(target.id, bridge.key, b.key, true);
@@ -264,9 +265,11 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     const source = await store.createReportingGroup('Withdrawal source', withdrawing.key);
     const receiver = await store.createReportingGroup('Withdrawal receiver', withdrawing.key);
     await store.addGroupMember(withdrawing.key, receiver.key, bOnly.key);
-    await store.leaveGroup(withdrawing.key, receiver.key);
     const target = await store.reportAsset({ name: 'Self withdrawal' }, { actorKey: withdrawing.key, groupKey: source.key });
     await store.setAssetCollaboration(target.id, withdrawing.key, receiver.key, true);
+    // Leaving the receiver ends that membership and its role together, so the
+    // source is the actor's last way to the Asset.
+    await store.leaveGroup(withdrawing.key, receiver.key);
     const endpoint = `/assets/${target.id}/collaboration/${source.key}`;
     const removed = await withdrawing.call(endpoint, 'DELETE');
     assert.equal(removed.status, 200);
@@ -278,7 +281,7 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     assert.deepEqual(retained?.groups, [receiver]);
   });
 
-  await t.test('controller-only cannot act; empty Groups persist; initial Group can leave', async () => {
+  await t.test('somebody who left cannot act; emptied Groups persist; initial Group can leave', async () => {
     await store.leaveGroup(bridge.key, a.key);
     await store.leaveGroup(bridge.key, b.key);
     assert.equal((await bridge.call(path)).status, 404);
@@ -286,11 +289,14 @@ test('multi-Group collaboration is explicit bilateral control, never ownership',
     assert.equal((await bridge.call(edge(b.key), 'PUT')).status, 404);
     await store.leaveGroup(dual.key, a.key);
     assert.equal((await store.getAsset(asset.id, bOnly.key))?.groups.length, 2, 'empty A stays attached');
-    await store.addGroupMember(bridge.key, b.key, bridge.key);
+    // A Group Manager of A, with access through it, removes it: the initial
+    // Group has no special authority. Rejoined directly, since nobody left in
+    // A manages it.
+    await store.addMember(bridge.key, a.key, 'manager');
     assert.equal((await bridge.call(edge(a.key), 'DELETE')).status, 200, 'initial Group has no special authority');
     assert.equal((await store.getAsset(asset.id, bOnly.key))?.groups[0].key, b.key);
     await store.deactivateOwnAccount(bridge.key);
-    assert.equal((await bOnly.call(path)).status, 200, 'controller deletion does not remove collaboration');
+    assert.equal((await bOnly.call(path)).status, 200, 'a Group Manager’s deletion does not remove collaboration');
     const page = await store.findAssets(dual.key, assetPageRequest({}));
     assert.equal(page.assets.filter((entry) => entry.id === asset.id).length, 1);
   });

@@ -116,7 +116,7 @@ test('demo refuses buckets that could retain hidden media versions', () => {
   for (const status of ['Enabled', 'Suspended', 'unknown']) assert.throws(() => requireUnversionedBucket(status));
 });
 
-test('the demo cast makes Members and User profile reachability inspectable', () => {
+test('the demo cast makes the People directory inspectable', () => {
   // Fictional identities only, and enough of them that each way of being
   // discoverable — and of not being — is represented by somebody.
   assert.equal(demoAccounts.length, 10);
@@ -138,26 +138,12 @@ test('the demo cast makes Members and User profile reachability inspectable', ()
   // the seed has always verified.
   assert.deepEqual(demoScopes(0), evaluatorScopes);
 
-  // Administration never broadens Workspace profiles or Asset access.
-  for (const index of demoAdministrators) assert.deepEqual(demoDiscoverable(index), demoMembers(index));
-  assert.ok(demoMembers(9).length < demoAccounts.length,
-    'administrator status does not broaden Workspace Members');
-  assert.ok(demoScopes(9).all < demoScopes(0).all, 'an administrator is not an Asset superuser');
-
-  const seenBy = (viewer: number) => new Set(demoDiscoverable(viewer));
-  // Somebody in a Group of their own is visible only to themself.
-  const alone = 6;
-  const finds = demoAccounts.flatMap((_, viewer) => (seenBy(viewer).has(alone) ? [viewer] : []));
-  assert.deepEqual(finds, [alone], 'only themselves');
-
-  // Sharing a Group is enough on its own: these two have reported nothing.
-  for (const quiet of [3, 8]) {
-    assert.equal(demoScopes(quiet).mine, 0);
-    assert.ok(seenBy(0).has(quiet) && seenBy(3).has(quiet) && !seenBy(1).has(quiet),
-      'seen by the Group they share, not beyond it');
+  // The People directory is instance-wide by default: every demo account is
+  // approved, so each finds every other. Administration still grants no
+  // Asset access, and which Groups somebody is in is never part of it.
+  for (const viewer of demoAccounts.keys()) {
+    assert.deepEqual(demoMembers(viewer), [...demoAccounts.keys()]);
+    assert.deepEqual(demoDiscoverable(viewer), demoMembers(viewer));
   }
-  // Readable reporting provenance is not enough without a shared Group.
-  assert.ok(!demoGroupMembers.some((members) => members.includes(1) && members.includes(5)));
-  assert.ok(!seenBy(1).has(5), 'not known through their work alone');
-  assert.ok(!demoMembers(1).includes(5), 'reporter-only reachability does not enumerate a Member');
+  assert.ok(demoScopes(9).all < demoScopes(0).all, 'an administrator is not an Asset superuser');
 });

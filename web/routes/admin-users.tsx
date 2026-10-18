@@ -2,8 +2,9 @@ import { Form, Link, redirect, useNavigation } from 'react-router';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, unwrap } from '../api';
 import { DestructiveConfirmation } from '../destructive-confirmation';
+import { ConfirmedAct } from '../group-destination';
 import { displayInstant } from '../../server/settings';
-import { filterUsers } from '../user-filter';
+import { filterUsers, nextUserSort, sortUsers, type UserSort, type UserSortColumn } from '../user-filter';
 import { userAccessLabel } from '../user-access';
 import { notify } from '../notify';
 import type { UserAccount } from '../../server/identity-store';
@@ -16,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ActionRow, EmptyState, Field, Hint, PageHeading, StatusPill,
-  stackedTable, stackedTableFrame } from '../ui';
+  NativeSelect, stackedTable, stackedTableFrame } from '../ui';
 
 type UserAction = { intent: string; key: string | null; saved: boolean; message?: string; error: string | null };
 
@@ -55,6 +56,16 @@ export async function clientAction({ request }: Route.ClientActionArgs): Promise
       await unwrap(await api.admin.users[':key'].recovery.$post({ param: { key } }));
       return { intent, key, saved: true, message: 'Email requested.', error: null };
     }
+    if (intent === 'approve') {
+      const { changed } = await unwrap(await api.admin.users[':key'].approval.$post({ param: { key } }));
+      return { intent, key, saved: true, message: changed ? `${String(data.get('name') ?? 'Account')} approved.` : 'Already approved.', error: null };
+    }
+    // Rejecting a waiting account is deleting it: it has taken part in
+    // nothing, so nothing of it needs keeping, and its owner may apply again.
+    if (intent === 'reject') {
+      await unwrap(await api.admin.users[':key'].$delete({ param: { key } }));
+      return { intent, key, saved: true, message: `${String(data.get('name') ?? 'Account')} rejected.`, error: null };
+    }
     if (intent === 'delete') {
       await unwrap(await api.admin.users[':key'].$delete({ param: { key } }));
       return { intent, key, saved: true, message: 'User deleted.', error: null };
@@ -71,10 +82,68 @@ function Feedback({ actionData, intent, userKey }: { actionData?: UserAction; in
 }
 
 function AccessBadge({ user }: { user: UserAccount }) {
+  if (!user.approvedAt) return <Badge variant="outline">Waiting for approval</Badge>;
   const established = user.credentialState === 'established';
   return <Badge variant="secondary"
     className={established ? 'bg-success-surface text-success-text' : undefined}>
     {userAccessLabel(user.credentialState)}</Badge>;
+}
+
+/** Accounts that signed up and wait for an administrator.
+ *
+ * Kannabi does not verify email addresses yet, so an address here is what the
+ * applicant typed, not proof they own it: approve people you recognise. A
+ * waiting account reaches only its own account and public Assets. */
+function Approvals({ waiting, actionData }: { waiting: UserAccount[]; actionData?: UserAction }) {
+  const busy = useNavigation().state !== 'idle';
+  const [rejecting, setRejecting] = useState<UserAccount | null>(null);
+  if (!waiting.length) return null;
+  return <section aria-labelledby="approvals-heading" className="mb-6 rounded-lg border border-warning-border bg-card p-4">
+    <h2 id="approvals-heading" className="mt-0 text-base">Waiting for approval</h2>
+    <Hint className="mb-3">Email addresses are not verified: an address is what the person typed. Approve people
+      you recognise.</Hint>
+    <ul className="grid gap-2">{waiting.map((user) => <li key={user.key}
+      className="flex flex-wrap items-center justify-between gap-3 border-t pt-2 first:border-t-0 first:pt-0">
+      <span className="grid min-w-0"><strong className="[overflow-wrap:anywhere]">{user.name}</strong>
+        <span className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{user.email}</span></span>
+      <span className="flex gap-2">
+        <Form method="post"><input type="hidden" name="intent" value="approve" />
+          <input type="hidden" name="key" value={user.key} /><input type="hidden" name="name" value={user.name} />
+          <Button type="submit" size="sm" disabled={busy} aria-label={`Approve ${user.name}`}>Approve</Button></Form>
+        <Button type="button" size="sm" variant="outline" disabled={busy} aria-label={`Reject ${user.name}`}
+          onClick={() => setRejecting(user)}>Reject</Button>
+      </span>
+      <Feedback actionData={actionData} intent="approve" userKey={user.key} />
+    </li>)}</ul>
+    <ConfirmedAct open={rejecting !== null} onClose={() => setRejecting(null)} confirmLabel="Reject"
+      title={`Reject ${rejecting?.name ?? ''}?`}
+      description="Their account is deleted. They have taken part in nothing, so nothing of it is kept, and they may sign up again."
+      fields={{ intent: 'reject', key: rejecting?.key ?? '', name: rejecting?.name ?? '' }} />
+  </section>;
+}
+
+const sortChoices: [string, string][] = [
+  ['name ascending', 'Name, A–Z'], ['name descending', 'Name, Z–A'],
+  ['email ascending', 'Email, A–Z'], ['email descending', 'Email, Z–A'],
+  ['joined descending', 'Joined, newest first'], ['joined ascending', 'Joined, oldest first'],
+  ['access ascending', 'Access, waiting first'], ['access descending', 'Access, established first'],
+  ['role ascending', 'Role, administrators first'], ['role descending', 'Role, administrators last'],
+];
+
+/** A column header that orders the table. The header names the column and
+ * the state is `aria-sort`, so the control is a button inside the header
+ * rather than the header itself. */
+function SortableHead({ column, label, sort, onSort }: {
+  column: UserSortColumn; label: string; sort: UserSort | null; onSort(column: UserSortColumn): void;
+}) {
+  const current = sort?.column === column ? sort.direction : null;
+  return <TableHead aria-sort={current ?? 'none'}>
+    <button type="button" onClick={() => onSort(column)}
+      className="inline-flex items-center gap-1 font-[inherit] text-inherit hover:underline">
+      {label}<span aria-hidden="true" className="text-muted-foreground">
+        {current === 'ascending' ? '↑' : current === 'descending' ? '↓' : '↕'}</span>
+    </button>
+  </TableHead>;
 }
 
 /** A section of a User account, each saved on its own. */
@@ -158,7 +227,10 @@ export default function Users({ loaderData: { users, settings, actorKey }, actio
   const [query, setQuery] = useState('');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const matching = filterUsers(users, query);
+  const [sort, setSort] = useState<UserSort | null>(null);
+  const matching = sortUsers(filterUsers(users, query), sort);
+  const head = (column: UserSortColumn, label: string) => <SortableHead column={column} label={label} sort={sort}
+    onSort={(chosen) => setSort((current) => nextUserSort(current, chosen))} />;
   useEffect(() => {
     if (actionData?.saved && actionData.message) notify(actionData.message);
   }, [actionData]);
@@ -167,14 +239,26 @@ export default function Users({ loaderData: { users, settings, actorKey }, actio
     <PageHeading eyebrow="Administration" title="Users" description={`${users.length} active users`}>
       <Button onClick={() => setCreating(true)}>Create user</Button>
     </PageHeading>
+    <Approvals waiting={users.filter((user) => !user.approvedAt)} actionData={actionData} />
     <div className="mb-4 flex max-w-[40rem] items-center gap-4 max-sm:flex-col max-sm:items-stretch max-sm:gap-[.45rem]">
       <Label htmlFor="user-search" className="sr-only">Search users by name or email</Label>
       <Input id="user-search" type="search" className="bg-card" placeholder="Search users by name or email…"
         value={query} onChange={(event) => setQuery(event.currentTarget.value)} autoComplete="off" />
-      {query && <span aria-live="polite" className="whitespace-nowrap text-[.8rem] text-muted-foreground">{matching.length} matching</span>}</div>
+      {query && <span aria-live="polite" className="whitespace-nowrap text-[.8rem] text-muted-foreground">{matching.length} matching</span>}
+      {/* The headers that order the table are not shown on a phone, where each
+          row is a card, so the same choice is a native select there. */}
+      <Label className="grid gap-1 sm:hidden">Sort by
+        <NativeSelect value={sort ? `${sort.column} ${sort.direction}` : ''}
+          onChange={(event) => {
+            const [column, direction] = event.currentTarget.value.split(' ');
+            setSort(column ? { column, direction } as UserSort : null);
+          }}>
+          <option value="">As loaded</option>
+          {sortChoices.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </NativeSelect></Label></div>
     {matching.length ? <div className={stackedTableFrame}><Table className={stackedTable}>
-      <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead>
-        <TableHead>Joined</TableHead><TableHead>Access</TableHead><TableHead>Role</TableHead></TableRow></TableHeader>
+      <TableHeader><TableRow>{head('name', 'Name')}{head('email', 'Email')}{head('joined', 'Joined')}
+        {head('access', 'Access')}{head('role', 'Role')}</TableRow></TableHeader>
       <TableBody>{matching.map((user) => <TableRow key={user.key}>
         <TableCell data-label="Name"><Button type="button" variant="link" className="h-auto p-0 font-semibold underline underline-offset-2"
           onClick={() => setSelectedKey(user.key)}>{user.name}</Button></TableCell>

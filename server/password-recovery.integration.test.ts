@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailDeliveryError, type Mailer, type MailMessage } from './mail.js';
 import { passwordResetPrefix } from './password-recovery.js';
@@ -44,6 +45,7 @@ test('Better Auth password recovery uses Mailer, consumes tokens, clears sibling
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', databasePassword!));
     t.after(() => driver.close());
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const mailer = new CaptureMailer();
     const auth = await createAuth(driver, origin, randomBytes(32).toString('hex'), mailer);

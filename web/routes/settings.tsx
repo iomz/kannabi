@@ -5,7 +5,7 @@ import { ThemeSelector } from '../theme-selector';
 import { TimezonePicker } from '../timezone-picker';
 import type { ThemeId } from '../../shared/theme';
 import type { MailConfiguration, MailSecurity, PasswordAction } from '../../server/mail';
-import { maxToastSeconds, minToastSeconds, type Settings } from '../../server/settings';
+import { maxToastSeconds, minToastSeconds, peopleDirectories, type PeopleDirectory, type Settings } from '../../server/settings';
 import { mailPasswordAction } from '../mail-form';
 import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
@@ -67,6 +67,12 @@ function mailStatus(mail: MailConfiguration) {
   return { value: mail.verificationStatus, label: labels[mail.verificationStatus] };
 }
 
+const directoryLabels: Record<PeopleDirectory, string> = {
+  everyone: 'Everybody approved can find everybody, with their email address',
+  names: 'Everybody approved can find everybody, by name only',
+  shared: 'People find only those they share a Group with',
+};
+
 export async function clientAction({ request }: Route.ClientActionArgs) {
   const data = await request.formData();
   const intent = String(data.get('intent') ?? '');
@@ -83,6 +89,8 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         showAssetId: data.get('showAssetId') === 'on',
         showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
         enforceGtinConsistency: data.get('enforceGtinConsistency') === 'on',
+        requireApproval: data.get('requireApproval') === 'on',
+        peopleDirectory: String(data.get('peopleDirectory') ?? '') as PeopleDirectory,
       } });
       // Enforcement refused because Assets still conflict: the body names
       // them, which a plain error message cannot.
@@ -297,7 +305,8 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
       toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
       showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '',
-      enforceGtinConsistency: next.enforceGtinConsistency ? 'on' : '' },
+      enforceGtinConsistency: next.enforceGtinConsistency ? 'on' : '',
+      requireApproval: next.requireApproval ? 'on' : '', peopleDirectory: next.peopleDirectory },
     { method: 'post', action: '/admin/settings' });
   }
   function preview(mode: 'light' | 'dark') {
@@ -337,6 +346,21 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           onCheckedChange={(enforceGtinConsistency) => update({ enforceGtinConsistency })}
           label="Enforce GTIN consistency" />
         <p className={settingHelp}>Require GTINs associated with the same Asset to match, including those embedded in SGTINs.</p>
+        <Switch name="requireApproval" checked={current.requireApproval} disabled={busy}
+          onCheckedChange={(requireApproval) => update({ requireApproval })}
+          label="Require approval for new accounts" />
+        <p className={settingHelp}>Anybody who can reach this instance can sign up. While this is on, a new account waits under Users until an administrator approves it, and until then reaches only its own account and public Assets. Accounts an administrator creates are approved at once.</p>
+        {/* Native radios: three exclusive choices, all visible, each saved as
+            it is chosen, as every simple preference here is. */}
+        <fieldset className="mb-[1.15rem] grid gap-2 text-sm" aria-describedby="people-directory-help">
+          <legend className="mb-1 font-[550]">People directory</legend>
+          {peopleDirectories.map((value) => <label key={value} className="flex items-start gap-2">
+            <input type="radio" name="peopleDirectory" value={value} className="mt-1" disabled={busy}
+              checked={current.peopleDirectory === value} onChange={() => update({ peopleDirectory: value })} />
+            <span>{directoryLabels[value]}</span>
+          </label>)}
+        </fieldset>
+        <p id="people-directory-help" className={settingHelp}>Who approved people can find on People and when adding people to a Group. Which Groups somebody belongs to is shown only to people in the same Group. Administration → Users is unaffected.</p>
         <TimezonePicker name="displayTimezone" value={current.displayTimezone} disabled={busy}
           onChange={(displayTimezone) => update({ displayTimezone })} />
         <p className={settingHelp}>Timestamps remain stored as absolute instants.</p>

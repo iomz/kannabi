@@ -12,8 +12,8 @@ async function redirects(loader: () => unknown, destination: string) {
   });
 }
 
-test('legacy User directory route redirects to Workspace Members', async () => {
-  await redirects(legacyUsers, '/members');
+test('legacy User directory route redirects to People', async () => {
+  await redirects(legacyUsers, '/people');
 });
 
 test('legacy administration Members route redirects to Users', async () => {

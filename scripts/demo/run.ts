@@ -64,6 +64,12 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       if (!response.user.key) throw new Error('Demo signup did not produce a domain User');
       users.push(response.user.key);
     }
+    // The seed is the operator here, as it is for the administrator grant below:
+    // every demo account is an approved participant from the start. A fresh
+    // signup through the application still waits for approval, which is how to
+    // see that flow.
+    await session.run('MATCH (u:User) WHERE u.key IN $keys SET u.approvedAt = $now',
+      { keys: users, now: new Date().toISOString() });
     // Same explicit administrative grant as admin:grant; it grants no Asset access.
     for (const index of demoAdministrators) {
       await session.run("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.isAdmin", { key: users[index] });
@@ -133,9 +139,9 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
           throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected ${scope} Assets`);
         }
       }
-      const members = (await store.listMembers(users[index])).map((person) => users.indexOf(person.key));
+      const members = (await store.listPeople(users[index], { limit: 100 })).people.map((person) => users.indexOf(person.key));
       if (JSON.stringify([...members].sort((a, b) => a - b)) !== JSON.stringify(demoMembers(index))) {
-        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected Members`);
+        throw new Error(`Demo verification failed: ${demoAccounts[index].email} sees unexpected People`);
       }
       for (const [target] of demoAccounts.entries()) {
         if ((await store.userProfile(users[index], users[target]) !== null) !== demoDiscoverable(index).includes(target)) {

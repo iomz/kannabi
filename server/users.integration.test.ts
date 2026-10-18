@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
+import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import type { Mailer, MailMessage } from './mail.js';
 
@@ -35,6 +36,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
     const store = await IdentityStore.open(driver);
+    await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const mailer = new CaptureMailer();
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID(), mailer);
@@ -82,17 +84,20 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       })).status, 404);
     });
 
-    await t.test('Workspace Members stays Group-derived for users and administrators', async () => {
-      const before = await Promise.all([admin('/members'), member('/members')]);
-      assert.deepEqual((await before[0].json()).members.map((user: { key: string }) => user.key), [keys[0]]);
-      assert.deepEqual((await before[1].json()).members.map((user: { key: string }) => user.key), [keys[1]]);
-
+    await t.test('the People directory is the instance’s, the same for users and administrators', async () => {
+      // By default every approved person finds every other, an administrator
+      // no more than anybody else, and no Group is shown that is not shared.
+      for (const caller of [admin, member]) {
+        const listed = (await (await caller('/people')).json()).people as { key: string; sharedGroups: unknown[] }[];
+        assert.deepEqual(listed.map((user) => user.key).sort(), [...keys].sort());
+        assert.ok(listed.every((user) => user.sharedGroups.length === 0));
+      }
       const group = await store.createReportingGroup('Shared workspace', keys[1]);
       await store.addGroupMember(keys[1], group.key, keys[0]);
       for (const caller of [admin, member]) {
-        const response = await caller('/members');
+        const response = await caller('/people');
         assert.equal(response.status, 200);
-        const listed = (await response.json()).members as { key: string; sharedGroups: { name: string }[] }[];
+        const listed = (await response.json()).people as { key: string; sharedGroups: { name: string }[] }[];
         assert.deepEqual(listed.map((user) => user.key).sort(), [...keys].sort());
         assert.ok(listed.every((user) => user.sharedGroups.map((shared) => shared.name)
           .includes('Shared workspace')));
@@ -139,7 +144,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       try {
         const result = await session.run(`MATCH (a:Asset {name: 'Self-deleted provenance'})-[:REPORTED_BY]->(u:User {key: $key}),
           (g:Group {key: $groupKey})
-          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF|CONTROLS]->(state)
+          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF]->(state)
           RETURN u.id IS NULL AS deleted, u.name IS NULL AS activeNameRemoved, u.email IS NULL AS anonymized,
             u.accountDeletedAt IS NOT NULL AS marked, u.key AS reporterKey, u.provenanceName AS provenanceName,
             count(state) AS stateCount,
@@ -238,7 +243,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       try {
         const result = await session.run(`MATCH (a:Asset {name: 'Retained provenance'})-[:REPORTED_BY]->(u:User {key: $key}),
           (g:Group {key: $groupKey})
-          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF|CONTROLS]->(state)
+          OPTIONAL MATCH (u)-[:HAS_AUTHACCOUNT|HAS_AUTHSESSION|MEMBER_OF]->(state)
           RETURN u.id IS NULL AS deleted, u.name IS NULL AS activeNameRemoved, u.email IS NULL AS anonymized,
             u.accountDeletedAt IS NOT NULL AS marked, u.key AS reporterKey, u.provenanceName AS provenanceName,
             count(state) AS stateCount,

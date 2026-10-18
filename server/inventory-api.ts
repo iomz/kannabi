@@ -15,7 +15,7 @@ import { basisReference, type ChangeOrigin } from './change-provenance.js';
 import { validateCreateApiToken, type ApiTokenService, type TokenCredential } from './api-token.js';
 import { assetId } from './asset-id.js';
 import { identifierInputFields } from './gs1.js';
-import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
+import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
 
@@ -69,6 +69,13 @@ function changeOrigin(c: Context<Env>): ChangeOrigin {
   };
 }
 
+/** What an account waiting for approval may still reach: itself, and the
+ * public settings every visitor reads. */
+function ownAccountPath(pathname: string): boolean {
+  const path = pathname.replace(/^\/api/, '');
+  return path === '/me' || path === '/settings' || path === '/profile' || path.startsWith('/profile/');
+}
+
 function memberAuthError(error: unknown, fallback: string): never {
   if (!isAPIError(error)) throw error;
   if (error.statusCode === 401) throw new HTTPException(401, { message: 'Sign in required' });
@@ -115,8 +122,15 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         ? { id: session.session.id, label, admin: session.session.apiTokenAdmin === true } : null;
       const authenticated = bearer ? Boolean(token) : Boolean(session);
       c.set('token', token);
-      c.set('user', authenticated && session && key
-        ? { key, name: session.user.name, email: session.user.email } : null);
+      const user = authenticated && session && key
+        ? { key, name: session.user.name, email: session.user.email } : null;
+      // An account waiting for approval is signed in to its own account and to
+      // nothing else: everywhere else it is answered as an anonymous visitor,
+      // so it reads public Assets exactly as anybody may and reaches no
+      // directory, Group or change. Read per request, so approval or deletion
+      // takes effect at once.
+      const pending = user !== null && !await store.isParticipant(user.key);
+      c.set('user', pending && !ownAccountPath(new URL(c.req.url).pathname) ? null : user);
       await next();
     })
     // Administrator operations are reachable with a browser session, or with a
@@ -194,6 +208,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         } });
         await auth.api.requestPasswordReset({ body: { email: created.user.email } });
         const createdUser = created.user as typeof created.user & { key: string };
+        // An administrator creating an account has already decided it belongs.
+        await store.approveUser(actor(c.get('user')), createdUser.key);
         return c.json({ user: await store.profile(createdUser.key), recoveryRequested: true }, 201);
       } catch (error) { memberAuthError(error, 'User could not be created'); }
     })
@@ -237,17 +253,22 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeFor(actor(c.get('user')), c.req.param('key'), c.req.param('id'));
       return c.json({ revoked: true });
     })
+    // Approving lets a waiting account take part. Rejecting is the deletion
+    // below: a rejected applicant keeps no account.
+    .post('/admin/users/:key/approval', async (c) => c.json(
+      await store.approveUser(actor(c.get('user')), c.req.param('key'))))
     .delete('/admin/users/:key', async (c) => {
       await store.deactivateUser(actor(c.get('user')), c.req.param('key'));
       return c.json({ deleted: true });
     })
-    .get('/admin/groups/uncontrolled', async (c) =>
-      c.json({ groups: await store.listUncontrolledGroups(actor(c.get('user'))) }))
+    .get('/admin/groups/unmanaged', async (c) =>
+      c.json({ groups: await store.listUnmanagedGroups(actor(c.get('user'))) }))
+    // Recovery promotes one of the Group's own members, never anybody else.
     .post('/admin/groups/:key/recover', validator('json', (value) => {
       const input = record(value, ['userKey']);
       return { userKey: requiredText(input.userKey, 'userKey') };
     }), async (c) => {
-      await store.recoverGroupControl(actor(c.get('user')), c.req.param('key'), c.req.valid('json').userKey);
+      await store.appointGroupManager(actor(c.get('user')), c.req.param('key'), c.req.valid('json').userKey);
       return c.json({ ok: true });
     })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
@@ -325,10 +346,15 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       await tokens.revokeOwn(actor(c.get('user')), c.req.param('id'));
       return c.json({ revoked: true });
     })
-    // Workspace Members and individual User profiles share one boundary:
-    // self, or active Users joined through at least one shared Group.
-    .get('/members', async (c) => c.json({ members: await store.listMembers(actor(c.get('user'))) }))
-    // A User page, for somebody the viewer can already see. It grants no Asset
+    // The People directory, and individual User profiles, share one boundary:
+    // the instance's People directory setting, for approved accounts only.
+    // A search narrows it; there is no paging through the whole instance.
+    .get('/people', async (c) => {
+      const limit = c.req.query('limit');
+      return c.json(await store.listPeople(actor(c.get('user')), {
+        query: c.req.query('q') ?? null, limit: limit === undefined ? undefined : Number(limit) }));
+    })
+    // A User page, for somebody the viewer can already find. It grants no Asset
     // access: the count it shows is counted through the viewer's own
     // readability, and an unreachable person is absent rather than refused.
     .get('/users/:key', async (c) => {
@@ -336,31 +362,34 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       if (!profile) return c.json({ error: 'User not found' }, 404);
       return c.json({ profile });
     })
-    .get('/groups', async (c) => c.json({ groups: await store.listGroups(actor(c.get('user'))) }))
-    .get('/groups/controlled', async (c) =>
-      c.json({ groups: await store.listControlledGroups(actor(c.get('user'))) }))
+    .get('/groups', async (c) => c.json({ groups: await store.listMyGroups(actor(c.get('user'))) }))
     .post('/groups', validator('json', (value) => {
       const input = record(value, ['name']);
       return { name: requiredText(input.name, 'name') };
     }), async (c) => c.json({ group: await store.createReportingGroup(c.req.valid('json').name, actor(c.get('user'))) }, 201))
+    // A Group as the viewer stands in it, answered only to its members and
+    // otherwise exactly as for an unknown Group.
+    .get('/groups/:key', async (c) =>
+      c.json(await store.groupRelationship(actor(c.get('user')), c.req.param('key'))))
+    // A Group's people and their roles, for any of its members. Adding,
+    // changing a role and removing are its Group Managers'.
+    .get('/groups/:key/members', async (c) => c.json({
+      members: await store.listGroupMembers(actor(c.get('user')), c.req.param('key')) }))
     .post('/groups/:key/members', validator('json', (value) => {
-      const input = record(value, ['userKey']);
-      return { userKey: requiredText(input.userKey, 'userKey') };
+      const input = record(value, ['userKey', 'role']);
+      return { userKey: requiredText(input.userKey, 'userKey'),
+        role: input.role === undefined ? 'member' as const : groupRole(input.role) };
     }), async (c) => {
-      const added = await store.addGroupMember(actor(c.get('user')), c.req.param('key'), c.req.valid('json').userKey);
+      const { userKey, role } = c.req.valid('json');
+      const added = await store.addGroupMember(actor(c.get('user')), c.req.param('key'), userKey, role);
       return c.json({ ok: true, added });
     })
-    // Group administration, shaped like the collaboration routes: control is a
-    // relationship between a User and a Group, so the address names both and
-    // the verb says which way it goes.
-    .get('/groups/:key/control', async (c) => c.json({
-      controllers: await store.listGroupControllers(actor(c.get('user')), c.req.param('key')) }))
-    .put('/groups/:key/control/:userKey', async (c) => c.json(
-      await store.setGroupControl(actor(c.get('user')), c.req.param('key'),
-        c.req.param('userKey'), true)))
-    .delete('/groups/:key/control/:userKey', async (c) => c.json(
-      await store.setGroupControl(actor(c.get('user')), c.req.param('key'),
-        c.req.param('userKey'), false)))
+    .patch('/groups/:key/members/:userKey', validator('json', (value) =>
+      ({ role: groupRole(record(value, ['role']).role) })), async (c) => c.json(
+      await store.setMemberRole(actor(c.get('user')), c.req.param('key'), c.req.param('userKey'),
+        c.req.valid('json').role)))
+    .delete('/groups/:key/members/:userKey', async (c) => c.json(
+      await store.removeGroupMember(actor(c.get('user')), c.req.param('key'), c.req.param('userKey'))))
     .delete('/groups/:key/membership', async (c) => {
       await store.leaveGroup(actor(c.get('user')), c.req.param('key'));
       return c.json({ ok: true });

@@ -145,30 +145,53 @@
  * The bar therefore tracks the toast's real lifetime rather than running an
  * animation that happens to take the same time. The duration is inherited from
  * the toaster, or overridden per toast by a caller that asked for its own.
+ *
+ * Unlayered on purpose: Sonner injects an unlayered stylesheet, which outranks
+ * any layered rule, so inside a layer the bar lost to Sonner's own `::after`
+ * and left the toast exactly when it should have paused. Each rule here is one
+ * step more specific than the Sonner rule it meets.
  */
-@layer components {
-  @keyframes kannabi-toast-lifetime { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes kannabi-toast-lifetime { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
-  [data-sonner-toast] { position: relative; overflow: hidden; }
-  [data-sonner-toast]::after {
-    content: '';
-    position: absolute;
-    inset-inline: 0;
-    bottom: 0;
-    height: 2px;
-    background: currentColor;
-    opacity: .35;
-    transform-origin: left center;
-    animation: kannabi-toast-lifetime var(--kannabi-toast-duration, 5s) linear forwards;
-  }
-  /* Hovering or focusing expands the stack, which is exactly when Sonner stops
-     its timer, so the bar stops with it. */
-  [data-sonner-toast][data-expanded="true"]::after,
-  [data-kannabi-document-hidden="true"] [data-sonner-toast]::after {
-    animation-play-state: paused;
-  }
-  /* The countdown is the only thing saying when this disappears, so it is
-     information rather than decoration and reduced motion does not remove it. */
+[data-sonner-toaster] [data-sonner-toast] { overflow: hidden; } /* the bar keeps to the corners */
+[data-sonner-toaster] [data-sonner-toast]::after,
+[data-sonner-toaster] [data-sonner-toast][data-expanded="true"]::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0; width: auto;
+  height: 2px;
+  background: currentColor;
+  opacity: .35;
+  transform-origin: left center;
+  animation: kannabi-toast-lifetime var(--kannabi-toast-duration, 5s) linear forwards;
+}
+/* Expanded (hover or focus) is exactly when Sonner's timer stops. */
+[data-sonner-toaster] [data-sonner-toast][data-expanded="true"]::after,
+[data-kannabi-document-hidden="true"] [data-sonner-toast]::after {
+  animation-play-state: paused;
+}
+/* The countdown is information, not decoration: reduced motion keeps it. */
+
+/** The close button, whole and inside the top-right corner. Sonner hangs it
+ * over the top-left corner, where the bar's clipping cut it to a sliver. The
+ * toast keeps room for it, and its colours are the theme's: the theme
+ * attribute outranks Sonner's fixed per-scheme greys. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] { padding-inline-end: 2.75rem; }
+[data-sonner-toaster][data-sonner-theme] [data-sonner-toast][data-styled="true"] [data-close-button] {
+  inset: .5rem .5rem auto auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  transform: none;
+  border-color: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--kannabi-text-muted);
+}
+[data-sonner-toaster][data-sonner-theme] [data-sonner-toast][data-styled="true"]:hover [data-close-button]:hover,
+[data-sonner-toaster][data-sonner-theme] [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+  border-color: var(--kannabi-border);
+  background: var(--kannabi-surface-hover);
+  color: var(--kannabi-text);
 }
 
 @layer base {

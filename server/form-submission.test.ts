@@ -2,8 +2,9 @@ import './dom.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement, type FormEvent } from 'react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, Outlet, RouterProvider } from 'react-router';
 import Groups, { clientAction as groupAction } from '../web/routes/groups.js';
+import GroupPrefixes, { clientAction as prefixesAction } from '../web/routes/group-prefixes.js';
 import AssetPage, { clientAction as assetAction } from '../web/routes/asset.js';
 import { mount, settle } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
@@ -19,9 +20,19 @@ const namespaces = [true, false].map((active) => ({ key: active ? 'active' : 'in
   counters: { giai: counter, graiType: counter, gtinItem: counter },
   classKeyIssuable: true, unissuableReason: null, gtinFormat: 'GTIN-12', group }));
 
+/** A Group's GS1 prefixes view, inside the Group page that supplies who the
+ * viewer is to it. */
+function prefixesRouter(role: 'member' | 'manager', loaderData: object) {
+  return createMemoryRouter([{ path: '/groups/:key',
+    element: createElement(Outlet, { context: { group, viewer: { role } } }),
+    children: [{ path: 'prefixes', element: createElement(GroupPrefixes, { loaderData } as never),
+      action: (args) => prefixesAction(args as never) }],
+  }], { initialEntries: ['/groups/workshop/prefixes'] });
+}
+
 /** Click the rendered control: calling a route action directly misses broken
  * submit semantics between Base UI, the browser form, and React Router. */
-test('every existing Group form submits its intended API mutation on click', async () => {
+test('every existing GS1 prefix form submits its intended API mutation on click', async () => {
   const originalFetch = globalThis.fetch;
   const calls: { path: string; method: string; body: unknown }[] = [];
   globalThis.fetch = async (input, init) => {
@@ -29,22 +40,14 @@ test('every existing Group form submits its intended API mutation on click', asy
       body: init?.body ? JSON.parse(String(init.body)) : null });
     return new Response(JSON.stringify({ added: true }), { headers: { 'Content-Type': 'application/json' } });
   };
-  const router = createMemoryRouter([{ path: '/groups',
-    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
-      controlledGroups: [group], namespaces, classKeys: [] } } as never),
-    action: (args) => groupAction(args as never),
-  }], { initialEntries: ['/groups'] });
+  const router = prefixesRouter('manager', { namespaces, classKeys: [] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
-    document.querySelector('details')!.open = true;
     for (const [label, fields, path, method, body] of [
-      ['Create Group', { name: 'New team' }, '/api/groups', 'POST', { name: 'New team' }],
-      ['Add member', { userKey: 'invitee' }, '/api/groups/workshop/members', 'POST', { userKey: 'invitee' }],
       ['Configure prefix', { gcp: '1234567', giaiExclusions: '1-3' }, '/api/groups/workshop/gs1-namespaces', 'POST',
         { gcp: '1234567', giaiExclusions: [{ from: 1, to: 3 }] }],
       ['Deactivate', {}, '/api/gs1-namespaces/active', 'PATCH', { active: false }],
       ['Reactivate', {}, '/api/gs1-namespaces/inactive', 'PATCH', { active: true }],
-      ['Leave Group', {}, '/api/groups/workshop/membership', 'DELETE', null],
     ] as const) {
       const button = view.button(label);
       assert.ok(button, label);
@@ -60,37 +63,72 @@ test('every existing Group form submits its intended API mutation on click', asy
   } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
 });
 
-/** A member who does not control the Group.
+test('creating a Group asks only for its name, then goes to its people', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { path: string; method: string; body: unknown }[] = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ path: String(input), method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response(JSON.stringify({ group: { key: 'fresh', name: 'New team' } }),
+      { status: 201, headers: { 'Content-Type': 'application/json' } });
+  };
+  const router = createMemoryRouter([{ path: '/groups',
+    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, directory: 'everyone',
+      groups: [{ ...group, role: 'manager', people: 3, assets: 12 }] } } as never),
+    action: (args) => groupAction(args as never),
+  }, { path: '/groups/:key/people', element: createElement('h1', null, 'People') }], { initialEntries: ['/groups'] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    // The list says what each Group is to the reader.
+    const row = [...document.querySelectorAll('tbody tr')].find((node) => node.textContent!.includes('Workshop'))!;
+    assert.match(row.textContent!, /Group Manager/);
+    assert.equal(document.querySelector('a[href="/groups/workshop"]')?.textContent, 'Workshop');
+    assert.equal(document.querySelector('#member-key'), null, 'no member key while anybody can be found by name');
+    await settle(() => view.button('New Group')!.click());
+    assert.equal(view.dialogName(), 'New Group');
+    view.dialog()!.querySelector<HTMLInputElement>('input[name="name"]')!.value = 'New team';
+    await settle(() => view.button('Create Group')!.click());
+    await settle(); await settle();
+    assert.deepEqual(calls.at(-1), { path: '/api/groups', method: 'POST', body: { name: 'New team' } });
+    assert.equal(router.state.location.pathname, '/groups/fresh/people');
+  } finally { view.stop(); router.dispose(); globalThis.fetch = originalFetch; }
+});
+
+test('with nobody to find them by name, a newcomer is offered their member key to copy', () => {
+  const router = createMemoryRouter([{ path: '/groups',
+    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, directory: 'shared', groups: [] } } as never),
+  }], { initialEntries: ['/groups'] });
+  const view = mount(createElement(RouterProvider, { router }));
+  try {
+    assert.match(view.text(), /You are not in any Group yet/);
+    assert.equal(document.querySelector<HTMLInputElement>('#member-key')?.value, 'actor');
+    assert.ok(view.button('Copy your member key'));
+  } finally { view.stop(); router.dispose(); }
+});
+
+/** A member who is not a Group Manager.
  *
- * Configuring a prefix, managing its class keys and issuing from it now need
- * membership and control of the managing Group (#20), so the Groups page must
- * not offer a mutation the server will refuse. Reading is deliberately left
- * alone: the prefixes a Group manages are not secret from its members, and
- * hiding them would leave somebody unable to see what to ask a controller for.
+ * Configuring a prefix, managing its class keys and issuing from it are the
+ * Group Manager's (#20), so the view must not offer a mutation the server
+ * will refuse. Reading is deliberately left alone: the prefixes a Group
+ * manages are not secret from its members, and hiding them would leave
+ * somebody unable to see what to ask a Group Manager for.
  */
-test('the Groups page offers a member without control nothing it cannot do', () => {
+test('the GS1 prefixes view offers a member nothing they cannot do', () => {
   const classKey = { key: 'class', scheme: 'gtin' as const, canonical: '06141410000176',
     gcp: '0614141', namespaceKey: 'active', sequence: 1, provenance: 'allocated' as const,
     active: true, serial: counter, assertedAt: '2026-01-01T00:00:00Z',
     assertedBy: { key: 'actor', name: 'Reporter', status: 'active' as const } };
-  const router = createMemoryRouter([{ path: '/groups',
-    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
-      controlledGroups: [], namespaces, classKeys: [classKey] } } as never),
-  }], { initialEntries: ['/groups'] });
+  const router = prefixesRouter('member', { namespaces, classKeys: [classKey] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
-    document.querySelector('details')!.open = true;
-    // What the Group manages stays visible, and says who to ask.
     assert.match(view.text(), /0614141/);
     assert.match(view.text(), /06141410000176/);
-    assert.match(view.text(), /requires control of it\. Ask\s+a controller of this Group/);
-    for (const label of ['Configure prefix', 'Add member', 'Deactivate', 'Reactivate',
-      'Allocate', 'Adopt']) {
-      assert.equal(view.button(label), null, `${label} must not be offered without control`);
+    assert.match(view.text(), /is for its Group Managers\.\s+Ask one of them/);
+    assert.equal(document.querySelector('a[href="/groups/workshop/people"]')?.textContent, 'one of them');
+    for (const label of ['Configure prefix', 'Deactivate', 'Reactivate', 'Allocate', 'Adopt']) {
+      assert.equal(view.button(label), null, `${label} must not be offered to a member`);
     }
-    // Membership's own actions are untouched by the narrowing.
-    assert.ok(view.button('Leave Group'));
-    assert.ok(view.button('Create Group'));
   } finally { view.stop(); router.dispose(); }
 });
 
@@ -221,14 +259,9 @@ test('allocating and adopting a class key stay separate assertions in the UI', a
     return new Response(JSON.stringify({ classKey: { key: 'created' } }),
       { headers: { 'Content-Type': 'application/json' } });
   };
-  const router = createMemoryRouter([{ path: '/groups',
-    element: createElement(Groups, { loaderData: { user: { key: 'actor' }, groups: [group],
-      controlledGroups: [group], namespaces: [namespaces[0]], classKeys: [] } } as never),
-    action: (args) => groupAction(args as never),
-  }], { initialEntries: ['/groups'] });
+  const router = prefixesRouter('manager', { namespaces: [namespaces[0]], classKeys: [] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
-    document.querySelector('details')!.open = true;
     await settle();
     // Two distinct controls, not one form whose meaning turns on an empty field.
     const allocate = view.button('Allocate');
@@ -276,10 +309,10 @@ test('the issuance empty state says what is missing and links to where it is cre
     // control as well as membership (#20); a member without control is told to
     // ask a controller rather than sent to configure a prefix they cannot.
     assert.match(first.text(),
-      /no collaborating Group you belong to and control has an\s+active GS1 Company Prefix/);
-    assert.match(first.text(), /ask a controller of one of this Asset’s\s+Groups/);
+      /no collaborating Group you\s+manage has an active GS1 Company Prefix/);
+    assert.match(first.text(), /ask a Group Manager of one of this Asset’s\s+Groups/);
     assert.equal(document.querySelector('a[href="/groups"]')?.textContent,
-      'Configure one under Groups');
+      'Configure one on the Group’s page');
     assert.equal(first.button('Issue GIAI'), null);
   } finally { first.stop(); noPrefix.dispose(); }
 

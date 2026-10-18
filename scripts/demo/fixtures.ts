@@ -159,17 +159,17 @@ export function demoScopes(account: number) {
   };
 }
 
-/** Which Workspace profiles this account may open: self and shared-Group Users. */
+/** Which profiles this account may open: the People directory, which by
+ * default is every approved account on the instance. */
 export function demoDiscoverable(viewer: number): number[] {
   return demoMembers(viewer);
 }
 
-/** Workspace Members: self plus active Users sharing a Group. */
-export function demoMembers(viewer: number): number[] {
-  const shares = new Set(demoGroupMembers
-    .filter((members) => members.includes(viewer))
-    .flatMap((members) => [...members]));
-  return demoAccounts.flatMap((_, index) => index === viewer || shares.has(index) ? [index] : []);
+/** The People directory under the default setting: every demo account, all of
+ * them approved by the seed. Which Groups each belongs to stays private to
+ * those Groups. */
+export function demoMembers(_viewer: number): number[] {
+  return demoAccounts.map((_, index) => index);
 }
 
 /** GIAI namespaces, arranged so every allocation UI state is reachable:

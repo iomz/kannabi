@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link, Outlet } from 'react-router';
 import type { ColorScheme } from '../shared/appearance';
 import type { ThemeId } from '../shared/theme';
@@ -33,8 +34,10 @@ export function usesAnonymousShell(handles: unknown[], authenticated: boolean): 
     || (!authenticated && handles.some(isPublicShellHandle));
 }
 
-export function AnonymousShell({ themeId, colorScheme, busy, error, publicContent = false }: {
+export function AnonymousShell({ themeId, colorScheme, busy, error, publicContent = false, children }: {
   themeId: ThemeId; colorScheme: ColorScheme; busy: boolean; error?: string; publicContent?: boolean;
+  /** Shown in place of the route, for a page the shell itself decides on. */
+  children?: ReactNode;
 }) {
   // `auth-shell` carries no styling: it is the hook the theme stylesheet uses
   // to colour this shell before the boot script has set the document's own
@@ -50,7 +53,7 @@ export function AnonymousShell({ themeId, colorScheme, busy, error, publicConten
           <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" className="shrink-0 text-brand max-sm:w-7"><path d="M5 27V9h6v18M21 27V9h6v18M11 5h10v6H11z" fill="currentColor" /></svg>
           <span>Kannabi<small className="mt-[.2rem] block text-[.67rem] font-normal tracking-[.035em] text-muted-foreground">Identity &amp; inventory</small></span>
         </Link>
-        {error && <p role="alert">{error}</p>}<Outlet />
+        {error && <p role="alert">{error}</p>}{children ?? <Outlet />}
       </div>
     </main>
   </div>;

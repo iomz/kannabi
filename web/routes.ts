@@ -16,9 +16,19 @@ export default [
   route('8003/:grai', 'routes/digital-link.tsx', { id: 'digital-link-grai' }),
   route('8004/:giai', 'routes/digital-link.tsx', { id: 'digital-link-giai' }),
   route('lookup', 'routes/lookup.tsx'),
+  route('help', 'routes/help.tsx'),
   route('groups', 'routes/groups.tsx'),
+  // A Group's destination, by key. One page in addressable views, each with
+  // its own loader. Every view is offered to everybody who can open the
+  // Group; what each one shows is the server's decision on every request.
+  route('groups/:key', 'routes/group.tsx', [
+    index('routes/group-overview.tsx'),
+    route('assets', 'routes/group-assets.tsx'),
+    route('people', 'routes/group-people.tsx'),
+    route('prefixes', 'routes/group-prefixes.tsx'),
+  ]),
   route('profile', 'routes/profile.tsx'),
-  route('members', 'routes/members.tsx'),
+  route('people', 'routes/people.tsx'),
   route('users', 'routes/legacy-users.tsx'),
   route('users/:key', 'routes/user.tsx'),
   route('settings', 'routes/settings-layout.tsx', [

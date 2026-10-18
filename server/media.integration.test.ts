@@ -5,7 +5,8 @@ import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { isAssetId } from './asset-id.js';
 import { IdentityStore } from './identity-store.js';
-import { defaultToastSeconds } from './settings.js';
+import { admitSignups } from './test-admission.js';
+import { defaultSettings } from './settings.js';
 import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
 import { createAuth } from './auth.js';
@@ -22,12 +23,11 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   await legacy.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0 REMOVE s.themeId, s.accentColor");
   await legacy.close();
   const store = await IdentityStore.open(driver);
-  // An instance older than a setting reads as the shipped default rather than
-  // as a missing value, so an upgrade needs no migration to be usable.
-  assert.deepEqual(await store.settings(),
-    { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
-      toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
-      enforceGtinConsistency: true });
+  // Every setting is stored once the instance opens: one missing from an
+  // older development database takes its default, and nothing stored is
+  // replaced.
+  assert.deepEqual(await store.settings(), { ...defaultSettings, requirePhoto: false, displayTimezone: 'UTC' });
+  await admitSignups(driver);
   const storage = storageFromEnv();
   await storage.check();
   const media = new MediaService(store, storage);
@@ -62,26 +62,32 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request('/settings', 'PATCH', change, false)).status, 401);
     await query("MATCH (u:User {key: $key}) SET u.role = 'admin'", { key: user.key });
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
-    assert.deepEqual(await store.settings(),
-      { requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: null,
-        toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
-        enforceGtinConsistency: true });
+    // A change names only what it changes; everything it leaves out stays.
+    assert.deepEqual(await store.settings(), { ...defaultSettings, requireApproval: false,
+      requirePhoto: true, displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue' });
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', showAssetId: true,
       showIdentifierPolicyVersion: true }))).status, 200);
     assert.equal((await store.settings()).showAssetId, true);
     assert.equal((await store.settings()).showIdentifierPolicyVersion, true);
+    // Leaving them out of a change leaves them as they are; switching them off
+    // is said.
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
+    assert.equal((await store.settings()).showAssetId, true);
+    assert.equal((await request('/settings', 'PATCH', JSON.stringify({ showAssetId: false,
+      showIdentifierPolicyVersion: false }))).status, 200);
     assert.equal((await store.settings()).showAssetId, false);
     assert.equal((await store.settings()).showIdentifierPolicyVersion, false);
-    // The API token lifetime ceiling is instance policy and travels with the
-    // rest of the settings object, including back to the unconfigured state.
+    // The API token lifetime ceiling is instance policy, and returning it to
+    // the unconfigured state is said with null.
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: 30 }))).status, 200);
     assert.equal((await store.settings()).apiTokenMaxLifetimeDays, 30);
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: true,
       displayTimezone: 'Asia/Tokyo', themeId: 'mono-blue', apiTokenMaxLifetimeDays: 0 }))).status, 400);
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
+    assert.equal((await store.settings()).apiTokenMaxLifetimeDays, 30, 'left out means left alone');
+    assert.equal((await request('/settings', 'PATCH', JSON.stringify({ apiTokenMaxLifetimeDays: null }))).status, 200);
     assert.equal((await store.settings()).apiTokenMaxLifetimeDays, null);
     // How long a message stays is instance policy too, in seconds, and is
     // refused outside a range in which it can be read and still be transient.
@@ -94,7 +100,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     }
     assert.equal((await store.settings()).toastSeconds, 12, 'a refused change leaves the policy alone');
     assert.equal((await request('/settings', 'PATCH', change)).status, 200);
-    assert.equal((await store.settings()).toastSeconds, defaultToastSeconds, 'omitted means the shipped default');
+    assert.equal((await store.settings()).toastSeconds, 12, 'left out means left alone');
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'unknown', themeId: 'default' }))).status, 400);
     assert.equal((await request('/settings', 'PATCH', JSON.stringify({ requirePhoto: false, displayTimezone: 'UTC', themeId: 'custom' }))).status, 400);
   });
@@ -149,10 +155,12 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal((await request(path)).status, 404); // administrator is not an Asset ACL
     await assert.rejects(media.add(assetId, user.key, photo()));
     assert.deepEqual((await store.getAsset(assetId, member.key))!.reportedBy, asset.reportedBy);
-    // Membership alone cannot invite the departed reporter back; the reporter
-    // still controls membership without gaining Asset access by that fact.
+    // Membership alone cannot invite the departed reporter back, and the
+    // reporter's Group Manager role went with their membership. Restored
+    // directly for the rest of this suite.
     await assert.rejects(store.addGroupMember(member.key, group.key, user.key));
-    await store.addGroupMember(user.key, group.key, user.key);
+    await assert.rejects(store.addGroupMember(user.key, group.key, user.key));
+    await store.addMember(user.key, group.key, 'manager');
   });
 
   await t.test('authorized deletion removes public photo metadata and object while other actors are rejected', async () => {

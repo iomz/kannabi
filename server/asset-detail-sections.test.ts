@@ -398,3 +398,19 @@ test('a scheme name points at GS1 rather than at a Kannabi explanation', async (
     assert.equal(card.textContent?.match(/identifies this Asset/gi)?.length, 1);
   } finally { view.stop(); }
 });
+
+test('a Group named on an Asset leads to its page only for a reader who can open it', () => {
+  const groups = [{ key: 'workshop', name: 'Workshop' }, { key: 'partner', name: 'Partner lab' }];
+  const view = render({ groups }, { reachableGroups: ['workshop'],
+    controlled: [{ key: 'workshop', name: 'Workshop' }] });
+  try {
+    const details = [...document.querySelectorAll('dt')].find((node) => node.textContent === 'Groups')!
+      .nextElementSibling!;
+    assert.equal(details.textContent, 'Workshop, Partner lab');
+    assert.deepEqual([...details.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]),
+      [['Workshop', '/groups/workshop']], 'a Group the reader cannot open stays text');
+    section('Manage Groups')!.open = true;
+    const table = document.querySelector('table')!;
+    assert.deepEqual([...table.querySelectorAll('a')].map((a) => a.getAttribute('href')), ['/groups/workshop']);
+  } finally { view.stop(); }
+});

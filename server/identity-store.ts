@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { defaultToastSeconds, validateSettings, type Settings } from './settings.js';
+import { defaultSettings, validateSettingsChange, type Settings } from './settings.js';
 import type { Driver, ManagedTransaction, Record as Neo4jRecord, Session } from 'neo4j-driver';
 import neo4j, { int, type Integer } from 'neo4j-driver';
 import {
@@ -67,7 +67,9 @@ export const gtinConflictPageSize = 20;
  * the Group model as usual rather than from anything carried here. */
 export type ResolvedUser = Readonly<{ key: string; name: string }>;
 export type UserAccount = { key: string; name: string; email: string; isAdmin: boolean;
-  credentialState: 'pending' | 'established'; createdAt: string | null };
+  credentialState: 'pending' | 'established'; createdAt: string | null;
+  /** When an administrator approved this account, or null while it waits. */
+  approvedAt: string | null };
 export type ManagedUserAccount = UserAccount & { id: string };
 /** What one User may learn about another: who they are, and how much of their
  * work this particular viewer can already see. */
@@ -80,10 +82,16 @@ export type UserProfile = Readonly<{
   /** Counted through the viewer's own readability, never the target's. */
   reportedAssets: number;
   self: boolean;
+  /** Present unless the People directory shows names only; never a reason
+   * this person is listed. */
+  email: string | null;
 }>;
 
 export type AccountState = {
   isAdmin: boolean;
+  /** Whether this account takes part in the instance. A signed-in account that
+   * is not approved yet reaches its own account and public Assets only. */
+  approved: boolean;
   appearance: AppearancePreference;
   /** Whether this User asked Kannabi to use Gravatar for their own avatar. */
   gravatar: boolean;
@@ -94,12 +102,29 @@ export type AccountState = {
 };
 const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin',
   credentialState: CASE WHEN EXISTS { MATCH (u)-[:HAS_AUTHACCOUNT]->(:AuthAccount {providerId: 'credential'}) }
-    THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt) }`;
+    THEN 'established' ELSE 'pending' END, createdAt: toString(u.createdAt), .approvedAt }`;
 
 // Entity keys are internal references. An Asset carries its own native
 // application identity in `id`; external identifiers never address the Asset.
 export type Entity = Readonly<{ key: string; name: string }>;
+/** A member's role in a Group. A Group Manager is a member who also manages
+ * the Group's people and GS1 Company Prefixes; there is no managing a Group
+ * without belonging to it. */
+export const groupRoles = ['member', 'manager'] as const;
+export type GroupRole = (typeof groupRoles)[number];
+export function groupRole(value: unknown): GroupRole {
+  if (!(groupRoles as readonly unknown[]).includes(value)) throw new ValidationError('role must be member or manager');
+  return value as GroupRole;
+}
+/** A Group as the viewer stands in it. */
+export type GroupRelationship = Readonly<{ group: Entity; viewer: Readonly<{ role: GroupRole }> }>;
+/** One of the viewer's own Groups, as `/groups` lists it. */
+export type GroupSummary = Entity & Readonly<{ role: GroupRole; people: number; assets: number }>;
 export type ReporterAttribution = Entity & Readonly<{ status: 'active' | 'deleted' }>;
+/** Somebody named on a Group's page: their attribution, and their address
+ * where the instance shares addresses and this viewer could already open
+ * their profile. Who is listed never depends on the address. */
+export type GroupPerson = ReporterAttribution & Readonly<{ email: string | null; role: GroupRole }>;
 /** Who accepted one Asset–identifier association, when, and on what stated
  * basis.
  *
@@ -697,7 +722,12 @@ const recordSource = `SET a.sourceReference = $sourceReference,
 
 /** The instance's identifier acceptance policy. Requires `s`, the instance
  * Settings node. An instance that predates the setting enforces. */
-const coherencePolicyProjection = '{ enforceGtinConsistency: coalesce(s.enforceGtinConsistency, true) }';
+const coherencePolicyProjection = '{ enforceGtinConsistency: s.enforceGtinConsistency }';
+/** The stored settings, as Cypher over `s`. Numbers come back as JavaScript
+ * numbers rather than driver integers. */
+const settingsProjection = `s { .requirePhoto, .displayTimezone, .themeId,
+  apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays), toastSeconds: toFloat(s.toastSeconds),
+  .showAssetId, .showIdentifierPolicyVersion, .enforceGtinConsistency, .peopleDirectory, .requireApproval }`;
 
 /** Every identifier one Asset carries, in the shape `storedIdentifier` reads.
  * Requires `a` in scope. */
@@ -810,7 +840,7 @@ const assetRowsProjection = (order: string, textMatch = false) => `
 
 /** Which GS1 namespaces an audience may see. Requires `n` in scope.
  *
- * Reading stays with membership. Narrowing privileged mutation to controllers
+ * Reading stays with membership. Narrowing privileged mutation to Group Managers
  * says who may change a namespace, not who may know it exists: a member can
  * already see every value the Group issued on its own Assets, so hiding the
  * namespace from them would conceal nothing and would stop them finding out
@@ -819,28 +849,23 @@ const visibleNamespace = `($systemRead OR EXISTS {
   MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(:Group)-[:MANAGES_NAMESPACE]->(n) })`;
 
 /** The organizational authority for privileged operations on what a Group
- * manages. Requires `g` bound to that Group, plus `$actorKey`.
+ * manages: the actor is one of its Group Managers. Requires `g` bound to that
+ * Group, plus `$actorKey`.
  *
- * Membership is matched by the surrounding pattern and control by this, so both
- * are required and neither substitutes for the other. A controller who is not a
- * member has no authority over the Group's resources, and a member who does not
- * control the Group no longer has any either — which is the narrowing this
- * expresses, replacing the temporary any-member assumption that shipped with
- * v0.5.0's allocation machinery.
+ * A Group Manager is a member, so this also carries membership. It is one
+ * constant rather than a clause per operation so that every privileged
+ * managed-GS1 operation provably asks the same question. Where an operation
+ * also acts on an Asset, that Asset's own predicate is required independently
+ * and in addition: managing a Group never substitutes for collaboration.
  *
- * It is one constant rather than a clause per operation so that every
- * privileged managed-GS1 operation provably asks the same question. Where an
- * operation also acts on an Asset, that Asset's own predicate is required
- * independently and in addition: control never substitutes for collaboration.
- *
- * Deliberately not a per-resource authority. Control carries every privileged
+ * Deliberately not a per-resource authority. The role carries every privileged
  * operation over everything the Group manages, so Kannabi cannot yet express a
  * GS1 administrator who may not also recruit members; scoping those apart is
  * done with a second Group until a deployment needs otherwise.
  */
-const groupControlled = `EXISTS {
-  MATCH (controller:User {key: $actorKey})-[:CONTROLS]->(g)
-  WHERE controller.accountDeletedAt IS NULL
+const groupManaged = `EXISTS {
+  MATCH (manager:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(g)
+  WHERE manager.accountDeletedAt IS NULL
 }`;
 
 const assetMatch = 'MATCH (a:Asset {id: $assetId})';
@@ -869,26 +894,43 @@ const sharesGroupWithViewer = `EXISTS {
   WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(shared) }
 }`;
 
-/** Who may have an individual Workspace profile opened, as Cypher. Requires
- * `u` in scope and `$actorKey`.
- *
- * Two ways make an individual profile reachable:
- *
- *  - yourself;
- *  - somebody you share a Group with, because Kannabi has already put you in a
- *    room together;
- *
- * Asset readability and system administration do not broaden this Workspace
- * boundary. Instance-wide account visibility belongs only to `/admin/users`.
- * A tombstoned account is not a person to visit.
- */
-const reachableUserProfile = `(${activeUser} AND (
-  u.key = $actorKey
-  OR ${sharesGroupWithViewer}
-))`;
+/** An account that takes part in the instance: active, and approved by an
+ * administrator (or created while approval was not required). A pending
+ * account is signed in but is nobody's colleague yet. Requires `u`. */
+const participant = `(${activeUser} AND u.approvedAt IS NOT NULL)`;
 
-/** Workspace Members and individual profiles share one boundary. */
-const workspaceMember = reachableUserProfile;
+/** An account that may be in a Group: not deleted, and approved. Requires `u`.
+ * Narrower than `participant` only in not asking for a credential, so a
+ * domain-only User made by the store itself can take part in Groups. */
+const approvedAccount = `(u.accountDeletedAt IS NULL AND u.approvedAt IS NOT NULL)`;
+
+/** Whether the instance's People directory is set to this value, read in the
+ * statement that uses it, so a change takes effect on the next response. */
+const directoryIs = (value: 'names' | 'shared') =>
+  `EXISTS { MATCH (:Settings {key: 'instance', peopleDirectory: '${value}'}) }`;
+
+/** Whether this viewer may find `u` in the People directory and open their
+ * profile, as Cypher. Requires `u` in scope and `$actorKey`.
+ *
+ * The viewer must take part in the instance themself. Then: yourself; every
+ * other participant, unless the instance limits the directory to shared
+ * Groups, in which case somebody you share a Group with.
+ *
+ * Asset readability and system administration never broaden it; instance-wide
+ * account administration belongs to `/admin/users`. A tombstone or a pending
+ * account is not a person to find.
+ */
+const inDirectory = `(${participant} AND EXISTS {
+  MATCH (viewer:User {key: $actorKey})
+  WHERE viewer.accountDeletedAt IS NULL AND viewer.approvedAt IS NOT NULL
+} AND (u.key = $actorKey OR NOT ${directoryIs('shared')} OR ${sharesGroupWithViewer}))`;
+
+/** A person's address, for somebody already in this viewer's directory, as
+ * Cypher. Requires `u` and `$actorKey`. Withheld when the instance shows names
+ * only — except your own, which is yours. It adds to what is shown about a
+ * person and never to who is shown. */
+const directoryEmail = `CASE WHEN ${inDirectory} AND (u.key = $actorKey OR NOT ${directoryIs('names')})
+  THEN u.email ELSE null END`;
 
 /** The shape every User surface returns, counted through the viewer's own
  * readability rather than the target's. */
@@ -937,10 +979,12 @@ export class IdentityStore {
       // been migrated onto the scheme-discriminated labels.
       await session.run('DROP CONSTRAINT identifier_claim IF EXISTS');
       for (const statement of retiredConstraints) await session.run(statement);
-      await session.run(`MERGE (s:Settings {key: 'instance'})
-        ON CREATE SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0,
-          s.showAssetId = false, s.showIdentifierPolicyVersion = false, s.enforceGtinConsistency = true
-        SET s.themeId = coalesce(s.themeId, 'default') REMOVE s.accentColor`);
+      // Every setting is stored, so reads trust what is there. A setting added
+      // since a development database was created takes its default here; the
+      // defaults themselves are decided once, in `defaultSettings`.
+      await session.run(`MERGE (s:Settings {key: 'instance'}) ON CREATE SET s.revision = 0
+        SET ${Object.keys(defaultSettings).map((name) => `s.${name} = coalesce(s.${name}, $defaults.${name})`).join(', ')}
+        REMOVE s.accentColor`, { defaults: defaultSettings });
       await IdentityStore.reconcileGtinConflicts(driver);
       await session.run(`MERGE (m:MailConfiguration {key: 'instance'})
         ON CREATE SET m.enabled = false, m.transport = 'smtp', m.revision = 0
@@ -951,7 +995,15 @@ export class IdentityStore {
       await session.run(`MATCH (u:User) WHERE u.id IS NOT NULL
         SET u.role = CASE WHEN u.isAdmin = true THEN 'admin' ELSE coalesce(u.role, 'user') END
         REMOVE u.isAdmin`);
+      // An administrator takes part in the instance they administer, as one
+      // made an administrator is approved then. Accounts from before approval
+      // existed otherwise wait for one, so this keeps administration
+      // reachable to approve them.
+      await session.run(`MATCH (u:User {role: 'admin'})
+        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL AND u.approvedAt IS NULL
+        SET u.approvedAt = $now`, { now: new Date().toISOString() });
       await IdentityStore.verifyConstraints(session);
+      await IdentityStore.verifyGroupRoles(session);
     } finally {
       await session.close();
     }
@@ -968,9 +1020,30 @@ export class IdentityStore {
    */
   static async attachReadOnly(driver: Driver): Promise<IdentityStore> {
     const session = driver.session({ defaultAccessMode: neo4j.session.READ });
-    try { await IdentityStore.verifyConstraints(session); }
-    finally { await session.close(); }
+    try {
+      await IdentityStore.verifyConstraints(session);
+      await IdentityStore.verifyGroupRoles(session);
+    } finally { await session.close(); }
     return new IdentityStore(driver);
+  }
+
+  /** Startup invariant: every membership carries a role, and nothing records
+   * managing a Group apart from belonging to it.
+   *
+   * The earlier model held control as a separate `CONTROLS` edge. Kannabi has
+   * no deployment whose data needs carrying across, so such data is refused
+   * rather than converted: a development database is reseeded. */
+  private static async verifyGroupRoles(session: Session): Promise<void> {
+    const result = await session.run(`
+      RETURN COUNT { MATCH ()-[:CONTROLS]->() } AS control,
+        COUNT { MATCH ()-[m:MEMBER_OF]->() WHERE m.role IS NULL OR NOT m.role IN $roles } AS unroled`,
+    { roles: [...groupRoles] });
+    const control = Number(result.records[0].get('control'));
+    const unroled = Number(result.records[0].get('unroled'));
+    if (control || unroled) {
+      throw new Error(`Group data predates Group roles (${control} control grants, ${unroled} memberships without a role); `
+        + 'reseed this development database with `pnpm demo:reset`');
+    }
   }
 
   /** Startup invariant: every uniqueness constraint the domain relies on is
@@ -1213,15 +1286,25 @@ export class IdentityStore {
     return entity;
   }
 
-  createUser(name: string) { return this.createEntity('User', name); }
+  /** A domain-only User, with no credential: for tests and tooling that need a
+   * person in the graph without an account to sign in to. It is approved, so
+   * it can take part in Groups. */
+  async createUser(name: string): Promise<Entity> {
+    const entity = { key: randomUUID(), name: requiredText(name, 'name') };
+    await this.write(async (tx) => {
+      await tx.run('CREATE (u:User $entity) SET u.approvedAt = $now', { entity, now: new Date().toISOString() });
+    });
+    return entity;
+  }
   createGroup(name: string) { return this.createEntity('Group', name); }
   createOwner(name: string) { return this.createEntity('Owner', name); }
 
   async createReportingGroup(name: string, actorKey: string): Promise<Entity> {
     const group = { key: randomUUID(), name: requiredText(name, 'name') };
     return this.write(async (tx) => {
-      const result = await tx.run(`MATCH (u:User {key: $actorKey}) WHERE u.accountDeletedAt IS NULL
-        CREATE (g:Group $group), (u)-[:MEMBER_OF]->(g), (u)-[:CONTROLS]->(g)
+      // Whoever creates a Group is its first member and manages it.
+      const result = await tx.run(`MATCH (u:User {key: $actorKey}) WHERE ${approvedAccount}
+        CREATE (g:Group $group), (u)-[:MEMBER_OF {role: 'manager'}]->(g)
         RETURN g.key`, { actorKey, group });
       if (!result.records.length) throw new ReferenceError('User does not exist');
       return group;
@@ -1243,22 +1326,31 @@ export class IdentityStore {
     } finally { await session.close(); }
   }
 
-  /** Membership management is a control-plane operation, not a benefit of
-   * membership. A controller may have left the Group and have no Asset access. */
-  async listControlledGroups(actorKey: string): Promise<Entity[]> {
+  /** The viewer's own Groups, each with their role in it and how many people
+   * and Assets it has.
+   *
+   * Every Asset a Group collaborates on is readable by its members, so the
+   * Asset count is exactly what the viewer can read through that Group and
+   * reveals nothing they could not already list. */
+  async listMyGroups(actorKey: string): Promise<GroupSummary[]> {
     const session = this.driver.session();
     try {
       const result = await session.executeRead((tx) => tx.run(`
-        MATCH (u:User {key: $actorKey})-[:CONTROLS]->(g:Group)
-        WHERE u.accountDeletedAt IS NULL
-        RETURN g { .key, .name } AS entity ORDER BY entity.name`, { actorKey }));
-      return result.records.map((row) => row.get('entity') as Entity);
+        MATCH (:User {key: $actorKey})-[mine:MEMBER_OF]->(g:Group)
+        RETURN g { .key, .name, role: mine.role,
+          people: COUNT { MATCH (u:User)-[:MEMBER_OF]->(g) WHERE u.accountDeletedAt IS NULL },
+          assets: COUNT { MATCH (g)-[:CAN_COLLABORATE]->(:Asset) } } AS summary
+        ORDER BY toLower(summary.name), summary.key`, { actorKey: requiredText(actorKey, 'actorKey') }));
+      return result.records.map((row) => {
+        const summary = row.get('summary');
+        return { ...summary, people: Number(summary.people), assets: Number(summary.assets) } as GroupSummary;
+      });
     } finally { await session.close(); }
   }
 
   /** Recovery reads Group identity only, never an Asset or namespace ledger.
    * The operator sees stranded Groups without acquiring membership. */
-  async listUncontrolledGroups(actorKey: string): Promise<Entity[]> {
+  async listUnmanagedGroups(actorKey: string): Promise<Entity[]> {
     const session = this.driver.session();
     try {
       return await session.executeRead(async (tx) => {
@@ -1267,144 +1359,181 @@ export class IdentityStore {
           RETURN admin.key`, { actorKey });
         if (!allowed.records.length) throw new AdministrationError('Administrator access required');
         const result = await tx.run(`MATCH (g:Group)
-          WHERE NOT EXISTS { MATCH (controller:User)-[:CONTROLS]->(g)
-            WHERE controller.accountDeletedAt IS NULL }
+          WHERE NOT EXISTS { MATCH (:User)-[:MEMBER_OF {role: 'manager'}]->(g) }
           RETURN g { .key, .name } AS group ORDER BY group.name`);
         return result.records.map((row) => row.get('group') as Entity);
       });
     } finally { await session.close(); }
   }
 
-  /** Restore control of an uncontrolled Group; never add a membership.
-   * Lock the target User before the Group so deletion cannot turn an earlier
-   * active match into a tombstone grant. The Group lock serializes recoveries. */
-  async recoverGroupControl(actorKey: string, groupKey: string, userKey: string): Promise<void> {
+  /** Make one of an unmanaged Group's own members its Group Manager.
+   *
+   * Only an existing member, so recovery never adds a membership and never
+   * opens a Group's Assets to anybody — the administrator included. A Group
+   * with no members has nobody to promote and stays unmanaged. The User is
+   * locked before the Group, as every Group write orders them, and the Group
+   * lock serializes recoveries. */
+  async appointGroupManager(actorKey: string, groupKey: string, userKey: string): Promise<void> {
     await this.write(async (tx) => {
       const authorized = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
         WHERE admin.id IS NOT NULL AND admin.accountDeletedAt IS NULL
         RETURN admin.key`, { actorKey });
       if (!authorized.records.length) throw new AdministrationError('Administrator access required');
-      const target = await tx.run(`MATCH (u:User {key: $userKey})
-        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
-        SET u.lock = true RETURN u.key`, { userKey });
-      if (!target.records.length) throw new ReferenceError('Active User not found');
-      const group = await tx.run(`MATCH (g:Group {key: $groupKey})
-        SET g.lock = true RETURN g.key`, { groupKey });
+      await tx.run('MATCH (u:User {key: $userKey}) SET u.lock = true', { userKey });
+      const group = await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true RETURN g.key', { groupKey });
       if (!group.records.length) throw new ReferenceError('Group not found');
-      const recovered = await tx.run(`MATCH (g:Group {key: $groupKey}), (u:User {key: $userKey})
-        WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
-          AND NOT EXISTS { MATCH (controller:User)-[:CONTROLS]->(g)
-            WHERE controller.accountDeletedAt IS NULL }
-        CREATE (u)-[:CONTROLS]->(g) RETURN g.key`, { groupKey, userKey });
-      if (!recovered.records.length) throw new ReferenceError('Uncontrolled Group or active User not found');
+      const appointed = await tx.run(`MATCH (u:User {key: $userKey})-[m:MEMBER_OF]->(g:Group {key: $groupKey})
+        WHERE ${approvedAccount}
+          AND NOT EXISTS { MATCH (:User)-[:MEMBER_OF {role: 'manager'}]->(g) }
+        SET m.role = 'manager' RETURN g.key`, { groupKey, userKey });
+      if (!appointed.records.length) throw new ReferenceError('Unmanaged Group or member not found');
     });
   }
 
-  /** Who controls this Group, for a controller deciding what to change.
+  /** One Group as this viewer stands in it: its identity and the viewer's role.
    *
-   * Authorized by control rather than membership, because this is the
-   * control plane: a controller who is not a member still administers the
-   * Group and still needs to see who else does. It returns Group
-   * administration only — no Asset, no membership, no namespace ledger — so
-   * reading it discloses nothing a controller could not already act on.
+   * Reachable by the Group's members. Anybody else — a system administrator
+   * included — is answered exactly as for a Group that does not exist, so the
+   * address is never a way to confirm that a Group exists.
    */
-  async listGroupControllers(actorKey: string, groupKey: string): Promise<ReporterAttribution[]> {
+  async groupRelationship(actorKey: string, groupKey: string): Promise<GroupRelationship> {
     const params = {
       actorKey: requiredText(actorKey, 'actorKey'), groupKey: requiredText(groupKey, 'groupKey'),
     };
-    return this.write(async (tx) => {
-      // Authorized in a query of its own. Folding the check into the listing
-      // would make an unauthorized caller indistinguishable from a Group with
-      // nothing to list, and answer both with an empty array and a 200.
-      const authorized = await tx.run(`
-        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(:Group {key: $groupKey})
+    const session = this.driver.session();
+    try {
+      const result = await session.executeRead((tx) => tx.run(`
+        MATCH (actor:User {key: $actorKey})-[m:MEMBER_OF]->(g:Group {key: $groupKey})
         WHERE actor.accountDeletedAt IS NULL
-        RETURN actor.key`, params);
-      if (!authorized.records.length) throw new ReferenceError('Group control not found');
+        RETURN g { .key, .name } AS group, m.role AS role`, params));
+      if (!result.records.length) throw new ReferenceError('Group not found');
+      return { group: result.records[0].get('group') as Entity, viewer: { role: result.records[0].get('role') } };
+    } finally { await session.close(); }
+  }
+
+  /** Everybody in a Group, with their role, for any of its members.
+   *
+   * A member already shares this Group with each of them, so listing them
+   * discloses nobody new. Unbounded, like every list of people in a Group: it
+   * is a working set, not a corpus, and a partial list would be the wrong
+   * basis for deciding whom to remove. Addresses follow the People directory
+   * setting.
+   */
+  async listGroupMembers(actorKey: string, groupKey: string): Promise<GroupPerson[]> {
+    const params = {
+      actorKey: requiredText(actorKey, 'actorKey'), groupKey: requiredText(groupKey, 'groupKey'),
+    };
+    const session = this.driver.session();
+    try {
+      return await session.executeRead(async (tx) => {
+        const authorized = await tx.run(`
+          MATCH (actor:User {key: $actorKey})-[:MEMBER_OF]->(:Group {key: $groupKey})
+          WHERE actor.accountDeletedAt IS NULL
+          RETURN actor.key`, params);
+        if (!authorized.records.length) throw new ReferenceError('Group not found');
+        const result = await tx.run(`
+          MATCH (u:User)-[m:MEMBER_OF]->(:Group {key: $groupKey})
+          WHERE u.accountDeletedAt IS NULL
+          RETURN ${attribution('u', 'u.key')} AS member, m.role AS role, ${directoryEmail} AS email
+          ORDER BY toLower(coalesce(u.name, '')), u.key`, params);
+        return result.records.map((row) =>
+          ({ ...row.get('member'), role: row.get('role'), email: row.get('email') ?? null }) as GroupPerson);
+      });
+    } finally { await session.close(); }
+  }
+
+  /** Add somebody to a Group, as one of its Group Managers.
+   *
+   * Only a participant: a pending account takes no part in any Group. The
+   * target User is locked before the Group, the order every Group write takes,
+   * so an addition racing a deletion or a role change leaves one coherent
+   * result. Adding somebody already in the Group changes nothing — their role
+   * is changed deliberately, with `setMemberRole`, never as a side effect. */
+  async addGroupMember(actorKey: string, groupKey: string, userKey: string,
+    role: GroupRole = 'member'): Promise<boolean> {
+    const params = {
+      actorKey: requiredText(actorKey, 'actorKey'), groupKey: requiredText(groupKey, 'groupKey'),
+      userKey: requiredText(userKey, 'userKey'), role: groupRole(role),
+    };
+    return this.write(async (tx) => {
+      await tx.run('MATCH (u:User {key: $userKey}) SET u.lock = true', params);
+      await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true', params);
       const result = await tx.run(`
-        MATCH (u:User)-[:CONTROLS]->(:Group {key: $groupKey})
-        RETURN ${attribution('u', 'u.key')} AS controller
-        ORDER BY toLower(coalesce(u.name, u.provenanceName, '')), u.key`, params);
-      return result.records.map((row) => row.get('controller') as ReporterAttribution);
+        MATCH (actor:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(g:Group {key: $groupKey})
+        WHERE actor.accountDeletedAt IS NULL
+        MATCH (u:User {key: $userKey}) WHERE ${approvedAccount}
+        OPTIONAL MATCH (u)-[existing:MEMBER_OF]->(g)
+        FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
+          CREATE (u)-[:MEMBER_OF {role: $role}]->(g))
+        RETURN existing IS NULL AS added`, params);
+      if (!result.records.length) throw new ReferenceError('Group management or target User not found');
+      return result.records[0].get('added') === true;
     });
   }
 
-  /** Grant or withdraw control of a Group.
+  /** Make a member a Group Manager, or a Group Manager an ordinary member.
    *
-   * Control was created at Group creation and by administrator recovery, and
-   * removed only by account deletion, so it could neither be handed on nor
-   * given up. A Group could therefore not intentionally become uncontrolled
-   * while a living controller remained — which also made recovery, the one
-   * repair mechanism, unreachable in exactly the case needing repair.
+   * Group Managers are peers: any of them may change anybody's role, their
+   * own included, and a Group may deliberately be left with none — an
+   * administrator can then promote one of its members. No successor is ever
+   * inferred. The person stays a member either way. */
+  async setMemberRole(actorKey: string, groupKey: string, userKey: string,
+    role: GroupRole): Promise<{ changed: boolean }> {
+    const params = {
+      actorKey: requiredText(actorKey, 'actorKey'), groupKey: requiredText(groupKey, 'groupKey'),
+      userKey: requiredText(userKey, 'userKey'), role: groupRole(role),
+    };
+    return this.write(async (tx) => {
+      await tx.run('MATCH (u:User {key: $userKey}) SET u.lock = true', params);
+      await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true', params);
+      const authorized = await tx.run(`
+        MATCH (actor:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(g:Group {key: $groupKey})
+        WHERE actor.accountDeletedAt IS NULL
+        OPTIONAL MATCH (:User {key: $userKey})-[m:MEMBER_OF]->(g)
+        RETURN m.role AS current`, params);
+      if (!authorized.records.length) throw new ReferenceError('Group not found');
+      const current = authorized.records[0].get('current');
+      if (current === null) throw new ReferenceError('Group member not found');
+      if (current === params.role) return { changed: false };
+      await tx.run(`MATCH (:User {key: $userKey})-[m:MEMBER_OF]->(:Group {key: $groupKey})
+        SET m.role = $role`, params);
+      return { changed: true };
+    });
+  }
+
+  /** End somebody's membership, as one of the Group's Managers.
    *
-   * Controllers are peers. Any of them may grant control or withdraw it, from
-   * another or from themselves, and there is no primary controller to appeal
-   * to; introducing one would be a different model. Peer withdrawal is what
-   * makes a departed controller removable, and so what makes reaching zero
-   * possible at all.
-   *
-   * Reaching zero is allowed. An uncontrolled Group is valid and is what the
-   * existing administrator recovery is for. Nothing here invents a successor,
-   * and nothing blocks a controller from standing down.
-   *
-   * Transfer is this operation twice: grant, then withdraw. No separate
-   * transfer exists, because a succession step would have to decide who
-   * inherits, which is the invention this model refuses.
-   *
-   * Control stays independent of membership in both directions: a grant adds
-   * no membership, and this is never called when somebody leaves a Group.
-   */
-  async setGroupControl(actorKey: string, groupKey: string, userKey: string,
-    control: boolean): Promise<{ changed: boolean }> {
+   * Their role ends with it: there is no managing a Group without belonging
+   * to it. Collaboration, namespaces, issuance and `reportedBy` are untouched,
+   * and an empty Group stays valid. Removing somebody who is not a member is
+   * an authorized no-op, and removing yourself is leaving. */
+  async removeGroupMember(actorKey: string, groupKey: string, userKey: string): Promise<{ changed: boolean }> {
     const params = {
       actorKey: requiredText(actorKey, 'actorKey'),
       groupKey: requiredText(groupKey, 'groupKey'),
       userKey: requiredText(userKey, 'userKey'),
     };
     return this.write(async (tx) => {
-      // The target User first, then the Group, exactly as recovery orders them:
-      // a deletion racing this must not turn an active match into a tombstone
-      // grant, and the Group lock serializes concurrent control changes.
       await tx.run('MATCH (u:User {key: $userKey}) SET u.lock = true', params);
       await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true', params);
       const authorized = await tx.run(`
-        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(g:Group {key: $groupKey})
+        MATCH (actor:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(:Group {key: $groupKey})
         WHERE actor.accountDeletedAt IS NULL
-        RETURN EXISTS { MATCH (:User {key: $userKey})-[:CONTROLS]->(g) } AS held`, params);
-      if (!authorized.records.length) throw new ReferenceError('Group control not found');
-      if (authorized.records[0].get('held') === control) return { changed: false };
-      if (control) {
-        // Only an account that can exercise it. A tombstone holding control
-        // would be an authority nobody can use and nobody can withdraw.
-        const granted = await tx.run(`MATCH (g:Group {key: $groupKey}), (u:User {key: $userKey})
-          WHERE u.id IS NOT NULL AND u.accountDeletedAt IS NULL
-          CREATE (u)-[:CONTROLS]->(g) RETURN g.key`, params);
-        if (!granted.records.length) throw new ReferenceError('Active User not found');
-        return { changed: true };
-      }
-      await tx.run(`MATCH (:User {key: $userKey})-[control:CONTROLS]->(:Group {key: $groupKey})
-        DELETE control`, params);
-      return { changed: true };
+        RETURN actor.key`, params);
+      if (!authorized.records.length) throw new ReferenceError('Group not found');
+      const removed = await tx.run(`
+        MATCH (:User {key: $userKey})-[m:MEMBER_OF]->(:Group {key: $groupKey})
+        DELETE m RETURN count(*) AS removed`, params);
+      return { changed: removed.records[0].get('removed').toNumber() > 0 };
     });
   }
 
-  async addGroupMember(actorKey: string, groupKey: string, userKey: string): Promise<boolean> {
-    return this.write(async (tx) => {
-      const result = await tx.run(`
-        MATCH (controller:User {key: $actorKey})-[:CONTROLS]->(g:Group {key: $groupKey})
-        MATCH (u:User {key: $userKey})
-        WHERE controller.accountDeletedAt IS NULL AND u.accountDeletedAt IS NULL
-        OPTIONAL MATCH (u)-[existing:MEMBER_OF]->(g)
-        WITH u, g, existing IS NOT NULL AS alreadyMember
-        MERGE (u)-[:MEMBER_OF]->(g) RETURN alreadyMember`, { actorKey, groupKey, userKey });
-      if (!result.records.length) throw new ReferenceError('Group control or target User not found');
-      return result.records[0].get('alreadyMember') !== true;
-    });
-  }
-
+  /** Leave a Group. Any role goes with the membership; a Group left with no
+   * Group Manager stays valid and is recoverable by an administrator. */
   async leaveGroup(actorKey: string, groupKey: string): Promise<void> {
     await this.write(async (tx) => {
       await tx.run('MATCH (u:User {key: $actorKey}) SET u.lock = true', { actorKey });
+      await tx.run('MATCH (g:Group {key: $groupKey}) SET g.lock = true', { groupKey });
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[m:MEMBER_OF]->(g:Group {key: $groupKey})
         DELETE m RETURN g.key`, { actorKey, groupKey });
@@ -1412,14 +1541,14 @@ export class IdentityStore {
     });
   }
 
-  async addMember(userKey: string, groupKey: string): Promise<void> {
+  async addMember(userKey: string, groupKey: string, role: GroupRole = 'member'): Promise<void> {
     const params = {
-      userKey: requiredText(userKey, 'userKey'), groupKey: requiredText(groupKey, 'groupKey'),
+      userKey: requiredText(userKey, 'userKey'), groupKey: requiredText(groupKey, 'groupKey'), role: groupRole(role),
     };
     await this.write(async (tx) => {
       const result = await tx.run(`MATCH (u:User {key: $userKey}), (g:Group {key: $groupKey})
         WHERE u.accountDeletedAt IS NULL
-        MERGE (u)-[:MEMBER_OF]->(g) RETURN g.key`, params);
+        MERGE (u)-[m:MEMBER_OF]->(g) ON CREATE SET m.role = $role RETURN g.key`, params);
       if (!result.records.length) throw new ReferenceError('User or Group does not exist');
     });
   }
@@ -1508,10 +1637,9 @@ export class IdentityStore {
       await tx.run('MATCH (u:User {key: $actorKey}) SET u.lock = true', params);
       await tx.run(`${assetMatch} SET a.lock = true`, params);
       const allowed = await tx.run(`${assetMatch}
-        MATCH (actor:User {key: $actorKey})-[:CONTROLS]->(target:Group {key: $groupKey})
+        MATCH (actor:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(target:Group {key: $groupKey})
         WHERE actor.accountDeletedAt IS NULL AND ${collaboration}
-          ${grant ? `AND EXISTS { MATCH (actor)-[:MEMBER_OF]->(source:Group)-[:CAN_COLLABORATE]->(a)
-            MATCH (actor)-[:CONTROLS]->(source) }` : ''}
+          ${grant ? `AND EXISTS { MATCH (actor)-[:MEMBER_OF {role: 'manager'}]->(source:Group)-[:CAN_COLLABORATE]->(a) }` : ''}
         RETURN EXISTS { MATCH (target)-[:CAN_COLLABORATE]->(a) } AS linked,
           EXISTS { MATCH (other:Group)-[:CAN_COLLABORATE]->(a) WHERE other <> target } AS hasOther`, params);
       if (!allowed.records.length) throw new ReferenceError('Asset access or Group control not found');
@@ -1726,9 +1854,10 @@ export class IdentityStore {
   }
 
   async accountState(actorKey: string | null): Promise<AccountState> {
-    if (!actorKey) return { isAdmin: false, appearance: 'system', gravatar: false, avatarHash: null };
+    if (!actorKey) return { isAdmin: false, approved: false, appearance: 'system', gravatar: false, avatarHash: null };
     const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey})
-      RETURN u.role = 'admin' AS isAdmin, coalesce(u.appearance, 'system') AS appearance,
+      RETURN u.role = 'admin' AS isAdmin, u.approvedAt IS NOT NULL AS approved,
+        coalesce(u.appearance, 'system') AS appearance,
         coalesce(u.gravatar, false) AS gravatar, u.email AS email`, { actorKey }));
     if (!result.records.length) throw new ReferenceError('User not found');
     const appearance = result.records[0].get('appearance');
@@ -1738,7 +1867,8 @@ export class IdentityStore {
     const gravatar = result.records[0].get('gravatar') === true;
     const email = result.records[0].get('email');
     const avatarHash = gravatar && typeof email === 'string' ? gravatarIdentifier(email) : null;
-    return { isAdmin: result.records[0].get('isAdmin') === true, appearance, gravatar, avatarHash };
+    return { isAdmin: result.records[0].get('isAdmin') === true, approved: result.records[0].get('approved') === true,
+      appearance, gravatar, avatarHash };
   }
 
   /** A User as another User may see them.
@@ -1747,7 +1877,9 @@ export class IdentityStore {
    * its owner asked for one, and the Asset count is counted through the
    * viewer's own readability rule, so it can never reveal an unreadable Asset.
    *
-   * Email and non-shared Group membership are deliberately absent.
+   * Non-shared Group membership is deliberately absent: being findable never
+   * says which Groups somebody is in. The address follows the People directory
+   * setting (`directoryEmail`).
    */
   private static discovered(row: Neo4jRecord, actorKey: string): UserProfile {
     const gravatar = row.get('gravatar') === true;
@@ -1764,33 +1896,49 @@ export class IdentityStore {
       sharedGroups: Object.freeze(sharedGroups),
       reportedAssets: row.get('reportedAssets').toNumber(),
       self: row.get('key') === actorKey,
+      email: typeof row.get('shownEmail') === 'string' ? row.get('shownEmail') : null,
     };
   }
 
-  /** This viewer and active Users sharing at least one Group with them.
+  /** The People directory: who this viewer may find, optionally narrowed by
+   * a search, at most `limit` at a time.
    *
-   * Workspace profiles use this same boundary. Administrator status and
-   * readable reporting provenance grant neither enumeration nor reachability.
+   * The search matches a display name, and an email address only where this
+   * viewer is shown it — matching an address they cannot see would answer
+   * whether it belongs to somebody here. `more` says the search should be
+   * narrowed; there is deliberately no paging through the whole instance.
+   * Administrator status and readable reporting provenance never broaden it.
    */
-  async listMembers(actorKey: string): Promise<UserProfile[]> {
-    const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
+  async listPeople(actorKey: string, request: { query?: string | null; limit?: number } = {}):
+    Promise<{ people: UserProfile[]; more: boolean }> {
+    const query = (request.query ?? '').trim().toLowerCase();
+    if (query.length > 200) throw new ValidationError('Search text is too long');
+    const limit = request.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ValidationError('limit must be 1 to 100');
+    const parameters = { actorKey: requiredText(actorKey, 'actorKey'), query: query || null, fetch: neo4j.int(limit + 1) };
     const result = await this.write((tx) => tx.run(`
-      MATCH (u:User) WHERE ${workspaceMember}
+      MATCH (u:User) WHERE ${inDirectory}
+      WITH u, ${directoryEmail} AS shownEmail
+      WHERE $query IS NULL OR toLower(u.name) CONTAINS $query
+        OR (shownEmail IS NOT NULL AND toLower(shownEmail) CONTAINS $query)
+      WITH u, shownEmail ORDER BY toLower(u.name), u.key LIMIT $fetch
       OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
       OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
         WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
-      RETURN ${discoveredUser} ORDER BY toLower(u.name), u.key`, parameters));
-    return result.records.map((row) => IdentityStore.discovered(row, parameters.actorKey));
+      RETURN ${discoveredUser}, shownEmail ORDER BY toLower(u.name), u.key`, parameters));
+    const people = result.records.map((row) => IdentityStore.discovered(row, parameters.actorKey));
+    return { people: people.slice(0, limit), more: people.length > limit };
   }
 
   async userProfile(actorKey: string, targetKey: string): Promise<UserProfile | null> {
     const parameters = { actorKey: requiredText(actorKey, 'actorKey') };
     const result = await this.write((tx) => tx.run(`
-      MATCH (u:User {key: $targetKey}) WHERE ${reachableUserProfile}
+      MATCH (u:User {key: $targetKey}) WHERE ${inDirectory}
+      WITH u, ${directoryEmail} AS shownEmail
       OPTIONAL MATCH (a:Asset)-[:REPORTED_BY]->(u) WHERE ${readableByViewer}
       OPTIONAL MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(sharedGroup:Group)
         WHERE EXISTS { MATCH (u)-[:MEMBER_OF]->(sharedGroup) }
-      RETURN ${discoveredUser}`,
+      RETURN ${discoveredUser}, shownEmail`,
     { ...parameters, targetKey: requiredText(targetKey, 'user key') }));
     if (!result.records.length) return null;
     return IdentityStore.discovered(result.records[0], parameters.actorKey);
@@ -1844,7 +1992,9 @@ export class IdentityStore {
         if (count.records[0].get('count').toNumber() <= 1) throw new LastAdministratorError('The final system administrator cannot be removed');
       }
       const result = await tx.run(`MATCH (u:User {key: $targetKey})
-        SET u.role = $role, u.updatedAt = $updatedAt
+        SET u.role = $role, u.updatedAt = $updatedAt,
+          // An administrator takes part in the instance they administer.
+          u.approvedAt = CASE WHEN $role = 'admin' THEN coalesce(u.approvedAt, $updatedAt) ELSE u.approvedAt END
         RETURN ${userAccountProjection} AS user`, { targetKey, updatedAt: new Date().toISOString(), role: isAdmin ? 'admin' : 'user' });
       return result.records[0].get('user');
     });
@@ -1882,7 +2032,6 @@ export class IdentityStore {
         DETACH DELETE s, a`, { targetKey });
       await tx.run(`MATCH (v:AuthVerification) WHERE v.value = $userId DETACH DELETE v`, { userId });
       await tx.run(`MATCH (u:User {key: $targetKey})-[m:MEMBER_OF]->(:Group) DELETE m`, { targetKey });
-      await tx.run(`MATCH (u:User {key: $targetKey})-[control:CONTROLS]->(:Group) DELETE control`, { targetKey });
       await tx.run(`MATCH (u:User {key: $targetKey})
         SET u.provenanceName = u.name, u.accountDeletedAt = $deletedAt
         REMOVE u.id, u.name, u.email, u.emailVerified, u.image, u.createdAt, u.updatedAt, u.appearance, u.role,
@@ -1913,20 +2062,40 @@ export class IdentityStore {
     return result.records.length > 0;
   }
 
+  /** Whether this account takes part in the instance, read on every request
+   * so an approval or a deletion takes effect immediately. */
+  async isParticipant(actorKey: string): Promise<boolean> {
+    const result = await this.write((tx) => tx.run(`MATCH (u:User {key: $actorKey}) WHERE ${participant}
+      RETURN u.key`, { actorKey: requiredText(actorKey, 'actorKey') }));
+    return result.records.length > 0;
+  }
+
+  /** Let a waiting account take part in the instance. Approving an account
+   * already approved changes nothing. Rejecting one is deleting it, through
+   * the ordinary administrator deletion, so a rejected applicant leaves no
+   * account behind and may apply again. */
+  async approveUser(actorKey: string, targetKey: string): Promise<{ changed: boolean }> {
+    return this.write(async (tx) => {
+      const allowed = await tx.run(`MATCH (admin:User {key: $actorKey, role: 'admin'})
+        WHERE admin.accountDeletedAt IS NULL RETURN admin.key`, { actorKey });
+      if (!allowed.records.length) throw new AdministrationError('Administrator access required');
+      const result = await tx.run(`MATCH (u:User {key: $targetKey}) WHERE ${activeUser}
+        WITH u, u.approvedAt IS NULL AS waiting
+        SET u.approvedAt = coalesce(u.approvedAt, $now)
+        RETURN waiting`, { targetKey, now: new Date().toISOString() });
+      if (!result.records.length) throw new ReferenceError('User not found');
+      return { changed: result.records[0].get('waiting') === true };
+    });
+  }
+
   async settings(): Promise<Settings> {
-    const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'})
-      RETURN s { .requirePhoto, .displayTimezone, .themeId,
-        apiTokenMaxLifetimeDays: toFloat(s.apiTokenMaxLifetimeDays),
-        toastSeconds: toFloat(coalesce(s.toastSeconds, $defaultToastSeconds)),
-        showAssetId: coalesce(s.showAssetId, false),
-        showIdentifierPolicyVersion: coalesce(s.showIdentifierPolicyVersion, false),
-        enforceGtinConsistency: coalesce(s.enforceGtinConsistency, true) } AS settings`,
-    { defaultToastSeconds }));
+    const result = await this.write((tx) => tx.run(`MATCH (s:Settings {key: 'instance'}) RETURN ${settingsProjection} AS settings`));
     return result.records[0].get('settings');
   }
 
+  /** Change the settings a request names, and only those. */
   async updateSettings(actorKey: string, value: unknown): Promise<Settings> {
-    const settings = validateSettings(value);
+    const change = validateSettingsChange(value);
     return this.write(async (tx) => {
       // The Settings lock is taken before the conflict set is read, and every
       // identifier write takes it before judging and recording, so a conflict
@@ -1934,22 +2103,19 @@ export class IdentityStore {
       // policy this commits.
       const state = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
         SET s.revision = s.revision + 1
-        RETURN coalesce(s.enforceGtinConsistency, true) AS enforcing`, { actorKey });
+        RETURN ${settingsProjection} AS settings`, { actorKey });
       if (!state.records.length) throw new ReferenceError('Administrator access required');
+      const current = state.records[0].get('settings') as Settings;
+      const settings: Settings = { ...current, ...change };
       // Resuming enforcement is refused while any Asset holds a conflict, and
       // nothing is reconciled to make it succeed. An instance already
       // enforcing is not blocked from saving its other settings.
-      if (settings.enforceGtinConsistency && !state.records[0].get('enforcing')) {
+      if (settings.enforceGtinConsistency && !current.enforceGtinConsistency) {
         const conflicts = await IdentityStore.gtinConflictPage(tx, actorKey, null);
         if (conflicts.total > 0) throw new GtinConflictError(conflicts);
       }
       const result = await tx.run(`MATCH (:User {key: $actorKey, role: 'admin'}), (s:Settings {key: 'instance'})
-        SET s.requirePhoto = $settings.requirePhoto,
-          s.displayTimezone = $settings.displayTimezone, s.themeId = $settings.themeId,
-          s.apiTokenMaxLifetimeDays = $settings.apiTokenMaxLifetimeDays,
-          s.toastSeconds = $settings.toastSeconds, s.showAssetId = $settings.showAssetId,
-          s.showIdentifierPolicyVersion = $settings.showIdentifierPolicyVersion,
-          s.enforceGtinConsistency = $settings.enforceGtinConsistency
+        SET ${Object.keys(defaultSettings).map((name) => `s.${name} = $settings.${name}`).join(', ')}
         RETURN s.key`, { actorKey, settings });
       if (!result.records.length) throw new ReferenceError('Administrator access required');
       return settings;
@@ -2297,7 +2463,7 @@ export class IdentityStore {
       }
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
-        WHERE ${groupControlled}
+        WHERE ${groupManaged}
         CREATE (g)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {
           key: $key, gcp: $gcp, active: true,
           ${namespaceCounters.map(counterAssignments).join(',\n          ')},
@@ -2316,7 +2482,7 @@ export class IdentityStore {
     return this.write(async (tx) => {
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(n:Gs1Namespace {key: $key})
-        WHERE ${groupControlled}
+        WHERE ${groupManaged}
         SET n.active = $active
         RETURN ${namespaceProjection} AS namespace`,
       { actorKey, key: requiredText(namespaceKey, 'namespace key'), active });
@@ -2336,7 +2502,7 @@ export class IdentityStore {
       const result = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace)
           <-[:IN_NAMESPACE]-(classKey:Gs1ClassKeyAllocation {key: $key})
-        WHERE ${groupControlled}
+        WHERE ${groupManaged}
         SET classKey.active = $active
         WITH classKey
         OPTIONAL MATCH (asserter:User {key: classKey.assertedBy})
@@ -2382,7 +2548,7 @@ export class IdentityStore {
       if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
       const authorized = await tx.run(`
         MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
-        WHERE ${groupControlled}
+        WHERE ${groupManaged}
         RETURN true AS ok`, { actorKey, key });
       if (!authorized.records.length) throw new ReferenceError('Allocation namespace not found');
       const gcp = locked.records[0].get('gcp') as string;
@@ -2510,7 +2676,7 @@ export class IdentityStore {
         //    and never stands in for the Asset half.
         const authorized = await tx.run(`
           MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group)-[:MANAGES_NAMESPACE]->(:Gs1Namespace {key: $key})
-          WHERE ${groupControlled}
+          WHERE ${groupManaged}
           MATCH (g)-[:CAN_COLLABORATE]->(a:Asset {id: $assetId})
           RETURN a.id AS id`, { actorKey, key, assetId: assetKey });
         if (!authorized.records.length) throw new ReferenceError('Asset access or allocation namespace not found');

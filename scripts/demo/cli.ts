@@ -12,7 +12,7 @@ try {
   console.log('Development/demo only. Never expose these accounts publicly.');
   for (const [index, account] of demoAccounts.entries()) {
     const role = (demoAdministrators as readonly number[]).includes(index) ? ' (system administrator)' : '';
-    console.log(`${account.email}${role} — sees ${demoMembers(index).length} Workspace Members and can open ${demoDiscoverable(index).length} profiles`);
+    console.log(`${account.email}${role} — finds ${demoMembers(index).length} People and can open ${demoDiscoverable(index).length} profiles`);
   }
   console.log('Password for all demo accounts: ' + demoPassword);
   console.log('Start your local application and open ' + process.env.APP_URL);

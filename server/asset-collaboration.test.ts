@@ -143,7 +143,7 @@ test('somebody eligible to associate nothing is told so rather than shown an emp
   const page = show({ ...props, groups: [a, b], controlled: [a, b] });
   try {
     await settle(() => page.click(page.button('Associate another Group')));
-    assert.match(dialog()?.textContent ?? '', /You control no Group that is not already associated/);
+    assert.match(dialog()?.textContent ?? '', /You manage no Group that is not already associated/);
     assert.equal(page.field('select'), null);
     assert.equal(page.button('Continue')?.disabled, true);
   } finally { page.stop(); }

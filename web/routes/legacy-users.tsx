@@ -1,7 +1,7 @@
 import { redirect } from 'react-router';
 
 export function clientLoader() {
-  throw redirect('/members');
+  throw redirect('/people');
 }
 
 export default function LegacyUsersRedirect() {
