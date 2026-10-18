@@ -4,12 +4,27 @@ import { promisify } from 'node:util';
 import neo4j from 'neo4j-driver';
 import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { readdirSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 
 const exec = promisify(execFile);
 const suites = readdirSync('server').filter((file) => file.endsWith('.integration.test.ts')).sort();
 const selected = process.argv.slice(2);
 if (selected.some((file) => !suites.includes(file))) throw new Error('Pass integration test filenames from server/');
-for (const testFile of selected.length ? selected : suites) {
+const queue = [...(selected.length ? selected : suites)];
+// Suites share nothing: each has its own containers on random localhost ports,
+// so they run side by side. Most of a suite's time is a container starting, so
+// a few at once is what makes the whole run short; more than the machine's
+// cores only slows each Neo4j's start.
+const concurrency = Number(process.env.KANNABI_TEST_CONCURRENCY)
+  || Math.max(1, Math.min(4, availableParallelism()));
+const failed = [];
+
+/** Run one suite against its own disposable containers, and print its output
+ * in one piece when it ends so concurrent suites do not interleave. */
+async function runSuite(testFile) {
+  const startedAt = Date.now();
+  const output = [];
+  const log = (line) => output.push(line + '\n');
   const name = `kannabi-identity-test-${randomUUID()}`;
   const password = randomUUID();
   const image = process.env.NEO4J_TEST_IMAGE ?? 'neo4j:5-community';
@@ -18,7 +33,7 @@ for (const testFile of selected.length ? selected : suites) {
   let objectStarted = false;
   let storageEnv = {};
   try {
-    console.log(`Starting disposable Neo4j (${image})`);
+    log(`Starting disposable Neo4j (${image})`);
     await exec('docker', ['run', '--rm', '-d', '--name', name,
       '-p', '127.0.0.1::7687', '-e', `NEO4J_AUTH=neo4j/${password}`,
       '-e', 'NEO4J_server_memory_heap_initial__size=256m',
@@ -66,19 +81,38 @@ for (const testFile of selected.length ? selected : suites) {
     }
     const code = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['--import', 'tsx', '--test', `server/${testFile}`], {
-        stdio: 'inherit',
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, ...storageEnv, KANNABI_TEST_NEO4J_URI: uri, KANNABI_TEST_NEO4J_PASSWORD: password },
       });
+      child.stdout.on('data', (chunk) => output.push(chunk));
+      child.stderr.on('data', (chunk) => output.push(chunk));
       child.on('error', reject);
       child.on('exit', (code) => resolve(code ?? 1));
     });
-    if (code) process.exitCode = code;
+    if (code) failed.push(testFile);
+  } catch (error) {
+    failed.push(testFile);
+    log(String(error?.stack ?? error));
   } finally {
     await driver?.close();
-    if (objectStarted) await exec('docker', ['stop', name + '-s3']);
+    // Removed rather than stopped: nothing in a disposable container is worth
+    // a graceful shutdown, and Neo4j's takes most of the ten seconds `docker
+    // stop` allows, once per suite.
+    if (objectStarted) await exec('docker', ['rm', '-f', name + '-s3']).catch(() => {});
     if (started) {
-      await exec('docker', ['stop', name]);
-      console.log('Disposable Neo4j stopped; no user database was used.');
+      await exec('docker', ['rm', '-f', name]).catch(() => {});
+      log('Disposable Neo4j removed; no user database was used.');
     }
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    process.stdout.write(`\n── ${testFile} (${seconds}s)\n`);
+    for (const chunk of output) process.stdout.write(chunk);
   }
+}
+
+await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+  for (let next = queue.shift(); next; next = queue.shift()) await runSuite(next);
+}));
+if (failed.length) {
+  console.error(`\nFailed: ${failed.join(', ')}`);
+  process.exitCode = 1;
 }

@@ -667,7 +667,8 @@ pnpm test:setup
 pnpm test:integration
 ```
 
-The integration runner creates a disposable Neo4j container per suite and an Alarik container for media tests with a random password and localhost port, then stops it after testing.
+The integration runner creates a disposable Neo4j container per suite and an Alarik container for media tests with a random password and localhost port, then removes it after testing.
+Suites run up to four at a time (`KANNABI_TEST_CONCURRENCY` overrides it), and each suite's output is printed in one piece when it finishes.
 To run a focused suite, pass its filename, for example `pnpm test:integration asset-collaboration.integration.test.ts`.
 Tests cover canonicalization, conflicting claims, transactional and concurrent duplicate rejection, persisted authentication, password-stepped credential changes and recovery, explicit Group reporting, private/public authorization, immutable provenance after membership removal, encrypted mail configuration and recovery, live local SMTP delivery, signed S3 operations, photo authorization, policy enforcement, timezone presentation, theme persistence, and upload-failure cleanup.
 It never uses the application `.env` or an existing database.
