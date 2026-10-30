@@ -18,6 +18,7 @@ import { identifierInputFields } from './gs1.js';
 import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
+import { assetRecord, assetRepresentation, assetSummary, summaryOmits } from './asset-representation.js';
 
 /** The authenticated caller as the rest of the request sees them. `email` is
  * the caller's own address, carried so a client can show which account is
@@ -400,6 +401,29 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       // `query()` keeps only the first, so the request would apply less than
       // the URL asks for.
       return c.json(await store.findAssets(key, assetPageRequest(c.req.queries())));
+    })
+    // The structured Asset representation, at its own versioned paths so the
+    // routes above keep answering every existing client exactly as before. The
+    // same reads, the same readability and the same parsers; only the shape of
+    // the answer differs. Registered before /assets/:id has any chance to see
+    // a "v2" segment, which would not parse as an Asset ID anyway.
+    .get('/v2/assets', async (c) => {
+      const page = await store.findAssets(actor(c.get('user')), assetPageRequest(c.req.queries()));
+      return c.json({ representation: assetRepresentation, omitted: summaryOmits,
+        assets: page.assets.map((asset) => assetSummary(asset, page.matchedFields[asset.id] ?? [])),
+        matching: page.matching, total: page.total, nextCursor: page.nextCursor });
+    })
+    .get('/v2/assets/lookup', validator('query', (value) =>
+      assetLookupQuery(value as Record<string, unknown>)), async (c) => {
+      const lookup = await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'));
+      return c.json({ representation: assetRepresentation, identity: lookup.identity, omitted: summaryOmits,
+        assets: lookup.assets.map((asset) => assetSummary(asset)), matching: lookup.matching,
+        nextCursor: lookup.nextCursor });
+    })
+    .get('/v2/assets/:id', async (c) => {
+      const asset = await store.getAsset(assetId(c.req.param('id')), c.get('user')?.key ?? null);
+      if (!asset) return c.json({ error: 'Asset not found' }, 404);
+      return c.json({ representation: assetRepresentation, asset: assetRecord(asset) });
     })
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an

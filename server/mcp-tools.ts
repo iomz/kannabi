@@ -4,15 +4,12 @@ import { assetPageRequest, assetSorts, assetDirections } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { gs1LedgerQuery } from './gs1-ledger.js';
 import { isAssetId } from './asset-id.js';
-import {
-  classKeySchemes, identifierSchemes, issuanceSchemes, type ExternalIdentifier,
-} from './gs1.js';
-import { digitalLinkPath } from './gs1-digital-link.js';
-import { surfacedAssetPath } from './surfaced-uri.js';
+import { classKeySchemes, identifierSchemes, issuanceSchemes } from './gs1.js';
+import { assetRecord, assetSummary, notRecorded, summaryOmits } from './asset-representation.js';
 import { ValidationError } from './identity.js';
 import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
 import {
-  namespaceCounters, ReferenceError as DomainReferenceError, type Asset,
+  namespaceCounters, ReferenceError as DomainReferenceError,
   type Gs1ClassKeyAllocation, type Gs1LedgerEntry, type Gs1Namespace, type IdentityStore,
 } from './identity-store.js';
 
@@ -39,78 +36,19 @@ const identifierLevels = {
   class: 'describes a class of Assets, so it may address several',
 } as const;
 
-/** The Digital Link path for an identifier Kannabi also answers, or null.
- *
- * A path rather than an absolute URI: this process has no configured public
- * origin, and inventing one would assert a URI Kannabi cannot guarantee. A
- * class-level identifier gets null because Kannabi does not dereference that
- * address, so returning one would advertise a link that answers 404.
- */
-function digitalLinkFor(identifier: ExternalIdentifier): string | null {
-  return identifier.level === 'individual' ? digitalLinkPath(identifier) : null;
-}
+const entitySchema = z.object({ key: z.string(), name: z.string() });
+const credentialSchema = z.object({ id: z.string(), label: z.string() })
+  .describe('The API credential that asserted it, with the label it carried then. Null when a person acted directly.');
+const basisSchema = z.string().nullable()
+  .describe('The opaque reference the request named as its basis, such as a source row. A reference, not evidence.');
 
-/** A candidate, small enough to return many of. The native Asset ID is always
- * present, so any result can be carried into `get_asset` unambiguously. */
-function summarise(asset: Asset) {
-  return {
-    assetId: asset.id,
-    name: asset.name,
-    isPublic: asset.isPublic,
-    reportedAt: asset.reportedAt,
-    groups: asset.groups.map((group) => ({ key: group.key, name: group.name })),
-    owner: asset.owner ? { key: asset.owner.key, name: asset.owner.name } : null,
-    identifiers: asset.identifiers.map((identifier) => ({
-      scheme: identifier.scheme,
-      canonical: identifier.canonical,
-      level: identifier.level,
-      // Carried here, not only in get_asset, because these are exactly the
-      // arguments resolve_external_identifier takes: without them an agent
-      // holding a search result cannot ask "what else carries this identity"
-      // without a round trip whose only purpose is to reformat a value.
-      components: identifier.components,
-      digitalLink: digitalLinkFor(identifier),
-    })),
-    surfacedPath: surfacedAssetPath(asset.id, asset.identifiers),
-    // Present only where Kannabi's issuance ledger records the allocation. A
-    // list, because an Asset may carry issued keys of several schemes at once.
-    kannabiIssued: asset.issuances.map((issuance) => ({
-      scheme: issuance.scheme, canonical: issuance.canonical })),
-    photoCount: asset.photos.length,
-  };
-}
-
-const identifierSummarySchema = z.object({
+const identifierSchema = z.object({
   scheme: z.enum(identifierSchemes as readonly [string, ...string[]]),
-  canonical: z.string()
-    .describe('The GS1 element-string form, as Kannabi stores it, e.g. "(01)04901234567894".'),
+  value: z.string().describe('The GS1 element string, e.g. "(01)04901234567894".'),
   level: z.enum(['individual', 'class'])
-    .describe('"individual": this value identifies this one Asset. "class": it describes a kind of thing and other Assets may carry it too.'),
+    .describe('"individual" identifies this one Asset; "class" names a kind of thing other Assets may carry too.'),
   components: z.record(z.string(), z.string())
-    .describe('The identifier\'s parts, named exactly as resolve_external_identifier\'s arguments, so this identity can be resolved again without reformatting.'),
-  digitalLink: z.string().nullable()
-    .describe('This identity as a GS1 Digital Link path, which Kannabi dereferences to this Asset when prefixed with the deployment\'s origin. Null for a class-level identity, which Kannabi does not dereference. Kannabi is not a GS1-Conformant Resolver, and this is not a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org.'),
-});
-
-const summarySchema = z.object({
-  assetId: z.string().describe('The native Kannabi Asset ID. Pass it to get_asset; it means nothing outside Kannabi.'),
-  name: z.string().describe('The human-given Asset name. search_assets matches it, and also the quoted source description; matchedFields on a search result says which.'),
-  isPublic: z.boolean().describe('Whether the Asset is readable without signing in to Kannabi. Not a location, state or availability.'),
-  reportedAt: z.string().describe('When this Asset was reported to Kannabi. This is the Asset chronology; the Asset ID encodes no usable time.'),
-  groups: z.array(z.object({ key: z.string(), name: z.string() }))
-    .describe('The Groups collaborating on this Asset. Pass a key to search_assets.groupKeys to narrow to that Group.'),
-  owner: z.object({ key: z.string(), name: z.string() }).nullable()
-    .describe('The recorded Owner, if any. Useful for telling candidates apart; search_assets cannot filter by it, so narrow on the returned results.'),
-  identifiers: z.array(identifierSummarySchema)
-    .describe('Every external identity Kannabi holds for this Asset. Zero identifiers is an ordinary state, not missing data.'),
-  surfacedPath: z.string()
-    .describe('The path Kannabi puts in front of a person for this Asset: its preferred Digital Link when it has an eligible individual-level GS1 identity, and its native /asset/{assetId} path otherwise. Presentation only — assetId remains the stable identity, and this path changes if the identifier it derives from is detached.'),
-  kannabiIssued: z.array(z.object({
-    scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]),
-    canonical: z.string(),
-  })).describe('The identifiers Kannabi itself issued for this Asset, taken from its issuance ledger. An Asset may carry one per scheme, so a GIAI, a serialised GRAI and an SGTIN can all appear. An empty list means Kannabi issued none — including when the Asset stores a value that merely begins with a managed company prefix.'),
-  photoCount: z.number().int()
-    .describe('How many photos Kannabi holds for this Asset. The images are not served over MCP.'),
+    .describe('The arguments resolve_external_identifier takes for this identity, unchanged.'),
 });
 
 const attributionSchema = z.object({
@@ -168,78 +106,54 @@ function describeClassKey(classKey: Gs1ClassKeyAllocation) {
   };
 }
 
-function detail(asset: Asset) {
-  return {
-    ...summarise(asset),
-    reportedBy: asset.reportedBy,
-    provenance: asset.provenance,
-    identifiers: asset.identifiers.map((identifier) => ({
-      scheme: identifier.scheme,
-      canonical: identifier.canonical,
-      level: identifier.level,
-      components: identifier.components,
-      digitalLink: digitalLinkFor(identifier),
-      gs1PolicyVersion: identifier.policyVersion,
-      attachment: identifier.attachment,
+const actSchema = z.object({
+  at: z.string(), by: attributionSchema, via: credentialSchema.nullable(), basis: basisSchema,
+});
+
+const assetRecordSchema = z.object({
+  id: z.string().describe('The native Kannabi Asset ID: the handle get_asset takes, meaningful only inside Kannabi.'),
+  kannabi: z.object({
+    name: z.string(),
+    owner: entitySchema.nullable(),
+    groups: z.array(entitySchema).describe('The Groups collaborating on the Asset. Keys narrow search_assets.'),
+    public: z.boolean(),
+    reported: z.object({ at: z.string(), by: attributionSchema }),
+    lastChange: actSchema.nullable().describe('The latest change only, never a history.'),
+    issued: z.array(z.object({
+      scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]),
+      value: z.string(), at: z.string(), by: attributionSchema,
     })),
-    issuances: asset.issuances,
-    sourceRecord: asset.sourceRecord,
-    photos: asset.photos,
-  };
-}
-
-/** Quoted evidence, described so an agent cannot read it as Kannabi's own.
- *
- * Every field here restates whose statement it is, because the two facts look
- * alike — an instant and a name — and an agent that conflates them would
- * report a source system's claim as something Kannabi observed.
- *
- * The object carries no description of its own: the field that uses it
- * describes it, and a second one there would silently win and hide this. */
-const sourceRecordSchema = z.object({
-  reference: z.string()
-    .describe('An opaque reference to the source record, owned by whoever supplied it. Kannabi never parses, dereferences or interprets it, and it means nothing inside Kannabi; it is how a reader asks the source system for more than Kannabi holds.'),
-  recordedAt: z.string().nullable()
-    .describe('The instant the SOURCE RECORD states it recorded this Asset. This is not reportedAt and is not Kannabi chronology: Kannabi learned of this Asset at reportedAt, which is always later. Null means the source stated no time — never that it was recorded now. Never use it to order or date Assets; reportedAt is the only Asset chronology.'),
-  recordedBy: z.string().nullable()
-    .describe('The name the SOURCE RECORD states recorded this Asset. Display text only: it is not reportedBy, not a Kannabi User, and resolves to nobody. It has no identity and no authorization semantics, cannot be looked up or passed to any tool, and two identical names may be different people. Null means the source stated no name.'),
-  description: z.string().nullable()
-    .describe('The SOURCE RECORD\'s own description of this Asset, quoted exactly as Kannabi accepted it, line breaks included. Unverified and never edited: it is what the source said when the Asset was recorded, not what Kannabi asserts is true now, and any serial number, funding note or location inside it is the source\'s claim. search_assets matches it, and reports that it did. Null means no description is recorded in Kannabi, which is not evidence that the source had none.'),
+    photos: z.array(z.object({
+      key: z.string(), contentType: z.string(), size: z.number(), receivedAt: z.string().nullable(),
+    })),
+  }),
+  identifiers: z.array(identifierSchema.extend({
+    accepted: actSchema.extend({ gs1Policy: z.string() }).nullable()
+      .describe('Who accepted this identifier onto this Asset: an acceptance, not a verification. Null for one accepted before Kannabi kept this.'),
+    digitalLink: z.string().nullable(),
+  })),
+  source: z.object({
+    reference: z.string(),
+    says: z.object({
+      recordedAt: z.string().nullable(), recordedBy: z.string().nullable(), description: z.string().nullable(),
+    }),
+  }).nullable(),
+  notRecorded: z.array(z.string()),
 });
 
-const attachmentSchema = z.object({
-  acceptedBy: attributionSchema,
-  acceptedAt: z.string().describe('When this identifier was accepted onto this Asset.'),
-  assertedBy: z.object({ id: z.string(), label: z.string() }).nullable()
-    .describe('The API credential that asserted it, with the label it carried then, or null when a person asserted it directly. The label is a snapshot, never an identity.'),
-  basis: z.string().nullable()
-    .describe('The opaque reference the asserting client gave as the basis for this association, such as the source row it came from. A reference, not evidence: Kannabi never resolves or interprets it.'),
-}).nullable().describe('Who accepted this identifier onto this Asset, when, and on what stated basis. An acceptance, not a verification: Kannabi does not judge whether the identifier is correct, and this does not say who issued it — issuances does. Two identifiers on one Asset may conflict (for example two different GTINs) when the instance does not enforce GTIN consistency; both are shown, each with its own basis. Null for an association recorded before Kannabi kept this.');
-
-const changeProvenanceSchema = z.object({
-  assertedBy: z.object({ id: z.string(), label: z.string() }).nullable()
-    .describe('The API credential that asserted the change, with the label it carried then, or null when a person made it directly.'),
-  acceptedBy: attributionSchema,
-  acceptedAt: z.string().describe('When the latest change to this Asset was accepted.'),
-  basis: z.string().nullable().describe('The opaque reference given as the basis of that change. A reference, not evidence.'),
-}).nullable().describe('Who made the latest change to this Asset true, and on what stated basis. Latest change only, never a history: each change replaces it. Null only for an Asset last written before Kannabi recorded this.');
-
-const detailSchema = summarySchema.extend({
-  reportedBy: attributionSchema.describe('Who reported this Asset to Kannabi. Immutable provenance, never an access grant.'),
-  provenance: changeProvenanceSchema,
-  sourceRecord: sourceRecordSchema.nullable()
-    .describe('The pre-existing record this Asset was created from, as that record describes itself, or null when the Asset originated in Kannabi. Quoted evidence: Kannabi asserts only that the source says this — not that it is true, and not as its own account of the Asset. Never Kannabi\'s own chronology, authorship or current truth. It is immutable, fixed when the Asset was created and unaffected by later changes to it, and so is distinct from the mutable latest-change basis, which moves with every edit. It grants no access.'),
-  identifiers: z.array(identifierSummarySchema.extend({
-    gs1PolicyVersion: z.string()
-      .describe('The version of Kannabi\'s GS1 policy that accepted this value. Historical provenance; stored identifiers are never revalidated.'),
-    attachment: attachmentSchema,
-  })).describe('Every external identity Kannabi holds for this Asset, each with how it came to be attached.'),
-  issuances: z.array(issuanceSchema)
-    .describe('Kannabi\'s own issuance records for this Asset, at most one per scheme and empty if Kannabi issued nothing for it. These, not the presence of a matching identifier, are what make an identifier Kannabi-issued.'),
-  photos: z.array(z.object({
-    key: z.string(), contentType: z.string(), size: z.number(), createdAt: z.string().nullable(),
-  })).describe('Photo records Kannabi holds. Their bytes are not served over MCP; the keys identify them within Kannabi.'),
+const assetSummarySchema = z.object({
+  id: z.string().describe('The native Kannabi Asset ID. Pass it to get_asset for the full record.'),
+  kannabi: z.object({
+    name: z.string(), owner: entitySchema.nullable(), groups: z.array(entitySchema), public: z.boolean(),
+    reported: z.object({ at: z.string() }),
+  }),
+  identifiers: z.array(identifierSchema),
+  source: z.object({ reference: z.string() }).nullable(),
+  matched: z.array(z.string()).describe('Where the query text matched, as paths in the full record.'),
 });
+
+const omittedSchema = z.array(z.string())
+  .describe('Paths of the full record these summaries leave out. get_asset returns them.');
 
 const counterSchema = z.object({
   nextSequence: z.number().int()
@@ -292,7 +206,7 @@ function describeEntry(entry: Gs1LedgerEntry) {
   return {
     issuance,
     assetId: issuance.allocatedForAssetId,
-    asset: asset ? summarise(asset) : null,
+    asset: asset ? assetSummary(asset) : null,
     // An issued value stays bound to its Asset in the ledger even when the
     // identifier has been detached, so the two facts are reported apart. The
     // comparison is on the canonical form, which is what makes it one rule for
@@ -336,7 +250,7 @@ function queryRecord(entries: Record<string, string | string[] | number | undefi
 export const serverInfo = {
   name: 'kannabi',
   title: 'Kannabi Asset registry',
-  version: '0.2.0',
+  version: '0.3.0',
 } as const;
 
 /** What a client learns before it calls anything.
@@ -348,43 +262,19 @@ export const serverInfo = {
  * "Kannabi was never told". Naming the boundary is what keeps an agent from
  * answering a question Kannabi has no standing to answer.
  */
-export const instructions = `Kannabi is an Asset registry and an identity mediator: it records physical things and the different identities by which each one is known.
+export const instructions = `Kannabi is an Asset registry and an identity mediator: it records physical things and the identities by which each one is known. Every tool is read-only.
 
-Kannabi owns these facts, and this server can answer them:
-- the Asset itself: its name, when and by whom it was reported, its owner, the Groups that collaborate on it, and whether it is public;
-- for an Asset created from a record that already existed in another system, what that source record says about its own recording time and recorder, and the source's own description of the Asset, quoted exactly — Kannabi owns the fact that the source says it, never the claim itself;
-- the native Kannabi Asset ID, which addresses an Asset inside Kannabi and carries no meaning in any other system;
-- the external GS1 identifiers attached to an Asset (GTIN, SGTIN, GRAI, GIAI), at individual or class level, and for each one who accepted it onto the Asset, when, and on what stated basis — an acceptance, not a verification;
-- the GS1 Digital Link path each individual-level identity corresponds to, which a Kannabi deployment dereferences to that Asset;
-- Groups, the unit that collaborates on Assets;
-- the GS1 Company Prefix namespaces Kannabi Groups manage, the class keys they manage inside them, and the ledger of GIAIs, serialised GRAIs and SGTINs Kannabi itself issued from them.
+An Asset record says whose statement each value is:
+- kannabi: what Kannabi holds and did, by its own clock. kannabi.reported.at is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only Asset chronology.
+- source.says: what the pre-existing record named by source.reference states about itself, quoted exactly. Report it as that source's statement, never as a fact Kannabi holds.
+- notRecorded: ${notRecorded.join(', ')}. Kannabi does not own these facts; they belong to other systems, such as an EPCIS repository for events. Say Kannabi does not record them rather than inferring them from other fields.
+A field Kannabi holds no value for is null; that is not evidence about the world. Search and lookup return summaries and name the paths they omit; get_asset returns the full record.
 
-Kannabi does not own these facts, and this server cannot answer them:
-- where an Asset is now or where it has been;
-- business-process or supply-chain events involving it, which an EPCIS repository owns;
-- sensor readings, telemetry, or any other observation;
-- an Asset's condition, availability, bookings, or maintenance history;
-- anything about an identifier Kannabi was never told.
-When a request needs one of these, report that Kannabi does not hold it instead of inferring it from what is here. Those facts belong to other systems, which may expose tools of their own.
+Choosing a tool: a description such as "the inspection camera" -> search_assets; a complete GS1 identifier -> resolve_external_identifier; an Asset id -> get_asset; list_groups and list_gs1_namespaces supply the keys the others take.
 
-Choosing a tool:
-- an incomplete human description, such as "the inspection camera" -> search_assets;
-- a complete GS1 identifier already in hand -> resolve_external_identifier;
-- a native Kannabi Asset ID -> get_asset;
-- list_groups and list_gs1_namespaces supply the keys the other tools accept.
-Every Asset a tool returns carries its assetId, which is the stable handle get_asset takes.
+Identifiers: a class-level identifier such as a GTIN may be carried by several Assets, which is an answer rather than an ambiguity; an individual-level one resolves to at most one. Storing an identifier is not issuing it: only kannabi.issued and list_gs1_issuances show what Kannabi issued, and a managed GTIN carries no product data. A digitalLink path is one Kannabi dereferences; Kannabi is not a GS1-Conformant Resolver and emits no canonical GS1 Digital Link URI.
 
-Four distinctions matter here and must not be collapsed:
-- Kannabi dereferences the Digital Link forms it supports; it is not a GS1-Conformant Resolver. It publishes no resolver description file, declares no supported primary keys, and answers no linkset, so do not describe a Kannabi address as conformant resolution or as a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org. A path here is also not a claim that anyone else resolves that identifier to this Asset.
-- individual identity is not class identity. A class-level identifier such as a GTIN describes a kind of thing, so several Assets are a correct answer rather than an ambiguity. An individual-level identifier resolves to at most one.
-- what Kannabi observed is not what it was told. An Asset's reportedAt and reportedBy are Kannabi's own record: when it learned of the Asset and which Kannabi User told it. An Asset's sourceRecord is quoted from a pre-existing record elsewhere, and its recordedAt and recordedBy are that record's statements about itself. Never present a quoted time as when the Asset was reported, never present a quoted name as a Kannabi User or as who reported it, and never order or date Assets by a quoted time. A quoted name resolves to nobody and grants nothing. A quoted description is what the source said, so report anything found in it — a serial number, a place, a lending note — as the source's statement, never as a fact Kannabi holds; search_assets can find an Asset by it and says when it did.
-- storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored identifier merely begins with a managed company prefix was not issued by Kannabi, and list_gs1_issuances is the only evidence of issuance. The same distinction one level up: a GTIN recorded on an Asset is an observation, while a GTIN in list_managed_class_keys is one a Group brought into a prefix it manages, and only the second can carry Kannabi-issued serials.
-
-Kannabi allocates identifiers; it is not a product catalogue. A managed GTIN here is a number Kannabi issued or was told about, with no name, description or other trade-item data attached, and communicating a trade item's characteristics to trading partners remains its allocator's responsibility in their own systems. Do not read a managed class key as product master data, and do not infer what a thing is from the fact that Kannabi allocated a GTIN for it.
-
-surfacedPath is presentation, not identity. assetId is what addresses an Asset and never changes; surfacedPath follows whichever identifier Kannabi currently prefers and changes if that identifier is detached. Carry assetId between tools.
-
-Every tool here is read-only. This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
+This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
 
 /** Build the server around a store and a rule for whose view each request runs
  * under. The rule is a parameter rather than a mode flag read here, so the
@@ -397,22 +287,14 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
   server.registerTool('search_assets', {
     title: 'Search Assets',
     description: [
-      'Find Kannabi Assets by text fragment and structured facts, for an incomplete description',
-      'such as "the inspection camera". Text matching is a plain case-insensitive substring of the',
-      'Asset name or of the quoted source description: it never ranks, guesses or infers.',
-      'Each result says in matchedFields which of the two matched. A sourceDescription match is a',
-      'match against what a source record said, not against a fact Kannabi asserts.',
-      'Use this to narrow a candidate set, then inspect a candidate with get_asset using the assetId returned here.',
-      'Only the arguments below narrow the query. Owner and reporter are returned on each result to',
-      'tell candidates apart, but cannot be searched on; narrow on the results instead.',
-      'To resolve a complete GS1 identifier you already hold, use resolve_external_identifier instead.',
-      'Results are totally ordered and paged with an opaque cursor bound to this query\'s filters',
-      'and ordering: reuse it only with the same query, groupKeys, schemes, identified, reportedFrom,',
-      'reportedTo, sort and direction. Only limit may differ between pages.',
+      'Find Assets by a case-insensitive substring of kannabi.name or source.says.description, and by',
+      'the filters below. It never ranks, guesses or infers. Returns summaries for narrowing candidates;',
+      'get_asset returns the full record. The cursor is bound to this query\'s filters and ordering, so',
+      'only limit may change between pages.',
     ].join(' '),
     inputSchema: z.object({
       query: z.string().max(200).optional()
-        .describe('Case-insensitive substring of the Asset name or of its quoted source description. Omit to browse everything.'),
+        .describe('Substring of kannabi.name or source.says.description. Omit to browse everything.'),
       groupKeys: z.array(z.string()).optional()
         .describe('Restrict to Assets a listed Group collaborates on. Keys come from list_groups.'),
       schemes: z.array(z.enum(identifierSchemes as readonly [string, ...string[]])).optional()
@@ -420,19 +302,17 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       identified: z.enum(['any', 'none']).optional()
         .describe('"any": Assets with at least one external identifier. "none": Assets with none.'),
       reportedFrom: z.string().optional()
-        .describe('Lower bound on reportedAt, as an ISO date or instant.'),
+        .describe('Lower bound on kannabi.reported.at, as an ISO date or instant.'),
       reportedTo: z.string().optional()
-        .describe('Upper bound on reportedAt. A plain date covers that whole day; an instant is exact.'),
-      sort: z.enum(assetSorts).optional().describe('Default "name". "reportedAt" is the Asset chronology.'),
+        .describe('Upper bound on kannabi.reported.at. A plain date covers that whole day.'),
+      sort: z.enum(assetSorts).optional().describe('Default "name". "reportedAt" orders by kannabi.reported.at.'),
       direction: z.enum(assetDirections).optional().describe('Default "asc".'),
       limit: z.number().int().min(1).max(100).optional().describe('Page size, default 30.'),
       cursor: z.string().optional().describe('nextCursor from the previous page of this same query.'),
     }),
     outputSchema: z.object({
-      assets: z.array(summarySchema.extend({
-        matchedFields: z.array(z.enum(['name', 'sourceDescription']))
-          .describe('Which fields the query text matched. "sourceDescription" means the text appears in what the source record said about the Asset — quoted, unverified text — not in anything Kannabi asserts. Empty when no query text was given.'),
-      })).describe('This page of candidates, in the requested order.'),
+      omitted: omittedSchema,
+      assets: z.array(assetSummarySchema).describe('This page of candidates, in the requested order.'),
       matching: z.number().int()
         .describe('Assets matching the whole query, not just this page. Zero means nothing matched what was asked.'),
       total: z.number().int()
@@ -451,8 +331,8 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       }));
       const page = await store.findAssets(audience, request);
       return result({
-        assets: page.assets.map((asset) => ({
-          ...summarise(asset), matchedFields: page.matchedFields[asset.id] ?? [] })),
+        omitted: summaryOmits,
+        assets: page.assets.map((asset) => assetSummary(asset, page.matchedFields[asset.id] ?? [])),
         matching: page.matching,
         total: page.total, nextCursor: page.nextCursor,
       });
@@ -471,8 +351,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       'An empty result means no Asset carries the identifier — it never means the value is invalid,',
       'which is reported as an error instead.',
       'This tool takes external identities only; a native Kannabi Asset ID goes to get_asset.',
-      'Each result already carries the Asset\'s name, Groups and identifiers; call get_asset with its',
-      'assetId only when the full record is needed.',
+      'Returns summaries; get_asset returns the full record.',
     ].join(' '),
     inputSchema: z.object({
       scheme: z.enum(identifierSchemes as readonly [string, ...string[]])
@@ -494,7 +373,8 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
         levelMeaning: z.string()
           .describe('What this level means for the result count, so several Assets read as an answer rather than an ambiguity.'),
       }).describe('The identity as Kannabi understood it, echoed before any Asset was read, so it discloses nothing about what exists.'),
-      assets: z.array(summarySchema).describe('The Assets carrying this identity. Empty means no Asset carries it.'),
+      omitted: omittedSchema,
+      assets: z.array(assetSummarySchema).describe('The Assets carrying this identity. Empty means no Asset carries it.'),
       matching: z.number().int().describe('Assets carrying this identity in total, not just this page.'),
       nextCursor: z.string().nullable()
         .describe('Pass back as cursor for the next page of a class identity, or null when this page is the last.'),
@@ -514,7 +394,8 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       const { canonical, scheme, level } = lookup.identity;
       return result({
         identity: { scheme, canonical, level, levelMeaning: identifierLevels[level] },
-        assets: lookup.assets.map(summarise),
+        omitted: summaryOmits,
+        assets: lookup.assets.map((asset) => assetSummary(asset)),
         matching: lookup.matching,
         nextCursor: lookup.nextCursor,
       });
@@ -524,10 +405,8 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
   server.registerTool('get_asset', {
     title: 'Inspect an Asset',
     description: [
-      'Return everything Kannabi knows about one Asset, addressed by its native Kannabi Asset ID.',
-      'The Asset ID is Kannabi\'s own identity anchor and the stable handle returned by every other',
-      'tool here; it is not a GS1 identifier and has no meaning in any other system.',
-      'Its embedded UUIDv7 timestamp carries no domain meaning — reportedAt is the chronology.',
+      'Return the full record of one Asset by its native Kannabi Asset ID, the id every other tool',
+      'returns. The ID is not a GS1 identifier and its embedded timestamp means nothing.',
       'Returns found: false when no such Asset exists.',
     ].join(' '),
     inputSchema: z.object({
@@ -536,7 +415,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     outputSchema: z.object({
       found: z.boolean()
         .describe('False when Kannabi holds no Asset with that ID. A well-formed ID that is not found is an answer, not an error.'),
-      asset: detailSchema.nullable(),
+      asset: assetRecordSchema.nullable(),
     }),
     annotations: readOnly,
   }, async ({ assetId }, ctx) => {
@@ -548,7 +427,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
           + 'from a GS1 identifier, use resolve_external_identifier.');
       }
       const asset = await store.getAsset(assetId, audience);
-      return result({ found: asset !== null, asset: asset ? detail(asset) : null });
+      return result({ found: asset !== null, asset: asset ? assetRecord(asset) : null });
     } catch (error) { return failed(error); }
   });
 
@@ -652,10 +531,11 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     }),
     outputSchema: z.object({
       namespace: namespaceSchema.describe('The namespace these issuances came from.'),
+      omitted: omittedSchema,
       entries: z.array(z.object({
         issuance: issuanceSchema,
         assetId: z.string().describe('The Asset this value was issued for. Pass it to get_asset.'),
-        asset: summarySchema.nullable().describe('The Asset itself, when this server can read it.'),
+        asset: assetSummarySchema.nullable().describe('The Asset itself, when this server can read it.'),
         stillAttached: z.boolean().nullable()
           .describe('Whether the issued value is still attached to that Asset. False means it was detached: the issuance stands and the value is never reissued.'),
       })).describe('One page of issuances. The ledger is the only record of what Kannabi allocated from this namespace; matching gives its full size, and nextCursor the rest.'),
@@ -674,6 +554,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       })));
       return result({
         namespace: describeNamespace(page.namespace),
+        omitted: summaryOmits,
         entries: page.entries.map(describeEntry),
         matching: page.matching,
         nextCursor: page.nextCursor,

@@ -99,6 +99,9 @@ Preserve the README naming story at the bottom of README.
 - The MCP server states Kannabi's knowledge boundary in its connection instructions, naming the facts other systems own. An empty result must never be presentable as evidence about a fact Kannabi does not hold.
 - Every handle an MCP tool returns must be accepted unchanged by the tool that consumes it, and every field an agent must interpret carries its own description.
 - The MCP process's stdout is protocol; every diagnostic goes to stderr.
+- The structured Asset representation (`server/asset-representation.ts`) encodes whose statement each value is in where it sits: `kannabi` for what Kannabi holds and did, `source.says` for what a source record states, `notRecorded` for kinds of fact Kannabi records none of. MCP returns it and the HTTP API serves it under `/api/v2`; neither builds its own. A new Asset field takes its place in that structure in the same change, rather than an explanation in prose.
+- No instant on an Asset is the time of a physical event. Every instant is the `at` of something Kannabi did, or the `recordedAt` a source says; an acquisition, loan, transfer or disposal date is never derived from either, nor from quoted text.
+- A value Kannabi holds none of is an explicit null in the structured representation, never a missing key, and a summary states the paths it omits.
 
 # Design principles
 

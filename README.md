@@ -392,6 +392,46 @@ The numeric path space at the deployment's origin is reserved for Digital Link.
 Digital Link URIs are constructed at the application origin; a separate Digital Link origin belongs with resolver work.
 The status and redirect are decided in the server, which the single-page build cannot do for itself, so they apply to production builds rather than to the Vite dev server.
 
+## The structured Asset representation
+
+An Asset's facts come from three places, and the structured representation puts each in its own part of the record, so where a value sits says whose statement it is:
+
+```json
+{
+  "id": "0198c2a0-…",
+  "kannabi": {
+    "name": "Spectrum analyser", "owner": null, "groups": [{ "key": "…", "name": "Workshop" }], "public": false,
+    "reported": { "at": "2026-10-17T08:00:00Z", "by": { "key": "…", "name": "Migration Operator", "status": "active" } },
+    "lastChange": { "at": "…", "by": { … }, "via": { "id": "…", "label": "legacy loader" }, "basis": "depot:assets:100" },
+    "issued": [], "photos": []
+  },
+  "identifiers": [{ "scheme": "gtin", "value": "(01)04901234567894", "level": "class", "components": { "gtin": "04901234567894" },
+    "accepted": { "at": "…", "by": { … }, "via": null, "basis": "depot:assetcats:10", "gs1Policy": "…" }, "digitalLink": null }],
+  "source": {
+    "reference": "depot:assets:100",
+    "says": { "recordedAt": "2015-04-12T00:30:00Z", "recordedBy": "K. Sato", "description": "Purchased 2015-11-02 …" }
+  },
+  "notRecorded": ["acquisition", "location", "custody", "ownership history", "events", "observations", "condition"]
+}
+```
+
+`kannabi` is what Kannabi holds and did, by its own clock.
+`kannabi.reported.at` is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only chronology.
+`source.says` is what the record named by `source.reference` states about itself, quoted byte for byte; Kannabi asserts only that the source says it.
+`notRecorded` names the kinds of fact Kannabi records none of, so their absence is stated rather than left to an empty field.
+
+Every instant is the `at` of something Kannabi did, or the `recordedAt` a source says.
+There is no field a physical event could occupy, so no instant can be read as an acquisition, a loan or a transfer, and a date written in the source's description stays inside the quotation.
+A value Kannabi holds none of is an explicit `null`, never a missing key.
+
+Search and lookup return summaries: the same paths as the record with some left out, and every page lists in `omitted` the paths it does not carry.
+Each search result says in `matched` where the query matched, as a path into the record, so a match inside `source.says.description` is visibly a match on what a source said.
+
+The representation is computed from the stored Asset on every read and changes nothing that is stored.
+The HTTP API serves it at `GET /api/v2/assets/{id}`, `GET /api/v2/assets` and `GET /api/v2/assets/lookup`, which take the same parameters and the same readability as their `/api/assets` counterparts and answer with `"representation": 2`; those original routes keep their first representation unchanged.
+MCP's `get_asset`, `search_assets`, `resolve_external_identifier` and `list_gs1_issuances` return this representation.
+`server/asset-representation.ts` builds it for both.
+
 ## Agent access over MCP
 
 Kannabi exposes a domain-oriented [Model Context Protocol](https://modelcontextprotocol.io/) server over stdio, so an external agent can discover and inspect Assets without the browser UI.
@@ -404,6 +444,7 @@ pnpm mcp
 `pnpm dev:mcp` runs the same server from source. A host launches it as a child process and speaks MCP on its stdin/stdout; it reads `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` from the environment or `.env`, serves no network listener, and never calls Kannabi's HTTP API. Its stdout carries the protocol; diagnostics go to stderr.
 
 Seven tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete GS1 identity, `get_asset` for inspection by native Asset ID, `list_groups` and `list_gs1_namespaces` for the vocabulary those take, `list_managed_class_keys` for the GTINs and GRAI asset types a namespace may issue serials under, and `list_gs1_issuances` for Kannabi's issuance ledger.
+Asset results use the structured Asset representation described above.
 Every result carries the native Asset ID, so a candidate from any tool can be inspected unambiguously, and each identifier is returned with the components that resolve it again.
 Class-level identifiers may resolve to several Assets; individual-level identifiers resolve to at most one.
 Allocation provenance is read from the ledger alone: an Asset whose stored GIAI merely begins with a managed company prefix is not reported as Kannabi-issued.
@@ -589,6 +630,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Browse and search by name or quoted source description | yes | `GET /api/assets` | `search_assets` |
 | Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
 | Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
+| Read the structured Asset representation | no | `GET /api/v2/assets`, `/api/v2/assets/lookup`, `/api/v2/assets/{id}` | every Asset result |
 | Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
 | Supply identifiers while reporting | no | yes | no |
 | Rename, change visibility | yes | `PATCH /api/assets/{id}` | no |
@@ -639,7 +681,9 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 **The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
 
-**A source description is quoted text, and search says when it matched.** `GET /api/assets` and `search_assets` match a case-insensitive substring of the Asset name or of its source record's description, and each result names the fields that matched. A match on the description is a match on what a source said, so the web UI marks it and MCP reports it as `sourceDescription`; it is never presented as a match on a fact Kannabi holds. The description is set at creation only, like the rest of the attribution.
+**A source description is quoted text, and search says when it matched.** `GET /api/assets` and `search_assets` match a case-insensitive substring of the Asset name or of its source record's description, and each result names the fields that matched. A match on the description is a match on what a source said, so the web UI marks it, `GET /api/assets` reports it as `sourceDescription`, and the structured representation as `source.says.description`; it is never presented as a match on a fact Kannabi holds. The description is set at creation only, like the rest of the attribution.
+
+**The web UI reads the first representation.** The Asset page lays out Kannabi's record and the source's statement for a person, in words, and needs fields the structured record leaves out, such as whether this reader may edit. The structured representation is for a client that receives fields without a page around them.
 
 **Identifier provenance is read-only everywhere.** Each association records who accepted it, when, and the basis the request named in `X-Kannabi-Basis`; nothing supplies it as data, and the accepting User and credential come only from authentication. It is an acceptance, never a verification, and it is removed with the association it describes.
 

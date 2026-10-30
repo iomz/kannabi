@@ -197,7 +197,7 @@ test('MCP operations run under an authenticated Kannabi principal', { skip: !uri
   await t.test('over stdio, a linked User sees only their own Assets', async () => {
     const response = await call('search_assets', { query: 'camera' }, { [principalMetaKey]: asserted() });
     assert.ok(!response.isError, response.content?.[0]?.text);
-    const ids = (response.structuredContent!.assets as Json[]).map((asset) => asset.assetId);
+    const ids = (response.structuredContent!.assets as Json[]).map((asset) => asset.id);
     assert.deepEqual([...ids].sort(), [inWorkshop.id, shared.id].sort());
   });
 
