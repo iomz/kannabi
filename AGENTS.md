@@ -99,6 +99,8 @@ Preserve the README naming story at the bottom of README.
 - The MCP server states Kannabi's knowledge boundary in its connection instructions, naming the facts other systems own. An empty result must never be presentable as evidence about a fact Kannabi does not hold.
 - Every handle an MCP tool returns must be accepted unchanged by the tool that consumes it, and every field an agent must interpret carries its own description.
 - The MCP process's stdout is protocol; every diagnostic goes to stderr.
+- `server/asset-semantics.ts` is the one statement of what each Asset field means — its standing, the clock and meaning of each instant, what null means — and of the facts Kannabi does not hold. The HTTP API serves it and MCP serves and renders it; neither restates it differently. A change that adds or changes an Asset field states its meaning there in the same change. It describes and never decides: nothing reads it to choose an answer.
+- No instant on an Asset is the time of a physical event. Every instant is Kannabi's clock recording one write, or a source record's statement about itself; an acquisition, loan, transfer or disposal date is never derived from either, nor from quoted text.
 
 # Design principles
 

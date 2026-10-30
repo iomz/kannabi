@@ -161,7 +161,7 @@ test('the MCP tool surface is discoverable and read-only', async (t) => {
 
   await t.test('exposes exactly the Kannabi domain tools', () => {
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
-      'get_asset', 'list_groups', 'list_gs1_issuances', 'list_gs1_namespaces',
+      'describe_asset_semantics', 'get_asset', 'list_groups', 'list_gs1_issuances', 'list_gs1_namespaces',
       'list_managed_class_keys',
       'resolve_external_identifier', 'search_assets',
     ]);

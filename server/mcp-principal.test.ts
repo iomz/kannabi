@@ -242,6 +242,7 @@ test('the audience a tool runs under follows the request', async (t) => {
       ['list_gs1_namespaces', {}],
       ['list_managed_class_keys', { namespaceKey: 'n1' }],
       ['list_gs1_issuances', { namespaceKey: 'n1' }],
+      ['describe_asset_semantics', {}],
     ] as const) {
       const response = await client.callTool({ name, arguments: args }) as
         { isError?: boolean; content?: { text?: string }[] };
@@ -258,7 +259,7 @@ test('the audience a tool runs under follows the request', async (t) => {
     const client = await connect(storeWithLink(linked), principalAudienceResolver(storeWithLink(linked)));
     t.after(() => client.close());
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 8);
     assert.ok(client.getInstructions());
   });
 

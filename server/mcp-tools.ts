@@ -10,6 +10,7 @@ import {
 import { digitalLinkPath } from './gs1-digital-link.js';
 import { surfacedAssetPath } from './surfaced-uri.js';
 import { ValidationError } from './identity.js';
+import { assetSemantics, clocks, standings } from './asset-semantics.js';
 import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
 import {
   namespaceCounters, ReferenceError as DomainReferenceError, type Asset,
@@ -336,7 +337,7 @@ function queryRecord(entries: Record<string, string | string[] | number | undefi
 export const serverInfo = {
   name: 'kannabi',
   title: 'Kannabi Asset registry',
-  version: '0.2.0',
+  version: '0.3.0',
 } as const;
 
 /** What a client learns before it calls anything.
@@ -360,24 +361,21 @@ Kannabi owns these facts, and this server can answer them:
 - the GS1 Company Prefix namespaces Kannabi Groups manage, the class keys they manage inside them, and the ledger of GIAIs, serialised GRAIs and SGTINs Kannabi itself issued from them.
 
 Kannabi does not own these facts, and this server cannot answer them:
-- where an Asset is now or where it has been;
-- business-process or supply-chain events involving it, which an EPCIS repository owns;
-- sensor readings, telemetry, or any other observation;
-- an Asset's condition, availability, bookings, or maintenance history;
-- anything about an identifier Kannabi was never told.
-When a request needs one of these, report that Kannabi does not hold it instead of inferring it from what is here. Those facts belong to other systems, which may expose tools of their own.
+${assetSemantics.unheld.map((fact) => `- ${fact.statement};`).join('\n')}
+When a request needs one of these, report that Kannabi does not hold it instead of inferring it from what is here. Those facts belong to other systems, which may expose tools of their own. ${assetSemantics.quotedMentions}
 
 Choosing a tool:
 - an incomplete human description, such as "the inspection camera" -> search_assets;
 - a complete GS1 identifier already in hand -> resolve_external_identifier;
 - a native Kannabi Asset ID -> get_asset;
-- list_groups and list_gs1_namespaces supply the keys the other tools accept.
+- list_groups and list_gs1_namespaces supply the keys the other tools accept;
+- what a field of an Asset means, whose clock an instant was read from, or whether Kannabi holds a kind of fact at all -> describe_asset_semantics, which states the same meanings Kannabi's HTTP API serves.
 Every Asset a tool returns carries its assetId, which is the stable handle get_asset takes.
 
 Four distinctions matter here and must not be collapsed:
 - Kannabi dereferences the Digital Link forms it supports; it is not a GS1-Conformant Resolver. It publishes no resolver description file, declares no supported primary keys, and answers no linkset, so do not describe a Kannabi address as conformant resolution or as a canonical GS1 Digital Link URI, which the standard reserves for id.gs1.org. A path here is also not a claim that anyone else resolves that identifier to this Asset.
 - individual identity is not class identity. A class-level identifier such as a GTIN describes a kind of thing, so several Assets are a correct answer rather than an ambiguity. An individual-level identifier resolves to at most one.
-- what Kannabi observed is not what it was told. An Asset's reportedAt and reportedBy are Kannabi's own record: when it learned of the Asset and which Kannabi User told it. An Asset's sourceRecord is quoted from a pre-existing record elsewhere, and its recordedAt and recordedBy are that record's statements about itself. Never present a quoted time as when the Asset was reported, never present a quoted name as a Kannabi User or as who reported it, and never order or date Assets by a quoted time. A quoted name resolves to nobody and grants nothing. A quoted description is what the source said, so report anything found in it — a serial number, a place, a lending note — as the source's statement, never as a fact Kannabi holds; search_assets can find an Asset by it and says when it did.
+- what Kannabi observed is not what it was told. No instant on an Asset is the time of an acquisition, loan, transfer or any other physical event: every instant is either Kannabi's own record of a write in Kannabi, or a source record's statement about itself. An Asset's reportedAt and reportedBy are Kannabi's own record: when it learned of the Asset and which Kannabi User told it. An Asset's sourceRecord is quoted from a pre-existing record elsewhere, and its recordedAt and recordedBy are that record's statements about itself. Never present a quoted time as when the Asset was reported, never present a quoted name as a Kannabi User or as who reported it, and never order or date Assets by a quoted time. A quoted name resolves to nobody and grants nothing. A quoted description is what the source said, so report anything found in it — a serial number, a place, a lending note — as the source's statement, never as a fact Kannabi holds; search_assets can find an Asset by it and says when it did.
 - storing an identifier is not issuing it. Kannabi claims to have allocated a value only where its issuance ledger records it. An Asset whose stored identifier merely begins with a managed company prefix was not issued by Kannabi, and list_gs1_issuances is the only evidence of issuance. The same distinction one level up: a GTIN recorded on an Asset is an observation, while a GTIN in list_managed_class_keys is one a Group brought into a prefix it manages, and only the second can carry Kannabi-issued serials.
 
 Kannabi allocates identifiers; it is not a product catalogue. A managed GTIN here is a number Kannabi issued or was told about, with no name, description or other trade-item data attached, and communicating a trade item's characteristics to trading partners remains its allocator's responsibility in their own systems. Do not read a managed class key as product master data, and do not infer what a thing is from the fact that Kannabi allocated a GTIN for it.
@@ -549,6 +547,58 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       }
       const asset = await store.getAsset(assetId, audience);
       return result({ found: asset !== null, asset: asset ? detail(asset) : null });
+    } catch (error) { return failed(error); }
+  });
+
+  server.registerTool('describe_asset_semantics', {
+    title: 'Describe what Asset fields mean',
+    description: [
+      'Return Kannabi\'s own statement of what each field of an Asset means: whether it is Kannabi\'s',
+      'identity, its record of a write, its current state, a quoted source statement, or derived;',
+      'whose clock each instant was read from and what it is the time of; what null means; and which',
+      'kinds of fact Kannabi does not hold at all. The same statement Kannabi\'s HTTP API serves at',
+      '/api/semantics. It describes fields and holds no Asset data, so it answers the same for every Asset.',
+    ].join(' '),
+    outputSchema: z.object({
+      semantics: z.object({
+        version: z.number().int().describe('Increments when any meaning stated here changes.'),
+        chronology: z.literal('reportedAt')
+          .describe('The only instant that orders or dates Assets. Every other instant is the time of one specific write, or a source\'s statement.'),
+        absence: z.string().describe('What it means that a fact is absent from an Asset.'),
+        standings: z.object(Object.fromEntries(Object.keys(standings)
+          .map((standing) => [standing, z.string()]))).describe('Each standing a field can have, defined.'),
+        clocks: z.object(Object.fromEntries(Object.keys(clocks)
+          .map((clock) => [clock, z.string()]))).describe('Each clock an instant can be read from, defined.'),
+        fields: z.array(z.object({
+          paths: z.object({
+            http: z.string().nullable().describe('The field in the HTTP API\'s Asset object, or null where it carries none.'),
+            mcp: z.string().nullable()
+              .describe('The field in the asset object get_asset returns, "[]" marking a list element; search results carry the summary subset. Null where MCP carries none.'),
+          }),
+          standing: z.enum(Object.keys(standings) as [string, ...string[]])
+            .describe('How the field came to be true; see standings.'),
+          means: z.string().describe('What the field states.'),
+          time: z.object({
+            clock: z.enum(Object.keys(clocks) as [string, ...string[]]).describe('Whose clock; see clocks.'),
+            instantOf: z.string().describe('What this instant is the time of, and nothing else.'),
+          }).optional().describe('Present exactly on instants.'),
+          absent: z.string().optional().describe('What null or an empty list means for this field.'),
+          never: z.array(z.string()).optional().describe('Readings of this field that are wrong.'),
+        })).describe('Every field of an Asset, each with its standing. A field inherits from the nearest listed ancestor.'),
+        unheld: z.array(z.object({
+          fact: z.string().describe('A short name for the kind of fact.'),
+          statement: z.string().describe('The kind of fact Kannabi does not hold.'),
+        })).describe('Kinds of fact no Asset holds. Answer a question about one with "Kannabi does not hold this", never with an inference from the fields.'),
+        quotedMentions: z.string().describe('How to read a source description that mentions an unheld fact.'),
+      }),
+    }),
+    annotations: readOnly,
+  }, async (ctx) => {
+    // Holds no Asset data, but answers under the same posture as every other
+    // tool, so a principal-mode server never answers somebody it cannot name.
+    try {
+      await resolveAudience(ctx.mcpReq._meta);
+      return result({ semantics: assetSemantics });
     } catch (error) { return failed(error); }
   });
 

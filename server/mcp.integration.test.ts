@@ -124,7 +124,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
 
   await t.test('the transport completes initialize and tool discovery', async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 8);
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true));
     assert.equal(client.getServerVersion()?.name, 'kannabi');
   });

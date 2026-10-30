@@ -18,6 +18,7 @@ import { identifierInputFields } from './gs1.js';
 import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
+import { assetSemantics } from './asset-semantics.js';
 
 /** The authenticated caller as the rest of the request sees them. `email` is
  * the caller's own address, carried so a client can show which account is
@@ -85,6 +86,14 @@ function memberAuthError(error: unknown, fallback: string): never {
 
 export function createInventoryApi(store: IdentityStore, auth: Auth, origin: string,
   media?: MediaService, mail?: MailService, tokens?: ApiTokenService) {
+  /** Points a JSON answer about Assets at the statement of what its fields
+   * mean, so a client holding only the response can find it (RFC 8288). Set
+   * on JSON alone: photo bytes are not an Asset representation. */
+  const semanticsLink = `<${new URL('/api/semantics', origin)}>; rel="describedby"`;
+  const describedBy = async (c: Context<Env>, next: Next) => {
+    await next();
+    if (c.res.headers.get('Content-Type')?.startsWith('application/json')) c.header('Link', semanticsLink);
+  };
   return new Hono<Env>()
     // The Origin requirement exists because a browser attaches cookies to a
     // cross-site request on its own. A bearer credential is never attached
@@ -272,6 +281,12 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       return c.json({ ok: true });
     })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
+    // What each part of an Asset representation is. Static and holding no
+    // Asset data, so every visitor reads it, as they read a public Asset.
+    .get('/semantics', (c) => c.json({ semantics: assetSemantics }))
+    .use('/assets', describedBy)
+    .use('/assets/*', describedBy)
+    .use('/reports', describedBy)
     .patch('/settings', async (c) => c.json({ settings: await store.updateSettings(actor(c.get('user')), await c.req.json()) }))
     // The Assets that block enforcing GTIN consistency, a page at a time. The
     // 409 refusing enforcement carries the first page; this continues it.
