@@ -37,8 +37,16 @@ export function principalFromMeta(meta: Record<string, unknown> | undefined): Ex
   }
 }
 
-/** Decides, per request, whose view of Kannabi an operation runs under. */
-export type AudienceResolver = (meta: Record<string, unknown> | undefined) => Promise<NamedAudienceInput>;
+/** Decides, per request, whose view of Kannabi an operation runs under.
+ *
+ * `reach` is what a client is told about that view, in the connection
+ * instructions. It travels with the rule it describes so that a server cannot
+ * be built reading one way while saying it reads another: a client told it
+ * sees the whole instance would report an empty result scoped to one User as
+ * something no Asset in Kannabi matches.
+ */
+export type AudienceResolver = ((meta: Record<string, unknown> | undefined) => Promise<NamedAudienceInput>)
+  & Readonly<{ reach: string }>;
 
 /** Read the whole instance, whoever is asking.
  *
@@ -48,7 +56,10 @@ export type AudienceResolver = (meta: Record<string, unknown> | undefined) => Pr
  * absence of a header decide how much a caller sees.
  */
 export function systemAudienceResolver(): AudienceResolver {
-  return async () => systemAudience;
+  return Object.assign(async () => systemAudience, {
+    reach: 'This server reads the whole instance, so results are not filtered by any Kannabi User\'s '
+      + 'permissions and must not be presented as one person\'s view.',
+  });
 }
 
 /** Act only as an identified Kannabi User.
@@ -59,7 +70,7 @@ export function systemAudienceResolver(): AudienceResolver {
  * forwards the request with nothing attached.
  */
 export function principalAudienceResolver(store: IdentityStore): AudienceResolver {
-  return async (meta) => {
+  return Object.assign(async (meta: Record<string, unknown> | undefined) => {
     const principal = principalFromMeta(meta);
     if (!principal) {
       throw new PrincipalError('This Kannabi server answers only for an authenticated User, '
@@ -90,5 +101,9 @@ export function principalAudienceResolver(store: IdentityStore): AudienceResolve
         + 'An administrator links one with `pnpm identity:link`.');
     }
     return userAudience(user.key);
-  };
+  }, {
+    reach: 'This server answers as the authenticated Kannabi User each request is made for, so results '
+      + 'hold only what that User may read. An empty result means nothing that User can read matched, '
+      + 'never that the instance holds nothing.',
+  });
 }

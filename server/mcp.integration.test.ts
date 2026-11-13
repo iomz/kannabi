@@ -120,7 +120,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     return response.content?.[0]?.text ?? '';
   }
   const ids = (page: Json, field = 'assets') =>
-    (page[field] as Json[]).map((entry) => entry.assetId as string);
+    (page[field] as Json[]).map((entry) => entry.id as string);
 
   await t.test('the transport completes initialize and tool discovery', async () => {
     const { tools } = await client.listTools();
@@ -214,7 +214,8 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.deepEqual(ids(resolved), [lookalike.id]);
     assert.ok(lookalikeReference.startsWith(gcp));
     assert.ok(!issuances.some((issuance) => issuance.assetId === lookalike.id));
-    assert.deepEqual((resolved.assets as Json[])[0].kannabiIssued, []);
+    const record = (await call('get_asset', { assetId: lookalike.id })).asset as Json;
+    assert.deepEqual((record.kannabi as Json).issued, []);
   });
 
   await t.test('a namespace Kannabi has never issued from reports no issuances', async () => {
@@ -232,40 +233,42 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   await t.test('a candidate\'s Asset ID carries into inspection unchanged', async () => {
     const page = await call('search_assets', { query: 'Field laptop' });
     const [candidate] = page.assets as Json[];
-    const inspected = await call('get_asset', { assetId: candidate.assetId as string });
+    const inspected = await call('get_asset', { assetId: candidate.id as string });
     assert.equal(inspected.found, true);
-    const detail = inspected.asset as Json;
-    assert.equal(detail.assetId, laptop.id);
-    assert.equal(detail.name, laptop.name);
-    assert.equal((detail.reportedBy as Json).name, 'Alex Demo');
-    const identifiers = detail.identifiers as Json[];
+    const record = inspected.asset as Json;
+    const kannabi = record.kannabi as Json;
+    assert.equal(record.id, laptop.id);
+    assert.equal(kannabi.name, laptop.name);
+    assert.equal(((kannabi.reported as Json).by as Json).name, 'Alex Demo');
+    const identifiers = record.identifiers as Json[];
     assert.deepEqual(identifiers.map((identifier) => identifier.scheme).sort(), ['gtin', 'sgtin']);
-    assert.ok(identifiers.every((identifier) => typeof identifier.gs1PolicyVersion === 'string'));
+    assert.ok(identifiers.every((identifier) => typeof (identifier.accepted as Json).gs1Policy === 'string'));
     // Detached, so the Asset no longer carries the issued value even though the
     // ledger still binds it.
-    assert.deepEqual((detail.kannabiIssued as Json[]).map((entry) => entry.canonical),
-      [issuedToLaptop]);
+    assert.deepEqual((kannabi.issued as Json[]).map((entry) => entry.value), [issuedToLaptop]);
     assert.ok(!identifiers.some((identifier) => identifier.scheme === 'giai'));
   });
 
   await t.test('an Asset quoted from an earlier system reaches an agent as quoted evidence', async () => {
     const inspected = await call('get_asset', { assetId: migrated.id });
-    const detail = inspected.asset as Json;
-    const source = detail.sourceRecord as Json;
+    const record = inspected.asset as Json;
+    const source = record.source as Json;
+    const says = source.says as Json;
+    const reported = (record.kannabi as Json).reported as Json;
     assert.equal(source.reference, quoted.reference);
-    assert.equal(source.recordedBy, quoted.recordedBy);
-    assert.equal(Date.parse(source.recordedAt as string), Date.parse(quoted.recordedAt));
+    assert.equal(says.recordedBy, quoted.recordedBy);
+    assert.equal(Date.parse(says.recordedAt as string), Date.parse(quoted.recordedAt));
 
     // Kannabi's own record of the same Asset stays separate and stays its own:
     // it learned of this Asset now, from a Kannabi User, years after the date
     // the source states.
-    assert.equal((detail.reportedBy as Json).name, 'Alex Demo');
-    assert.notEqual(detail.reportedAt, source.recordedAt);
-    assert.ok(Date.parse(detail.reportedAt as string) > Date.parse(quoted.recordedAt));
+    assert.equal((reported.by as Json).name, 'Alex Demo');
+    assert.notEqual(reported.at, says.recordedAt);
+    assert.ok(Date.parse(reported.at as string) > Date.parse(quoted.recordedAt));
 
     // An Asset that originated in Kannabi says so rather than omitting it.
     const native = await call('get_asset', { assetId: camera.id });
-    assert.equal((native.asset as Json).sourceRecord, null);
+    assert.equal((native.asset as Json).source, null);
 
     // Quoted evidence is not a discovery key: the name is not searchable, and
     // a search for it finds nothing rather than the Asset that quotes it.
@@ -308,8 +311,8 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     const identifier = (candidate.identifiers as Json[]).find((entry) => entry.scheme === 'gtin')!;
     const again = await call('resolve_external_identifier',
       { scheme: identifier.scheme as string, ...(identifier.components as Json) });
-    assert.equal((again.identity as Json).canonical, identifier.canonical);
-    assert.ok(ids(again).includes(candidate.assetId as string));
+    assert.equal((again.identity as Json).canonical, identifier.value);
+    assert.ok(ids(again).includes(candidate.id as string));
   });
 
   await t.test('an issued value is reported in the form the ledger and the Asset agree on', async () => {
@@ -323,14 +326,12 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     const issued = (ledger.entries as Json[])[0];
     const canonical = (issued.issuance as Json).canonical as string;
     const holder = await call('get_asset', { assetId: issued.assetId as string });
-    const detail = holder.asset as Json;
-    const attached = (detail.identifiers as Json[]).find((entry) => entry.canonical === canonical)!;
+    const record = holder.asset as Json;
+    const attached = (record.identifiers as Json[]).find((entry) => entry.value === canonical)!;
     const resolved = await call('resolve_external_identifier',
       { scheme: 'giai', assetReference: (attached.components as Json).assetReference as string });
     assert.deepEqual(ids(resolved), [issued.assetId]);
-    assert.deepEqual((detail.issuances as Json[]).map((entry) => entry.canonical), [canonical]);
-    assert.deepEqual(((resolved.assets as Json[])[0].kannabiIssued as Json[])
-      .map((entry) => entry.canonical), [canonical]);
+    assert.deepEqual(((record.kannabi as Json).issued as Json[]).map((entry) => entry.value), [canonical]);
   });
 
   await t.test('a valid identifier Kannabi never stored answers empty, not error', async () => {
@@ -357,7 +358,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
 
     const inspected = await call('get_asset', { assetId: sealed.id });
     assert.equal(inspected.found, true);
-    assert.equal((inspected.asset as Json).isPublic, false);
+    assert.equal(((inspected.asset as Json).kannabi as Json).public, false);
     const { groups } = await call('list_groups') as { groups: { name: string }[] };
     assert.ok(groups.some((group) => group.name === 'Private Store'));
   });
