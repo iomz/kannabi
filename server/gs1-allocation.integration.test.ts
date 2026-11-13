@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
 import { IdentityStore, DuplicateIdentityError } from './identity-store.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -9,9 +10,9 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('GIAI allocation is an invariant, not a code path', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   // A second store over the same database stands in for a second process.
-  const peer = await IdentityStore.open(driver);
+  const peer = await IdentityStore.open(driver, schemes);
   const actor = await store.createUser('Allocator');
   const group = await store.createReportingGroup('Allocation team', actor.key);
   const context = { actorKey: actor.key, groupKey: group.key };

@@ -12,6 +12,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
 import { digitalLinkDocuments } from './digital-link-routes.js';
+import { schemes } from './composition.js';
 
 const password = process.env.NEO4J_PASSWORD;
 if (!password) throw new Error('NEO4J_PASSWORD is required');
@@ -31,7 +32,7 @@ const appURL = process.env.APP_URL;
 const authSecret = process.env.BETTER_AUTH_SECRET;
 if (!appURL || !authSecret) throw new Error('APP_URL and BETTER_AUTH_SECRET are required');
 const applicationOrigin = new URL(appURL).origin;
-const store = await IdentityStore.open(driver);
+const store = await IdentityStore.open(driver, schemes);
 const masterKey = await MasterKeyManager.open(await store.hasEncryptedSecrets());
 if (masterKey.state !== 'ready') {
   console.warn(`Mail credentials unavailable: instance master key is ${masterKey.state}. Restore it or use the explicit Administration reset.`);

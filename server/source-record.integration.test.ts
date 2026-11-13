@@ -10,6 +10,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import type { ObjectStorage } from './storage.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -29,7 +30,7 @@ test('an Asset attributed to the record it came from', { skip: !uri || !password
   const session = driver.session();
   await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
   await session.close();
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());

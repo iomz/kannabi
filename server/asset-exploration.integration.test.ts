@@ -5,6 +5,7 @@ import { IdentityStore } from './identity-store.js';
 import { assetPageRequest, assetSorts, type AssetDirection, type AssetSort } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { ValidationError } from './identity.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -12,7 +13,7 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('Asset exploration orders and pages deterministically', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   const actor = await store.createUser('Explorer');
   const stranger = await store.createUser('Stranger');
   const group = await store.createReportingGroup('Exploring team', actor.key);
@@ -44,7 +45,7 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     const pages: string[][] = [];
     let cursor: string | undefined;
     do {
-      const request = assetPageRequest({ sort, dir, limit: String(limit), ...(cursor ? { cursor } : {}) });
+      const request = assetPageRequest({ sort, dir, limit: String(limit), ...(cursor ? { cursor } : {}) }, schemes.ids);
       const page = await store.findAssets(actor.key, request);
       pages.push(page.assets.map((asset) => asset.id));
       assert.ok(page.assets.length <= limit);
@@ -96,12 +97,12 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
   });
 
   await t.test('counts and search ignore Assets the caller cannot read', async () => {
-    const page = await store.findAssets(actor.key, assetPageRequest({}));
+    const page = await store.findAssets(actor.key, assetPageRequest({}, schemes.ids));
     assert.equal(page.total, 40);
     assert.equal(page.matching, 40);
     assert.deepEqual(page.scopes, { all: 40, mine: 40, group: 40, public: 0 });
     // Name search is unchanged by sorting, and still substring over names only.
-    const searched = await store.findAssets(actor.key, assetPageRequest({ q: 'twin 3', sort: 'reportedAt', dir: 'desc' }));
+    const searched = await store.findAssets(actor.key, assetPageRequest({ q: 'twin 3', sort: 'reportedAt', dir: 'desc' }, schemes.ids));
     assert.equal(searched.matching, 4);
     assert.ok(searched.assets.every((asset) => asset.name === 'Twin 3'));
   });
@@ -130,13 +131,13 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
 
     const base = { group: filterGroup.key };
     const find = async (extra: Record<string, string | string[]> = {}) =>
-      store.findAssets(actor.key, assetPageRequest({ ...base, ...extra }));
+      store.findAssets(actor.key, assetPageRequest({ ...base, ...extra }, schemes.ids));
     const ids = async (extra: Record<string, string | string[]> = {}) =>
       (await find(extra)).assets.map((asset) => asset.id).sort();
 
     // `total` is the caller's readable set before any discovery predicate, so
     // it never moves as filters, search or scope change.
-    const unfiltered = await store.findAssets(actor.key, assetPageRequest({}));
+    const unfiltered = await store.findAssets(actor.key, assetPageRequest({}, schemes.ids));
     for (const extra of [{}, { scope: 'public' }, { identified: 'none' },
       { scheme: 'gtin' }, { q: 'Filter' }, { scope: 'mine' }] as Record<string, string>[]) {
       const page = await find(extra);
@@ -176,11 +177,11 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.deepEqual(await ids({ scheme: 'giai', q: 'individual' }), [made.individual]);
     // The Group scope is specifically what depends on Group membership, so a
     // public Asset remains under All and Public even when this Group carries it.
-    const anyGroup = await store.findAssets(actor.key, assetPageRequest({ scope: 'group', q: 'Filter' }));
+    const anyGroup = await store.findAssets(actor.key, assetPageRequest({ scope: 'group', q: 'Filter' }, schemes.ids));
     assert.deepEqual(anyGroup.assets.map((asset) => asset.id).sort(),
       [made.classed, made.individual, made.plain].sort());
     const oneGroup = await store.findAssets(actor.key,
-      assetPageRequest({ scope: 'group', q: 'Filter', group: filterGroup.key }));
+      assetPageRequest({ scope: 'group', q: 'Filter', group: filterGroup.key }, schemes.ids));
     assert.deepEqual(oneGroup.assets.map((asset) => asset.id).sort(),
       [made.classed, made.individual, made.plain].sort());
     // A contradiction simply yields nothing rather than a special case.
@@ -202,21 +203,21 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
 
     // Unreadable Assets never appear, and an inaccessible Group key is not an
     // existence oracle: it simply matches nothing the caller may read.
-    const sealedOnly = await store.findAssets(actor.key, assetPageRequest({ group: sealed.key }));
+    const sealedOnly = await store.findAssets(actor.key, assetPageRequest({ group: sealed.key }, schemes.ids));
     assert.deepEqual(sealedOnly.assets, []);
     assert.equal(sealedOnly.matching, 0);
     assert.equal(sealedOnly.total, unfiltered.total);
-    const invented = await store.findAssets(actor.key, assetPageRequest({ group: 'no-such-group' }));
+    const invented = await store.findAssets(actor.key, assetPageRequest({ group: 'no-such-group' }, schemes.ids));
     assert.deepEqual({ ...invented, assets: [] }, { ...sealedOnly, assets: [] });
 
     // A cursor is bound to the canonical filter state, not just to q/scope/sort.
     const paged = await find({ limit: '1' });
     assert.ok(paged.nextCursor);
-    assert.throws(() => assetPageRequest({ ...base, identified: 'any', cursor: paged.nextCursor! }),
+    assert.throws(() => assetPageRequest({ ...base, identified: 'any', cursor: paged.nextCursor! }, schemes.ids),
       ValidationError);
-    assert.throws(() => assetPageRequest({ cursor: paged.nextCursor! }), ValidationError);
+    assert.throws(() => assetPageRequest({ cursor: paged.nextCursor! }, schemes.ids), ValidationError);
     // The same filter state spelled differently still accepts its own cursor.
-    assert.doesNotThrow(() => assetPageRequest({ group: [filterGroup.key], cursor: paged.nextCursor! }));
+    assert.doesNotThrow(() => assetPageRequest({ group: [filterGroup.key], cursor: paged.nextCursor! }, schemes.ids));
 
     // Exhaustive traversal under a filter neither duplicates nor omits.
     const seen: string[] = [];
@@ -246,7 +247,7 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     let matching = 0;
     do {
       const result = await store.lookupAssets(actor.key,
-        assetLookupQuery({ ...gtin, limit: '5', ...(cursor ? { cursor } : {}) }));
+        assetLookupQuery({ ...gtin, limit: '5', ...(cursor ? { cursor } : {}) }, schemes));
       matching = result.matching;
       seen.push(...result.assets.map((asset) => asset.id));
       assert.ok(result.assets.length <= 5);

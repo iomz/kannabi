@@ -2,7 +2,7 @@ import { Link, useNavigate } from 'react-router';
 import {
   assetDirections, assetSorts, type AssetDirection, type AssetFilters, type AssetScope, type AssetSort,
 } from '../server/asset-page';
-import { identifierSchemes, schemeLabels, type IdentifierScheme } from '../server/gs1.js';
+import { identifierSchemes, schemeLabel, schemeLabels, type IdentifierScheme } from '../server/gs1.js';
 import type { Entity } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
 import { Icon } from './icon';
@@ -88,7 +88,7 @@ function activeChips(filters: AssetFilters, groups: readonly Entity[]): Chip[] {
       remove: { groups: filters.groups.filter((other) => other !== key) } });
   }
   for (const scheme of filters.schemes) {
-    chips.push({ label: schemeLabels[scheme],
+    chips.push({ label: schemeLabel(scheme),
       remove: { schemes: filters.schemes.filter((other) => other !== scheme) } });
   }
   if (filters.identified) {

@@ -6,6 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { IdentityStore } from './identity-store.js';
 import { assetPageRequest } from './asset-page.js';
 import { canonicalIdentifier } from './gs1.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -22,7 +23,7 @@ type ToolResult = { structuredContent?: Json; isError?: boolean; content?: { tex
 test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
 
   async function query(cypher: string, params: Record<string, unknown> = {}) {
     const session = driver.session();
@@ -352,7 +353,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     // The accepted MVP limitation, asserted rather than implied: Alex is in no
     // Group that collaborates on the sealed Asset and cannot read it, while the
     // MCP process reads it and the Group holding it.
-    const alexPage = await store.findAssets(alex.key, assetPageRequest({ q: 'inspection' }));
+    const alexPage = await store.findAssets(alex.key, assetPageRequest({ q: 'inspection' }, schemes.ids));
     assert.ok(!alexPage.assets.some((entry) => entry.id === sealed.id));
     assert.equal(await store.getAsset(sealed.id, alex.key), null);
 

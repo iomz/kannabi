@@ -1,6 +1,6 @@
 import { assetPath } from '../shared/asset-uri.js';
 import { digitalLinkPath } from './gs1-digital-link.js';
-import type { ExternalIdentifier, IdentifierScheme } from './gs1.js';
+import type { Identifier } from './identifier.js';
 
 /** Which URI Kannabi puts in front of a person.
  *
@@ -29,10 +29,10 @@ import type { ExternalIdentifier, IdentifierScheme } from './gs1.js';
  * That is a rule about what may be surfaced *for an Asset*, and not a claim
  * that a GTIN can never identify a Kannabi-managed referent.
  */
-const surfacingOrder: readonly IdentifierScheme[] = ['giai', 'grai', 'sgtin'];
+const surfacingOrder: readonly string[] = ['giai', 'grai', 'sgtin'];
 
 export type SurfaceableIdentifier =
-  Pick<ExternalIdentifier, 'scheme' | 'level' | 'components' | 'canonical'>;
+  Pick<Identifier, 'scheme' | 'level' | 'components' | 'canonical'>;
 
 /** The identifier whose Digital Link URI Kannabi surfaces, or `null`.
  *

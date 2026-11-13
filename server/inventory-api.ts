@@ -14,7 +14,6 @@ import { record, requiredText, ValidationError } from './identity.js';
 import { basisReference, type ChangeOrigin } from './change-provenance.js';
 import { validateCreateApiToken, type ApiTokenService, type TokenCredential } from './api-token.js';
 import { assetId } from './asset-id.js';
-import { identifierInputFields } from './gs1.js';
 import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
@@ -400,7 +399,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
       // Every value of every parameter: `group` and `scheme` repeat, and
       // `query()` keeps only the first, so the request would apply less than
       // the URL asks for.
-      return c.json(await store.findAssets(key, assetPageRequest(c.req.queries())));
+      return c.json(await store.findAssets(key, assetPageRequest(c.req.queries(), store.schemes.ids)));
     })
     // The structured Asset representation, at its own versioned paths so the
     // routes above keep answering every existing client exactly as before. The
@@ -408,13 +407,13 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // the answer differs. Registered before /assets/:id has any chance to see
     // a "v2" segment, which would not parse as an Asset ID anyway.
     .get('/v2/assets', async (c) => {
-      const page = await store.findAssets(actor(c.get('user')), assetPageRequest(c.req.queries()));
+      const page = await store.findAssets(actor(c.get('user')), assetPageRequest(c.req.queries(), store.schemes.ids));
       return c.json({ representation: assetRepresentation, omitted: summaryOmits,
         assets: page.assets.map((asset) => assetSummary(asset, page.matchedFields[asset.id] ?? [])),
         matching: page.matching, total: page.total, nextCursor: page.nextCursor });
     })
     .get('/v2/assets/lookup', validator('query', (value) =>
-      assetLookupQuery(value as Record<string, unknown>)), async (c) => {
+      assetLookupQuery(value as Record<string, unknown>, store.schemes)), async (c) => {
       const lookup = await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'));
       return c.json({ representation: assetRepresentation, identity: lookup.identity, omitted: summaryOmits,
         assets: lookup.assets.map((asset) => assetSummary(asset)), matching: lookup.matching,
@@ -423,7 +422,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     .get('/v2/assets/:id', async (c) => {
       const asset = await store.getAsset(assetId(c.req.param('id')), c.get('user')?.key ?? null);
       if (!asset) return c.json({ error: 'Asset not found' }, 404);
-      return c.json({ representation: assetRepresentation, asset: assetRecord(asset) });
+      return c.json({ representation: assetRepresentation, asset: assetRecord(asset, store.schemes) });
     })
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an
@@ -436,7 +435,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // Kannabi prints for it. Lookup still runs over the reader-visible set,
     // so this widens who may ask and never what any reader may see.
     .get('/assets/lookup', validator('query', (value) =>
-      assetLookupQuery(value as Record<string, unknown>)), async (c) =>
+      assetLookupQuery(value as Record<string, unknown>, store.schemes)), async (c) =>
       c.json(await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'))))
     .post('/assets', validator('json', (value) => {
       const input = record(value, ['name', 'identifiers', 'ownerKey', 'groupKey', 'sourceRecord']);
@@ -483,7 +482,7 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // not claim Kannabi issued it; GIAI issuance has its own namespace-checked
     // operation below. Knowing an identifier grants no Asset access.
     .post('/assets/:id/identifiers', validator('json', (value) =>
-      record(value, identifierInputFields) as Record<string, string>), async (c) => {
+      record(value, store.schemes.inputFields) as Record<string, string>), async (c) => {
       const asset = await store.attachIdentifier(assetId(c.req.param('id')), actor(c.get('user')),
         c.req.valid('json'), changeOrigin(c));
       return c.json({ asset }, 201);

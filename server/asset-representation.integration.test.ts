@@ -12,6 +12,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import { createMcpServer } from './mcp-tools.js';
 import { systemAudienceResolver } from './mcp-principal.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -49,7 +50,7 @@ test('legacy records keep what the source said apart from what Kannabi knows',
     const session = driver.session();
     await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
     await session.close();
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID());

@@ -11,6 +11,7 @@ import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
 import { createAuth } from './auth.js';
 import { createInventoryApi } from './inventory-api.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -22,7 +23,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   const legacy = driver.session();
   await legacy.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0 REMOVE s.themeId, s.accentColor");
   await legacy.close();
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   // Every setting is stored once the instance opens: one missing from an
   // older development database takes its default, and nothing stored is
   // replaced.
@@ -220,7 +221,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     const abandoned = await store.reservePhoto('image/png', png.length);
     await storage.put(abandoned, png, 'image/png');
     await query("MATCH (m:Media) WHERE m.state <> 'attached' SET m.expiresAt = datetime() - duration('PT1M')");
-    await new MediaService(await IdentityStore.open(driver), storage).cleanup();
+    await new MediaService(await IdentityStore.open(driver, schemes), storage).cleanup();
     await assert.rejects(storage.get(failedKey)); await assert.rejects(storage.get(abandoned));
     assert.equal((await query("MATCH (m:Media) WHERE m.state <> 'attached' RETURN m")).records.length, 0);
 

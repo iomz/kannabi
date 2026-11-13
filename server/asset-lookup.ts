@@ -1,21 +1,20 @@
 import { record, ValidationError } from './identity.js';
 import { assetId, isAssetId } from './asset-id.js';
 import { assertBound, cursorText, decodeCursor, encodeCursor } from './cursor.js';
-import { canonicalIdentifier, identifierInputFields, type ExternalIdentifier } from './gs1.js';
+import type { Identifier, IdentifierSchemes } from './identifier.js';
 
 /** Deterministic identity resolution: the caller supplies a complete identity
  * and Kannabi answers with the Assets that carry it.
  *
  * This is not search. Nothing here matches substrings, ranks results, or
- * guesses at intent. An identifier is parsed by the existing GS1 boundary and
- * compared against the stored canonical form, so an identifier Kannabi cannot
- * justify semantically produces a validation error rather than a fuzzy match.
+ * guesses at intent. An identifier is parsed by the scheme that owns it and
+ * compared against the stored canonical form, so an identifier that scheme
+ * cannot justify produces a validation error rather than a fuzzy match.
  */
 export type AssetLookupQuery =
   | Readonly<{ kind: 'assetId'; id: string }>
-  | Readonly<{ kind: 'identifier'; identifier: ExternalIdentifier }>;
+  | Readonly<{ kind: 'identifier'; identifier: Identifier }>;
 
-export const assetLookupFields = ['id', 'limit', 'cursor', ...identifierInputFields] as const;
 
 /** A position within one class identifier's Assets, ordered by name then id.
  * Bound to the resolved canonical form, so a cursor cannot be replayed against
@@ -27,8 +26,8 @@ export type AssetLookupRequest = {
 
 /** Accept exactly one identity: a native Asset ID, or one external identifier
  * in the same structured form the reporting and attachment APIs accept. */
-export function assetLookupQuery(query: Record<string, unknown>): AssetLookupRequest {
-  const { id, limit: rawLimit, cursor, ...identifier } = record(query, assetLookupFields);
+export function assetLookupQuery(query: Record<string, unknown>, schemes: IdentifierSchemes): AssetLookupRequest {
+  const { id, limit: rawLimit, cursor, ...identifier } = record(query, ['id', 'limit', 'cursor', ...schemes.inputFields]);
   // Exactly one identity, judged on every identifier field rather than on
   // `scheme` alone: `{ id, gtin }` is an ambiguous request, not a native-ID
   // lookup with a stray parameter, and must not resolve by silently ignoring
@@ -46,7 +45,7 @@ export function assetLookupQuery(query: Record<string, unknown>): AssetLookupReq
     if (cursor !== undefined) throw new ValidationError('A native Asset ID resolves to a single Asset');
     return { identity: Object.freeze({ kind: 'assetId', id }), limit, after: null };
   }
-  const resolved = canonicalIdentifier(identifier);
+  const resolved = schemes.accept(identifier);
   // Only a class identifier describes enough Assets to page through; an
   // individual one resolves to at most one, so a cursor is meaningless.
   if (cursor !== undefined && resolved.level !== 'class') {

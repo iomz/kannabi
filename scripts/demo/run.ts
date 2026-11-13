@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import neo4j from 'neo4j-driver';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand, GetBucketVersioningCommand } from '@aws-sdk/client-s3';
 import { IdentityStore } from '../../server/identity-store.js';
+import { schemes } from '../../server/composition.js';
 import { emptyAssetFilters } from '../../server/asset-page.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
@@ -56,7 +57,7 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       if ((await objects()).length) throw new Error('Media bucket is not empty; keep the application stopped and retry reset');
       await session.executeWrite((tx) => tx.run('MATCH (n) DETACH DELETE n'));
     }
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     const auth = await createAuth(driver, config.app.origin, env.BETTER_AUTH_SECRET!);
     const users: string[] = [];
     for (const account of demoAccounts) {

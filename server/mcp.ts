@@ -3,6 +3,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { IdentityStore } from './identity-store.js';
 import { createMcpServer } from './mcp-tools.js';
 import { principalAudienceResolver, systemAudienceResolver } from './mcp-principal.js';
+import { schemes } from './composition.js';
 
 /** Kannabi's domain MCP server, spoken over stdio.
  *
@@ -35,7 +36,7 @@ const driver = neo4j.driver(
   neo4j.auth.basic(process.env.NEO4J_USERNAME ?? 'neo4j', password),
   { connectionTimeout: 5000, connectionAcquisitionTimeout: 5000 },
 );
-const store = await IdentityStore.attachReadOnly(driver);
+const store = await IdentityStore.attachReadOnly(driver, schemes);
 
 const modes = ['system', 'principal'] as const;
 const mode = process.env.KANNABI_MCP_AUDIENCE ?? 'system';

@@ -9,13 +9,14 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { assetPageRequest } from './asset-page.js';
 import { ApiTokenService } from './api-token.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('multi-Group collaboration is explicit bilateral management, never ownership', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
@@ -297,7 +298,7 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
     assert.equal((await store.getAsset(asset.id, bOnly.key))?.groups[0].key, b.key);
     await store.deactivateOwnAccount(bridge.key);
     assert.equal((await bOnly.call(path)).status, 200, 'a Group Manager’s deletion does not remove collaboration');
-    const page = await store.findAssets(dual.key, assetPageRequest({}));
+    const page = await store.findAssets(dual.key, assetPageRequest({}, schemes.ids));
     assert.equal(page.assets.filter((entry) => entry.id === asset.id).length, 1);
   });
 

@@ -10,6 +10,7 @@ import {
 import { externalIdentityKey, externalPrincipal } from './external-principal.js';
 import type { Asset, AssetPage, IdentityStore, ResolvedUser } from './identity-store.js';
 import type { NamedAudienceInput } from './asset-audience.js';
+import { schemes } from './composition.js';
 
 /** The gateway contract, exercised without a database: what Kannabi accepts as
  * an asserted principal, who it resolves to, and what it refuses. The real
@@ -34,6 +35,7 @@ function asserted(overrides: Record<string, unknown> = {}) {
 /** Links exactly one external identity, so anything else resolves to nobody. */
 function storeWithLink(links: Record<string, ResolvedUser>, calls: unknown[] = []) {
   return {
+    schemes,
     async userForExternalIdentity(issuer: string, subject: string): Promise<ResolvedUser | null> {
       calls.push({ issuer, subject });
       return links[externalIdentityKey(issuer, subject)] ?? null;

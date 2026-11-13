@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
-  classKeyConflictReason, identifierSchemes, schemeDescriptions, schemeInputs, schemeLabels,
-  schemeReference,
+  classKeyConflictReason, identifierSchemes, isGs1Scheme, schemeDescriptions, schemeInputs, schemeLabel,
+  schemeLabels, schemeReference,
   type IdentifierLevel, type IdentifierScheme,
 } from '../server/gs1.js';
 import type { AttachedIdentifier, Gs1KeyIssuance } from '../server/identity-store.js';
@@ -22,7 +22,10 @@ import { ActionRow, Field, HelpTip, Hint, IconButton, NativeSelect, SubHeading }
  * which is more honest than Kannabi paraphrasing a standard it does not own.
  * The one-line description stays beside it as orientation, not as definition.
  */
-function SchemeName({ scheme }: { scheme: IdentifierScheme }) {
+function SchemeName({ scheme }: { scheme: string }) {
+  // An identifier of a scheme GS1 does not define has no GS1 reference page
+  // and no GS1 description, so it is named by its scheme and nothing more.
+  if (!isGs1Scheme(scheme)) return <span className="font-semibold">{scheme}</span>;
   return <span className="inline-flex flex-wrap items-baseline gap-x-2">
     {/* The link treatment carries it. An outbound glyph beside every scheme on
         every card was tested and read as clutter: four of them on one Asset
@@ -78,7 +81,7 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
       </div>
       <code className="mt-[.35rem] block break-all">{identifier.canonical}</code>
       <dl className="mt-2 mb-0 flex flex-wrap gap-x-5 gap-y-1 [&_dd]:m-0 [&_dd]:break-all [&_dt]:text-[.75rem] [&_dt]:text-muted-foreground">
-        {schemeInputs[identifier.scheme]
+        {(isGs1Scheme(identifier.scheme) ? schemeInputs[identifier.scheme] : [])
           .filter((input) => identifier.components[input.name] !== undefined)
           .map((input) => <div key={input.name}>
             <dt>{input.label}</dt><dd>{identifier.components[input.name]}</dd>
@@ -112,7 +115,7 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
         hover and focus, and the act itself asks first. */}
     {canEdit && <IconButton tone="destructive" disabled={busy}
       className="absolute top-[.5rem] right-[.5rem]"
-      label={'Detach ' + schemeLabels[identifier.scheme] + ' ' + identifier.canonical}
+      label={'Detach ' + schemeLabel(identifier.scheme) + ' ' + identifier.canonical}
       onClick={() => onDetach(identifier.key)}><Icon name="trash" /></IconButton>}
     </li>;
   })}</ul>;

@@ -10,6 +10,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import type { ObjectStorage } from './storage.js';
+import { schemes } from './composition.js';
 
 /** Quoted source descriptions, the provenance of each Asset–identifier
  * association, the instance's GTIN consistency policy, and free-text search
@@ -38,7 +39,7 @@ test('quoted descriptions, identifier provenance and GTIN consistency', { skip: 
   const session = driver.session();
   await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
   await session.close();
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
@@ -300,8 +301,8 @@ test('quoted descriptions, identifier provenance and GTIN consistency', { skip: 
     await query(`MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->() DELETE c`);
     await query(`MATCH (s:Settings {key: 'instance'}), (a:Asset {name: 'Two serials, one trade item'})
       CREATE (s)-[:HAS_GTIN_CONFLICT]->(a)`);
-    await IdentityStore.open(driver);
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
+    await IdentityStore.open(driver, schemes);
     assert.deepEqual(await conflictSet(), [asset.id, togetherId].sort(), 'rebuilt, idempotently');
     const afterRebuild = await query('MATCH (:Asset)-[r:IDENTIFIED_BY|CLASSIFIED_AS]->() RETURN count(r) AS n');
     assert.equal(afterRebuild.records[0].get('n').toNumber(), before.records[0].get('n').toNumber());

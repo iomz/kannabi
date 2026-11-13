@@ -1,4 +1,5 @@
 import { ValidationError } from './identity.js';
+import type { Identifier } from './identifier.js';
 import {
   digitalLinkKeyFor, identifierFromDigitalLink,
   type DigitalLinkSegment, type ExternalIdentifier,
@@ -7,7 +8,7 @@ import {
 /** Everything a Digital Link URI needs from an identifier. Narrower than
  * `ExternalIdentifier` so a projection carrying only what it renders — an
  * Asset's identifier summary, say — needs no cast to be rendered. */
-type RenderableIdentifier = Pick<ExternalIdentifier, 'scheme' | 'components'>;
+type RenderableIdentifier = Pick<Identifier, 'scheme' | 'components'>;
 
 /** GS1 Digital Link URI syntax: rendering an identifier as a Web address, and
  * reading one back.

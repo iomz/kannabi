@@ -1,7 +1,6 @@
 import { ValidationError } from './identity.js';
 import { assetId, isAssetId } from './asset-id.js';
 import { assertBound, cursorText, decodeCursor, encodeCursor } from './cursor.js';
-import { identifierSchemes, type IdentifierScheme } from './gs1.js';
 
 export type AssetScope = 'all' | 'mine' | 'group' | 'public';
 
@@ -42,7 +41,7 @@ export type AssetDirection = (typeof assetDirections)[number];
 export type AssetIdentified = 'any' | 'none';
 export type AssetFilters = Readonly<{
   groups: readonly string[];
-  schemes: readonly IdentifierScheme[];
+  schemes: readonly string[];
   identified: AssetIdentified | null;
   reportedFrom: string | null;
   reportedTo: string | null;
@@ -139,13 +138,16 @@ function single(value: string | readonly string[] | undefined): string | undefin
   return first === undefined || first.trim() === '' ? undefined : first.trim();
 }
 
-export function assetFilters(query: Record<string, string | string[] | undefined>): AssetFilters {
+/** `schemeIds` are the installed identifier schemes: the filter accepts those
+ * and nothing else, and this module knows none itself. */
+export function assetFilters(query: Record<string, string | string[] | undefined>,
+  schemeIds: readonly string[]): AssetFilters {
   const groups = [...new Set(list(query.group).filter((key) => key !== ''))].sort();
   if (groups.some((key) => key.length > 64)) throw new ValidationError('Invalid Group filter');
   const identified = single(query.identified);
   return Object.freeze({
     groups,
-    schemes: many(list(query.scheme), identifierSchemes, 'Identifier scheme filter'),
+    schemes: many(list(query.scheme), schemeIds, 'Identifier scheme filter'),
     identified: identified === undefined
       ? null : member(identified, ['any', 'none'], 'Identifier presence filter'),
     reportedFrom: instant(single(query.reportedFrom), 'Reported from'),
@@ -161,9 +163,10 @@ function member<T extends string>(value: unknown, allowed: readonly T[], field: 
   return value as T;
 }
 
-export function assetPageRequest(query: Record<string, string | string[] | undefined>): AssetPageRequest {
+export function assetPageRequest(query: Record<string, string | string[] | undefined>,
+  schemeIds: readonly string[]): AssetPageRequest {
   const q = single(query.q) ?? '';
-  const filters = assetFilters(query);
+  const filters = assetFilters(query, schemeIds);
   const filterKey = canonicalFilters(filters);
   const scope = member(single(query.scope) ?? 'all', ['all', 'mine', 'group', 'public'], 'Asset scope');
   const sort = member(single(query.sort) ?? 'name', assetSorts, 'Asset sort');

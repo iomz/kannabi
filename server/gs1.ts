@@ -1,4 +1,5 @@
 import { ValidationError, record } from './identity.js';
+import type { Identifier } from './identifier.js';
 import {
   checkDigit, cset82, csum, entries, enforcedLinters, syntaxDictionaryRelease,
   unenforcedLinters, zero,
@@ -79,6 +80,13 @@ export const gs1Policy = {
 } as const;
 
 export const identifierSchemes: readonly IdentifierScheme[] = ['gtin', 'sgtin', 'grai', 'giai'];
+
+/** Whether an id names one of the GS1 schemes. Kannabi's own identifier model
+ * knows a scheme only by its id, so GS1 code handed an identifier asks this
+ * before reading it as GS1. */
+export function isGs1Scheme(id: string): id is IdentifierScheme {
+  return (identifierSchemes as readonly string[]).includes(id);
+}
 
 /** The schemes Kannabi issues, at each of the two levels it allocates.
  *
@@ -257,8 +265,8 @@ function digitalLinkKey(ai: string, value: string,
 /** This identifier as GS1 Digital Link path data. Assembling a URI from it is
  * `gs1-digital-link.ts`; deciding what it contains is policy and stays here. */
 export function digitalLinkKeyFor(
-  identifier: Pick<ExternalIdentifier, 'scheme' | 'components'>): DigitalLinkKey {
-  return schemes[identifier.scheme].digitalLink(identifier.components);
+  identifier: Pick<Identifier, 'scheme' | 'components'>): DigitalLinkKey {
+  return definition(identifier.scheme).digitalLink(identifier.components);
 }
 
 /** Resolve a Digital Link path's primary key and qualifiers back to an
@@ -452,8 +460,9 @@ const conflictingAssetTypes = 'Identifiers claim conflicting GRAI asset types fo
  * given. Under the shipped rules this has at most one value; an instance that
  * stopped enforcing GTIN consistency may have recorded several. */
 function committedComponents(
-  identifiers: readonly ExternalIdentifier[], component: 'gtin' | 'assetType'): string[] {
-  return [...new Set(identifiers.flatMap((identifier) => {
+  identifiers: readonly Pick<Identifier, 'scheme' | 'components'>[], component: 'gtin' | 'assetType'): string[] {
+  // Another scheme's component of the same name is not a GS1 statement.
+  return [...new Set(identifiers.filter((identifier) => isGs1Scheme(identifier.scheme)).flatMap((identifier) => {
     const value = identifier.components[component];
     return typeof value === 'string' ? [value] : [];
   }))];
@@ -476,7 +485,7 @@ function committedComponents(
  */
 export function classKeyConflictReason(
   classKey: { scheme: ClassKeyScheme; canonical: string } | null,
-  identifiers: readonly ExternalIdentifier[],
+  identifiers: readonly Pick<Identifier, 'scheme' | 'components'>[],
   policy: CoherencePolicy = defaultCoherencePolicy): string | null {
   if (!classKey) return null;
   const component = classKey.scheme === 'gtin' ? 'gtin' : 'assetType';
@@ -780,6 +789,11 @@ export const schemeInputs: Readonly<Record<IdentifierScheme, readonly SchemeInpu
 export const schemeLabels: Readonly<Record<IdentifierScheme, string>> = {
   gtin: 'GTIN', sgtin: 'SGTIN', grai: 'GRAI', giai: 'GIAI',
 };
+/** A scheme's display name. A scheme GS1 does not define is shown by its id
+ * rather than given a GS1 name it does not have. */
+export function schemeLabel(id: string): string {
+  return isGs1Scheme(id) ? schemeLabels[id] : id;
+}
 export const schemeDescriptions: Readonly<Record<IdentifierScheme, string>> = {
   gtin: 'Trade item — describes what this Asset is',
   sgtin: 'Serialised trade item — identifies this Asset',

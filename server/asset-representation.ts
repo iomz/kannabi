@@ -1,6 +1,5 @@
-import { digitalLinkPath } from './gs1-digital-link.js';
 import type { AssertingCredential } from './change-provenance.js';
-import type { ExternalIdentifier } from './gs1.js';
+import type { Identifier, IdentifierSchemes } from './identifier.js';
 import type { Asset, Entity, ReporterAttribution } from './identity-store.js';
 
 /** An Asset as a structure whose shape says whose statement each value is.
@@ -54,10 +53,10 @@ export type KannabiAct = Readonly<{
 }>;
 
 export type IdentifierRecord = Readonly<{
-  scheme: ExternalIdentifier['scheme'];
+  scheme: Identifier['scheme'];
   value: string;
-  level: ExternalIdentifier['level'];
-  components: ExternalIdentifier['components'];
+  level: Identifier['level'];
+  components: Identifier['components'];
   /** Who accepted it onto this Asset. Null for an association made before
    * Kannabi kept this, which is unknown rather than accepted by nobody. */
   accepted: (KannabiAct & Readonly<{ gs1Policy: string }>) | null;
@@ -104,12 +103,12 @@ const attribution = (value: ReporterAttribution): ReporterAttribution =>
 const credential = (value: AssertingCredential | null): AssertingCredential | null =>
   value ? { id: value.id, label: value.label } : null;
 
-function identifierBase(identifier: ExternalIdentifier) {
+function identifierBase(identifier: Identifier) {
   return { scheme: identifier.scheme, value: identifier.canonical, level: identifier.level,
     components: identifier.components };
 }
 
-export function assetRecord(asset: Asset): AssetRecord {
+export function assetRecord(asset: Asset, schemes: IdentifierSchemes): AssetRecord {
   return {
     id: asset.id,
     kannabi: {
@@ -131,8 +130,8 @@ export function assetRecord(asset: Asset): AssetRecord {
       accepted: identifier.attachment ? { at: identifier.attachment.acceptedAt,
         by: attribution(identifier.attachment.acceptedBy), via: credential(identifier.attachment.assertedBy),
         basis: identifier.attachment.basis, gs1Policy: identifier.policyVersion } : null,
-      // Only an individual-level identity has an address Kannabi dereferences.
-      digitalLink: identifier.level === 'individual' ? digitalLinkPath(identifier) : null,
+      // The scheme decides whether it has an address Kannabi dereferences.
+      digitalLink: schemes.address(identifier),
     })),
     source: asset.sourceRecord ? { reference: asset.sourceRecord.reference, says: {
       recordedAt: asset.sourceRecord.recordedAt, recordedBy: asset.sourceRecord.recordedBy,
