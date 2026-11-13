@@ -39,8 +39,8 @@ export const notRecorded = [
 /** What a summary leaves out of the full record, by path. Stated once per page
  * rather than on every result. */
 export const summaryOmits = [
-  'kannabi.lastChange', 'kannabi.issued', 'kannabi.photos',
-  'identifiers[].accepted', 'source.says', 'notRecorded',
+  'kannabi.reported.by', 'kannabi.lastChange', 'kannabi.issued', 'kannabi.photos',
+  'identifiers[].accepted', 'identifiers[].digitalLink', 'source.says', 'notRecorded',
 ] as const;
 
 /** Something that happened in Kannabi, by Kannabi's clock. `via` is the API

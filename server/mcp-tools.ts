@@ -262,7 +262,7 @@ export const serverInfo = {
  * "Kannabi was never told". Naming the boundary is what keeps an agent from
  * answering a question Kannabi has no standing to answer.
  */
-export const instructions = `Kannabi is an Asset registry and an identity mediator: it records physical things and the identities by which each one is known. Every tool is read-only.
+const knowledgeBoundary = `Kannabi is an Asset registry and an identity mediator: it records physical things and the identities by which each one is known. Every tool is read-only.
 
 An Asset record says whose statement each value is:
 - kannabi: what Kannabi holds and did, by its own clock. kannabi.reported.at is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only Asset chronology.
@@ -272,16 +272,20 @@ A field Kannabi holds no value for is null; that is not evidence about the world
 
 Choosing a tool: a description such as "the inspection camera" -> search_assets; a complete GS1 identifier -> resolve_external_identifier; an Asset id -> get_asset; list_groups and list_gs1_namespaces supply the keys the others take.
 
-Identifiers: a class-level identifier such as a GTIN may be carried by several Assets, which is an answer rather than an ambiguity; an individual-level one resolves to at most one. Storing an identifier is not issuing it: only kannabi.issued and list_gs1_issuances show what Kannabi issued, and a managed GTIN carries no product data. A digitalLink path is one Kannabi dereferences; Kannabi is not a GS1-Conformant Resolver and emits no canonical GS1 Digital Link URI.
+Identifiers: a class-level identifier such as a GTIN may be carried by several Assets, which is an answer rather than an ambiguity; an individual-level one resolves to at most one. Storing an identifier is not issuing it: only kannabi.issued and list_gs1_issuances show what Kannabi issued, and a managed GTIN carries no product data. A digitalLink path is one Kannabi dereferences; Kannabi is not a GS1-Conformant Resolver and emits no canonical GS1 Digital Link URI.`;
 
-This server reads the whole instance, so results are not filtered by any Kannabi User's permissions and must not be presented as one person's view.`;
+/** The connection instructions for a server reading under `reach`. How far a
+ * result reaches is the one part that depends on how the server was built, so
+ * it comes from the audience rule rather than being written here. */
+export const instructions = (reach: string): string => `${knowledgeBoundary}\n\n${reach}`;
 
 /** Build the server around a store and a rule for whose view each request runs
  * under. The rule is a parameter rather than a mode flag read here, so the
  * tools are identical whether this process reads the whole instance or acts as
  * one User: only the audience they are handed differs. */
 export function createMcpServer(store: IdentityStore, resolveAudience: AudienceResolver): McpServer {
-  const server = new McpServer(serverInfo, { capabilities: { tools: {} }, instructions });
+  const server = new McpServer(serverInfo, { capabilities: { tools: {} },
+    instructions: instructions(resolveAudience.reach) });
   const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
 
   server.registerTool('search_assets', {

@@ -259,7 +259,13 @@ test('the audience a tool runs under follows the request', async (t) => {
     t.after(() => client.close());
     const { tools } = await client.listTools();
     assert.equal(tools.length, 7);
-    assert.ok(client.getInstructions());
+    // What it is told matches how it is read: a server answering for one User
+    // must not claim the whole instance, or an empty scoped result would be
+    // reported as instance-wide absence.
+    const stated = client.getInstructions() ?? '';
+    assert.match(stated, /only what that User may read/);
+    assert.doesNotMatch(stated, /whole instance/);
+    assert.ok(stated.includes('does not own'), 'the knowledge boundary is stated in either posture');
   });
 
   await t.test('a system-mode server is unchanged by a principal it never asked for', async () => {

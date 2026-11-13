@@ -156,6 +156,14 @@ test('a summary is the record with stated omissions, never a different record', 
     assert.ok(!leaves(summary).some(([path]) => path.replace(/\[\]/g, '').startsWith(prefix.replace(/\[\]/g, ''))),
       `${omitted} is in the summary although the page says it is omitted`);
   }
+  // The list is complete, not merely true: nothing the record holds is left
+  // out of a summary without the page saying so.
+  const kept = new Set(leaves(summary).map(([path]) => path));
+  for (const [path] of leaves(record)) {
+    if (kept.has(path)) continue;
+    assert.ok(summaryOmits.some((omitted) => path === omitted || path.startsWith(`${omitted}.`)
+      || path.startsWith(`${omitted}[]`)), `${path} is left out of a summary without being declared omitted`);
+  }
   assert.deepEqual(matched, ['source.says.description']);
 });
 
