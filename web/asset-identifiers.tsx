@@ -108,7 +108,8 @@ export function IdentifierList({ identifiers, issuances, digitalLinks, showPolic
           {displayInstant(identifier.attachment.acceptedAt, displayTimezone)}</time>
         {identifier.attachment.basis ? <> · basis <code className="break-all">{identifier.attachment.basis}</code></> : null}
       </p>}
-      {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">GS1 policy {identifier.policyVersion}</span>}
+      {showPolicyVersion && <span className="mt-2 block text-[.72rem] text-muted-foreground">
+        {isGs1Scheme(identifier.scheme) ? 'GS1 policy ' : 'Policy '}{identifier.policyVersion}</span>}
     </div>
     {/* An identifier is identity, not a mutable label, so the way to remove one
         does not sit beside it wearing a destructive box. The warning arrives on

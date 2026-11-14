@@ -1,5 +1,6 @@
 import { assetPath } from '../shared/asset-uri.js';
 import { digitalLinkPath } from './gs1-digital-link.js';
+import { isGs1Scheme } from './gs1.js';
 import type { Identifier } from './identifier.js';
 
 /** Which URI Kannabi puts in front of a person.
@@ -83,7 +84,8 @@ export function surfacedAssetPath(id: string,
 export function servingAssetPaths(id: string,
   identifiers: readonly SurfaceableIdentifier[]): string[] {
   const digitalLinks = identifiers
-    .filter((identifier) => identifier.level === 'individual')
+    // A Digital Link is GS1's: an identifier of another scheme has none.
+    .filter((identifier) => identifier.level === 'individual' && isGs1Scheme(identifier.scheme))
     .map((identifier) => digitalLinkPath(identifier));
   return digitalLinks.length ? digitalLinks : [assetPath(id)];
 }

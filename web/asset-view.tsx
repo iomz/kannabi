@@ -50,8 +50,11 @@ export async function loadAsset(id: string, request: Request) {
   // A Digital Link URI is shown only where Kannabi also answers it, so a
   // class-level identifier gets none: `/01/{gtin}` is constructible and valid,
   // and Kannabi does not dereference it (#50).
+  // The server lists the identifiers that have one; this builds the same
+  // addresses on the origin the page was reached at.
+  const addressed = new Set(result.digitalLinks.map((link) => link.identifierKey));
   const digitalLinks = Object.fromEntries(result.asset.identifiers
-    .filter((identifier) => identifier.level === 'individual')
+    .filter((identifier) => addressed.has(identifier.key))
     .map((identifier) => [identifier.key, absolute(digitalLinkPath(identifier))]));
   // Only namespaces this Asset's Groups manage, only active ones, and only
   // those whose managing Group this reader is a Group Manager of. Issuing is

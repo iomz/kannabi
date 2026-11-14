@@ -102,7 +102,7 @@ test('a waiting account reads a public Asset as a visitor does, asking for no Gr
     const body = path === '/api/me' ? { user: { key: 'waiting', name: 'Waiting', email: 'w@example.test' }, approved: false }
       : path === '/api/settings' ? { settings: defaultSettings }
         : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers: [] },
-          canEdit: false } : null;
+          canEdit: false, digitalLinks: [] } : null;
     return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
   };
   const { loadAsset } = await import('../web/asset-view.js');

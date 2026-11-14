@@ -549,6 +549,19 @@ const indexes = [
   'CREATE INDEX asset_reported_at IF NOT EXISTS FOR (n:Asset) ON (n.reportedAt)',
 ];
 
+/** Refuse a class identifier whose canonical form is already recorded under a
+ * different scheme. The uniqueness constraint would refuse it too; asking
+ * first lets the refusal say what actually happened. */
+async function assertClassSchemes(tx: ManagedTransaction, identifiers: readonly Identifier[]): Promise<void> {
+  const rows = identifiers.filter((identifier) => identifier.level === 'class')
+    .map((identifier) => ({ canonical: identifier.canonical, scheme: identifier.scheme }));
+  if (!rows.length) return;
+  const clash = await tx.run(`UNWIND $rows AS c
+    MATCH (n:ClassIdentifier {canonical: c.canonical}) WHERE n.scheme <> c.scheme
+    RETURN c.canonical AS canonical LIMIT 1`, { rows });
+  if (clash.records.length) throw new ValidationError('That identifier is already recorded under another scheme');
+}
+
 function isDuplicateIdentifier(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && error.code === 'Neo.ClientError.Schema.ConstraintValidationFailed';
@@ -587,7 +600,9 @@ function identifierParams(identifiers: readonly Identifier[]) {
 // record the GS1 level an identifier already has; they add no meaning of their
 // own. Individual identifiers are CREATEd so the uniqueness constraint rejects a
 // second Asset claiming them; class identifiers are MERGEd so Assets share one
-// node.
+// node. The MERGE matches the scheme as well as the canonical form, so a value
+// already recorded under another scheme is refused by that constraint rather
+// than silently attached as the other scheme's identifier.
 //
 // Each association records who accepted it, when, and on what stated basis, on
 // the relationship itself: the association is what the provenance describes,
@@ -605,8 +620,8 @@ const attachIdentifiers = `
       }]->(:IndividualIdentifier {
         key: i.key, canonical: i.canonical, scheme: i.scheme, policyVersion: i.policyVersion }))
   FOREACH (c IN $classIdentifiers |
-    MERGE (n:ClassIdentifier {canonical: c.canonical})
-      ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
+    MERGE (n:ClassIdentifier {canonical: c.canonical, scheme: c.scheme})
+      ON CREATE SET n.key = c.key, n.policyVersion = c.policyVersion
     MERGE (a)-[r:CLASSIFIED_AS]->(n)
       ON CREATE SET r.acceptedBy = $actorKey, r.acceptedAt = datetime(),
         r.assertedById = $assertedById, r.assertedByLabel = $assertedByLabel,
@@ -1592,6 +1607,7 @@ export class IdentityStore {
           RETURN s.requirePhoto AS required, ${coherencePolicyProjection} AS coherence`);
         if (!photoKey && policy.records[0].get('required')) throw new ValidationError('A photo is required when reporting an Asset');
         this.schemes.assertSet(identifiers, policy.records[0].get('coherence') as AcceptanceSettings);
+        await assertClassSchemes(tx, identifiers);
         if (photoKey) await this.consumePhoto(tx, photoKey);
         const result = await tx.run(`
           MATCH (u:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
@@ -1685,11 +1701,13 @@ export class IdentityStore {
         assets: asset ? [asset] : [], matching: asset ? 1 : 0, nextCursor: null });
     }
     const { canonical, scheme, level } = query.identifier;
-    // The level is derived by the GS1 boundary, so the label and relationship
-    // follow from policy rather than from any query-layer GS1 knowledge.
+    // The level is derived by the scheme, so the label and relationship follow
+    // from it rather than from anything the query layer knows. The scheme is
+    // matched too: the same canonical form under another scheme is a different
+    // identity, and must not answer for this one.
     const individual = level === 'individual';
     const identifierMatch = `MATCH (a:Asset)-[:${individual ? 'IDENTIFIED_BY' : 'CLASSIFIED_AS'}]->
-      (:${individual ? 'IndividualIdentifier' : 'ClassIdentifier'} {canonical: $canonical})`;
+      (:${individual ? 'IndividualIdentifier' : 'ClassIdentifier'} {canonical: $canonical, scheme: $scheme})`;
     const session = this.driver.session();
     try {
       // Ordered by name then id: the same total ordering browse uses by
@@ -1710,7 +1728,7 @@ export class IdentityStore {
           ${assetRowsProjection(order)}
         }
         RETURN matching, rows`,
-      { canonical, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
+      { canonical, scheme, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
       const assets = rows.slice(0, limit).map((stored) => assetFrom(stored, this.schemes));
@@ -2246,6 +2264,7 @@ export class IdentityStore {
     const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
       RETURN ${coherencePolicyProjection} AS coherence`);
     schemes.assertAddition(existing, identifier, policy.records[0].get('coherence') as AcceptanceSettings);
+    await assertClassSchemes(tx, [identifier]);
     // A value Kannabi issued may only ever return to the Asset it was issued
     // for. One check for every scheme, matched on the canonical form: an
     // externally assigned value has no ledger row and keeps the ordinary

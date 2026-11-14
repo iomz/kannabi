@@ -6,7 +6,6 @@ import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { publicAudience } from './asset-audience.js';
-import { digitalLinkUri } from './gs1-digital-link.js';
 import { surfacedAssetPath } from './surfaced-uri.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
@@ -459,11 +458,13 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         // Derived on every read, never stored, and added beside `asset.id`
         // rather than in place of it: `asset.id` is the stable address, and
         // these follow whichever identifiers the Asset currently carries.
-        // A class-level identifier gets none, because Kannabi does not
-        // dereference that address.
-        digitalLinks: asset.identifiers.filter((identifier) => identifier.level === 'individual')
-          .map((identifier) => ({ identifierKey: identifier.key, canonical: identifier.canonical,
-            uri: digitalLinkUri(identifier, origin) })),
+        // An identifier gets one only where its scheme supplies an address
+        // Kannabi dereferences; a class-level identifier has none.
+        digitalLinks: asset.identifiers.flatMap((identifier) => {
+          const path = store.schemes.address(identifier);
+          return path === null ? [] : [{ identifierKey: identifier.key, canonical: identifier.canonical,
+            uri: origin.replace(/\/$/, '') + path }];
+        }),
         surfacedUri: new URL(surfacedAssetPath(asset.id, asset.identifiers), origin).toString() });
     })
     .patch('/assets/:id', validator('json', (value) =>

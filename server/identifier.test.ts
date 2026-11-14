@@ -3,9 +3,11 @@ import { test } from 'node:test';
 import { assetLookupQuery } from './asset-lookup.js';
 import { assetFilters } from './asset-page.js';
 import { assetRecord } from './asset-representation.js';
+import type { Auth } from './auth.js';
+import { createInventoryApi } from './inventory-api.js';
 import { gs1Rule, gs1Schemes } from './gs1-schemes.js';
 import { ValidationError } from './identity.js';
-import type { Asset } from './identity-store.js';
+import type { Asset, IdentityStore } from './identity-store.js';
 import {
   identifierSchemes, type Identifier, type IdentifierRule, type IdentifierScheme,
 } from './identifier.js';
@@ -121,5 +123,42 @@ test('GS1 rules judge GS1 identifiers and no others', () => {
 test('a registry refuses a scheme it could not tell apart', () => {
   assert.throws(() => identifierSchemes([tag, tag]), /installed twice/);
   assert.throws(() => identifierSchemes([{ ...tag, id: 'Tag' }]), /not a lowercase token/);
-  assert.throws(() => identifierSchemes([{ ...tag, fields: ['scheme'] }]), /reserved field/);
+  assert.throws(() => identifierSchemes([{ ...tag, fields: ['scheme'] }]), /reserved field "scheme"/);
+  // A lookup already uses these names to steer itself, so a scheme field of
+  // the same name would be taken from the request before the scheme saw it.
+  for (const field of ['id', 'limit', 'cursor']) {
+    assert.throws(() => identifierSchemes([{ ...tag, fields: [field] }]), new RegExp(`reserved field "${field}"`));
+  }
+});
+
+test('a field belongs to the scheme that declares it, whatever else is installed', () => {
+  const alone = identifierSchemes([tag]);
+  const beside = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
+  // `serial` is a GS1 field. Installing GS1 must not make a tag accept it.
+  const input = { scheme: 'tag', code: 'T-7', serial: '1' };
+  assert.throws(() => alone.accept(input), /Unsupported field: serial/);
+  assert.throws(() => beside.accept(input), /Unsupported field: serial/);
+  assert.throws(() => beside.accept({ scheme: 'gtin', gtin: '04901234567894', code: 'T-7' }), /Unsupported field: code/);
+  assert.throws(() => assetLookupQuery(input, beside), /Unsupported field: serial/);
+});
+
+test('an Asset carrying an identifier with no address is still served', async () => {
+  // The detail response lists an address only where a scheme supplies one. An
+  // identifier of a scheme with none must not fail the whole response.
+  const schemes = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
+  const carried = [
+    { key: 'i1', ...schemes.accept({ scheme: 'sgtin', gtin: '04912345678904', serial: 'A1' }), attachment: null },
+    { key: 'i2', ...schemes.accept({ scheme: 'tag', code: 'T-7' }), attachment: null },
+    { key: 'i3', ...schemes.accept({ scheme: 'gtin', gtin: '04912345678904' }), attachment: null },
+  ];
+  const rig = { ...bare, isPublic: true, identifiers: carried } as unknown as Asset;
+  const store = { schemes, async getAsset() { return rig; } } as unknown as IdentityStore;
+  const anonymous = { api: { getSession: async () => null } } as unknown as Auth;
+  const origin = 'http://localhost:3000';
+  const response = await createInventoryApi(store, anonymous, origin).request(`${origin}/assets/${rig.id}`);
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.deepEqual(body.digitalLinks, [{ identifierKey: 'i1', canonical: '(01)04912345678904(21)A1',
+    uri: origin + '/01/04912345678904/21/A1' }]);
+  assert.equal(body.surfacedUri, origin + '/01/04912345678904/21/A1');
 });

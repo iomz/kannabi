@@ -19,8 +19,8 @@ const composed = ['composition', 'index', 'mcp', 'link-identity'];
 const remainingInCore: Readonly<Record<string, readonly string[]>> = {
   // Namespaces, class keys, issuance, the ledger and the GTIN conflict set.
   'identity-store': ['gs1', 'gs1-ledger', 'reference-allocation'],
-  // GS1 routes, and the Digital Link and surfaced URIs of an Asset response.
-  'inventory-api': ['gs1-digital-link', 'surfaced-uri'],
+  // The surfaced URI of an Asset response, which prefers a Digital Link.
+  'inventory-api': ['surfaced-uri'],
   // The GS1 tools and the GS1 wording of the lookup tool's input.
   'mcp-tools': ['gs1', 'gs1-ledger'],
 };

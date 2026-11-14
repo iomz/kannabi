@@ -114,6 +114,41 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
     const detached = await store.detachIdentifier(saw.id, alex.key, key);
     assert.deepEqual(detached.identifiers.map((identifier) => identifier.scheme), ['sgtin']);
 
+    // The same canonical form under another scheme is a different identity.
+    // `verbatim` and `kind` take any text as their canonical form, so they can
+    // be made to collide with a value another scheme already stored.
+    const verbatim = (id: string, level: 'individual' | 'class'): IdentifierScheme => Object.freeze({
+      id, fields: ['text'],
+      accept(input: Record<string, unknown>): Identifier { return this.restore(String(input.text), id + '-1'); },
+      restore: (canonical: unknown, policyVersion: unknown): Identifier => Object.freeze({ scheme: id,
+        canonical: String(canonical), components: Object.freeze({}), level, policyVersion: String(policyVersion) }),
+    });
+    const colliding = identifierSchemes([...gs1Schemes, tag, verbatim('alias', 'individual'), verbatim('kind', 'class')],
+      [gs1Rule]);
+    const crowded = await IdentityStore.open(driver, colliding);
+    // A lookup under one scheme never answers with another scheme's Asset.
+    const other = await crowded.lookupAssets(alex.key, assetLookupQuery({ scheme: 'alias', text: 'tag:T-7' }, colliding));
+    assert.deepEqual(other.assets, []);
+    assert.equal(other.matching, 0);
+    const kind = await crowded.lookupAssets(alex.key,
+      assetLookupQuery({ scheme: 'kind', text: '(01)04901234567894' }, colliding));
+    assert.deepEqual(kind.assets, []);
+    // A class value already recorded under one scheme is refused under
+    // another, rather than attached as the first scheme's identifier.
+    await assert.rejects(crowded.attachIdentifier(saw.id, alex.key, { scheme: 'kind', text: '(01)04901234567894' }),
+      /already recorded under another scheme/);
+    await assert.rejects(crowded.reportAsset({ name: 'Plane',
+      identifiers: [{ scheme: 'kind', text: '(01)04901234567894' }] }, context),
+    /already recorded under another scheme/);
+    assert.deepEqual((await crowded.getAsset(saw.id, alex.key))!.identifiers.map((identifier) => identifier.scheme),
+      ['sgtin']);
+    // The scheme that recorded it still shares the one node across Assets.
+    const chisel = await crowded.reportAsset({ name: 'Chisel',
+      identifiers: [{ scheme: 'gtin', gtin: '04901234567894' }] }, context);
+    const shared = await crowded.lookupAssets(alex.key,
+      assetLookupQuery({ scheme: 'gtin', gtin: '04901234567894' }, colliding));
+    assert.deepEqual(shared.assets.map((asset) => asset.id).sort(), [chisel.id, drill.id].sort());
+
     // Reopening reads every stored identifier back through its own scheme.
     const reopened = await IdentityStore.open(driver, schemes);
     assert.deepEqual((await reopened.getAsset(drill.id, alex.key))!.identifiers.map((identifier) => identifier.canonical),

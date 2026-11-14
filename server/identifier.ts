@@ -89,6 +89,11 @@ export type IdentifierSchemes = Readonly<{
 
 const repeated = 'An Asset cannot carry the same identifier twice';
 
+/** Names a request already uses beside an identifier's own fields: `scheme`
+ * selects the scheme, and the rest steer a lookup. A scheme field of the same
+ * name could never reach its scheme, so none may be declared. */
+const reservedFields: readonly string[] = ['scheme', 'id', 'limit', 'cursor'];
+
 /** Assemble the installed schemes and rules into the registry core consults.
  *
  * Built once where the application is composed and handed to whatever needs
@@ -101,7 +106,8 @@ export function identifierSchemes(schemes: readonly IdentifierScheme[],
   for (const scheme of schemes) {
     if (!/^[a-z][a-z0-9-]*$/.test(scheme.id)) throw new Error(`Identifier scheme id "${scheme.id}" is not a lowercase token`);
     if (byId.has(scheme.id)) throw new Error(`Identifier scheme "${scheme.id}" is installed twice`);
-    if (scheme.fields.includes('scheme')) throw new Error(`Identifier scheme "${scheme.id}" declares the reserved field "scheme"`);
+    const reserved = scheme.fields.find((field) => reservedFields.includes(field));
+    if (reserved !== undefined) throw new Error(`Identifier scheme "${scheme.id}" declares the reserved field "${reserved}"`);
     byId.set(scheme.id, scheme);
   }
   const ids = Object.freeze([...byId.keys()]);
@@ -120,7 +126,11 @@ export function identifierSchemes(schemes: readonly IdentifierScheme[],
     // caller names is unknown, and that would hide the actual reason.
     if (!ids.length) throw new ValidationError('No identifier scheme is installed');
     const input = record(value, inputFields);
-    return installed(input.scheme).accept(input);
+    const scheme = installed(input.scheme);
+    // Judged against the chosen scheme here rather than left to it: a field
+    // another scheme accepts is still not one this scheme was given, whatever
+    // else happens to be installed.
+    return scheme.accept(record(input, ['scheme', ...scheme.fields]));
   };
   const assertSet = (identifiers: readonly Identifier[], settings: AcceptanceSettings): void => {
     const seen = new Set<string>();
