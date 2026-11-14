@@ -30,7 +30,7 @@ const remainingInCore: Readonly<Record<string, readonly string[]>> = {
 const remainingInWeb: Readonly<Record<string, readonly string[]>> = {
   'web/asset-identifiers.tsx': ['gs1'],
   'web/asset-row.tsx': ['gs1', 'surfaced-uri'],
-  'web/asset-view.tsx': ['gs1-digital-link', 'surfaced-uri'],
+  'web/asset-view.tsx': ['surfaced-uri'],
   'web/inventory-controls.tsx': ['gs1'],
   'web/routes/digital-link.tsx': ['gs1-digital-link'],
   'web/routes/group-prefixes.tsx': ['reference-allocation'],
