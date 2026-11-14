@@ -101,15 +101,17 @@ test('a waiting account reads a public Asset as a visitor does, asking for no Gr
     asked.push(path);
     const body = path === '/api/me' ? { user: { key: 'waiting', name: 'Waiting', email: 'w@example.test' }, approved: false }
       : path === '/api/settings' ? { settings: defaultSettings }
+        : path === '/api/gs1/settings' ? { settings: { enforceGtinConsistency: true } }
+        : path.startsWith('/api/gs1/assets/') ? { issuances: [] }
         : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers: [] },
-          canEdit: false, digitalLinks: [] } : null;
+          canEdit: false, addresses: [], surfacedUri: 'https://kannabi.test/asset/a' } : null;
     return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
   };
   const { loadAsset } = await import('../web/asset-view.js');
   const loaded = await loadAsset('a', new Request('https://kannabi.test/asset/a'));
   assert.equal(loaded.asset.name, 'Public rig');
   assert.equal(loaded.authenticated, false, 'no workspace chrome for an account that takes no part yet');
-  assert.deepEqual(asked.filter((path) => path === '/api/groups' || path === '/api/gs1-namespaces'), []);
+  assert.deepEqual(asked.filter((path) => path === '/api/groups' || path === '/api/gs1/namespaces'), []);
 });
 
 test('an administrator orders Users by a column, and the header says which way', async (t) => {
@@ -148,9 +150,12 @@ test('the Asset page takes each identifier address from the server and builds no
     const path = new URL(String(input), 'https://kannabi.test').pathname;
     const body = path === '/api/me' ? { user: null }
       : path === '/api/settings' ? { settings: defaultSettings }
+        : path === '/api/gs1/settings' ? { settings: { enforceGtinConsistency: true } }
+        : path.startsWith('/api/gs1/assets/') ? { issuances: [] }
         : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers },
-          canEdit: false, digitalLinks: [{ identifierKey: 'i1', canonical: 'tag:T 7',
-            uri: 'https://internal.example/tags/T%207?v=1' }] } : null;
+          canEdit: false, addresses: [{ identifierKey: 'i1', canonical: 'tag:T 7',
+            uri: 'https://internal.example/tags/T%207?v=1' }],
+          surfacedUri: 'https://internal.example/asset/a' } : null;
     return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
   };
   const { loadAsset } = await import('../web/asset-view.js');

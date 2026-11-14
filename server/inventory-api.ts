@@ -1,4 +1,4 @@
-import { Hono, type Context, type Next } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { bodyLimit } from 'hono/body-limit';
 import { validator } from 'hono/validator';
@@ -6,23 +6,18 @@ import { isAPIError } from 'better-auth/api';
 import { assetPageRequest } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { publicAudience } from './asset-audience.js';
-import { surfacedAssetPath } from './surfaced-uri.js';
+import { assetPath } from '../shared/asset-uri.js';
+import { noPlugins, pluginContract, type Plugins } from './plugin.js';
 import { maxPhotoBytes, type MediaService } from './media.js';
 import type { Auth } from './auth.js';
 import { record, requiredText, ValidationError } from './identity.js';
-import { basisReference, type ChangeOrigin } from './change-provenance.js';
 import { validateCreateApiToken, type ApiTokenService, type TokenCredential } from './api-token.js';
+import { actor, administrativeCredential, changeOrigin, type HttpEnv as Env } from './http-context.js';
 import { assetId } from './asset-id.js';
-import { AdministrationError, GtinConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
+import { AdministrationError, ConflictError, LastAdministratorError, LastCollaborationError, DuplicateIdentityError, ReferenceError, groupRole, type IdentityStore, type AssetChanges, type ReportAsset } from './identity-store.js';
 import { MailDeliveryError, MailRevisionConflictError, type MailService } from './mail.js';
 import { SecretUnavailableError } from './secrets.js';
 import { assetRecord, assetRepresentation, assetSummary, summaryOmits } from './asset-representation.js';
-
-/** The authenticated caller as the rest of the request sees them. `email` is
- * the caller's own address, carried so a client can show which account is
- * active without a second request; it is never another person's. */
-type User = { key: string; name: string; email: string };
-type Env = { Variables: { user: User | null; token: TokenCredential | null } };
 
 /** The bearer credential this request presented, if any.
  *
@@ -36,38 +31,6 @@ function bearerCredential(header: string | undefined): string | null {
 }
 const authPaths = new Set(['/api/auth/sign-up/email', '/api/auth/sign-in/email', '/api/auth/sign-out',
   '/api/auth/get-session', '/api/auth/change-password', '/api/auth/request-password-reset', '/api/auth/reset-password']);
-function actor(user: User | null) {
-  if (!user) throw new HTTPException(401, { message: 'Sign in required' });
-  return user.key;
-}
-
-/** Refuses an administrator operation to a token that was not issued for one.
- * It narrows a credential; it never widens one, and it says nothing about
- * Asset access, which stays Group-derived for every caller. */
-async function administrativeCredential(c: Context<Env>, next: Next) {
-  const token = c.get('token');
-  if (token && !token.admin) {
-    throw new AdministrationError('This API token may not perform administrator operations');
-  }
-  await next();
-}
-
-/** Where a canonical change came from, as the request can establish it.
- *
- * The asserting credential is taken from whatever authenticated the request,
- * never from its content, so nothing a caller sends can misrepresent the
- * actor. `basis` is the single value a caller supplies, and it is a reference
- * rather than evidence.
- */
-function changeOrigin(c: Context<Env>): ChangeOrigin {
-  const token = c.get('token');
-  const basis = c.req.header('X-Kannabi-Basis');
-  return {
-    assertedBy: token ? { id: token.id, label: token.label } : null,
-    basis: basis === undefined ? null : basisReference(basis),
-  };
-}
-
 /** What an account waiting for approval may still reach: itself, and the
  * public settings every visitor reads. */
 function ownAccountPath(pathname: string): boolean {
@@ -83,8 +46,26 @@ function memberAuthError(error: unknown, fallback: string): never {
 }
 
 export function createInventoryApi(store: IdentityStore, auth: Auth, origin: string,
-  media?: MediaService, mail?: MailService, tokens?: ApiTokenService) {
-  return new Hono<Env>()
+  media?: MediaService, mail?: MailService, tokens?: ApiTokenService, plugins: Plugins = noPlugins) {
+  /** How a refusal is answered, for core's routes and every plugin's alike. */
+  const refused = (error: Error, c: Context<Env>) => {
+    if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
+    if (error instanceof ConflictError) return c.json({ error: error.message, ...error.detail }, 409);
+    if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);
+    if (error instanceof LastCollaborationError) return c.json({ error: error.message }, 409);
+    if (error instanceof MailRevisionConflictError) return c.json({ error: error.message }, 409);
+    if (error instanceof SecretUnavailableError) return c.json({ error: 'Instance master key recovery is required before SMTP credentials can be changed' }, 409);
+    if (error instanceof MailDeliveryError) return c.json({ error: error.message, category: error.category },
+      ['disabled', 'incomplete', 'credential-unavailable'].includes(error.category) ? 409 : 502);
+    if (error instanceof SyntaxError) return c.json({ error: 'Invalid JSON' }, 400);
+    if (error instanceof ValidationError) return c.json({ error: error.message }, 400);
+    if (error instanceof ReferenceError) return c.json({ error: 'Resource or Group access not found' }, 404);
+    if (error instanceof DuplicateIdentityError) return c.json({ error: error.message }, 409);
+    if (error instanceof HTTPException) return c.json({ error: error.message }, error.status);
+    console.error('Inventory request failed', error);
+    return c.json({ error: 'Request failed' }, 500);
+  };
+  const core = new Hono<Env>()
     // The Origin requirement exists because a browser attaches cookies to a
     // cross-site request on its own. A bearer credential is never attached
     // automatically, and a cross-origin page cannot add the header without a
@@ -137,6 +118,9 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // credential and never an authority: the owning User's current role still
     // decides, and neither ever reaches an Asset outside their Groups.
     .use('/admin/*', administrativeCredential)
+    // The same ceiling for a plugin's administrator operations, applied here
+    // so a plugin cannot forget it.
+    .use('/:plugin/admin/*', administrativeCredential)
     .use('/settings', async (c, next) => (c.req.method === 'GET'
       ? next() : administrativeCredential(c, next)))
     .get('/me', async (c) => c.json({ user: c.get('user'), ...await store.accountState(c.get('user')?.key ?? null) }))
@@ -272,11 +256,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     })
     .get('/settings', async (c) => c.json({ settings: await store.settings() }))
     .patch('/settings', async (c) => c.json({ settings: await store.updateSettings(actor(c.get('user')), await c.req.json()) }))
-    // The Assets that block enforcing GTIN consistency, a page at a time. The
-    // 409 refusing enforcement carries the first page; this continues it.
-    .get('/admin/gtin-conflicts', async (c) => c.json({
-      gtinConflicts: await store.gtinConflicts(actor(c.get('user')), c.req.query('after')),
-    }))
+    // What this Kannabi was built with. Composition is static, so this is an
+    // inventory to read and never a place to install or enable anything:
+    // whoever can install a plugin can read every Asset, and administration
+    // grants no Asset access.
+    .get('/admin/plugins', async (c) => {
+      if (!await store.isAdministrator(actor(c.get('user')))) {
+        throw new AdministrationError('Administrator access required');
+      }
+      return c.json({ contract: pluginContract, plugins: plugins.manifests });
+    })
     .get('/admin/mail', async (c) => {
       if (!mail) throw new HTTPException(503, { message: 'Mail service unavailable' });
       return c.json({ configuration: await mail.configuration(actor(c.get('user'))) });
@@ -404,24 +393,26 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     // routes above keep answering every existing client exactly as before. The
     // same reads, the same readability and the same parsers; only the shape of
     // the answer differs. Registered before /assets/:id has any chance to see
-    // a "v2" segment, which would not parse as an Asset ID anyway.
-    .get('/v2/assets', async (c) => {
+    // a "v3" segment, which would not parse as an Asset ID anyway.
+    .get('/v3/assets', async (c) => {
       const page = await store.findAssets(actor(c.get('user')), assetPageRequest(c.req.queries(), store.schemes.ids));
       return c.json({ representation: assetRepresentation, omitted: summaryOmits,
         assets: page.assets.map((asset) => assetSummary(asset, page.matchedFields[asset.id] ?? [])),
         matching: page.matching, total: page.total, nextCursor: page.nextCursor });
     })
-    .get('/v2/assets/lookup', validator('query', (value) =>
+    .get('/v3/assets/lookup', validator('query', (value) =>
       assetLookupQuery(value as Record<string, unknown>, store.schemes)), async (c) => {
       const lookup = await store.lookupAssets(c.get('user')?.key ?? publicAudience, c.req.valid('query'));
       return c.json({ representation: assetRepresentation, identity: lookup.identity, omitted: summaryOmits,
         assets: lookup.assets.map((asset) => assetSummary(asset)), matching: lookup.matching,
         nextCursor: lookup.nextCursor });
     })
-    .get('/v2/assets/:id', async (c) => {
-      const asset = await store.getAsset(assetId(c.req.param('id')), c.get('user')?.key ?? null);
+    .get('/v3/assets/:id', async (c) => {
+      const audience = c.get('user')?.key ?? null;
+      const asset = await store.getAsset(assetId(c.req.param('id')), audience);
       if (!asset) return c.json({ error: 'Asset not found' }, 404);
-      return c.json({ representation: assetRepresentation, asset: assetRecord(asset, store.schemes) });
+      return c.json({ representation: assetRepresentation,
+        asset: assetRecord(asset, store.schemes, await plugins.sections(asset, audience)) });
     })
     // Registered before /assets/:id so the static segment wins. Deterministic
     // identity resolution, deliberately separate from free-text browsing: an
@@ -429,8 +420,8 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     //
     // Anonymous callers are answered as the public audience, exactly as
     // /assets/:id already is. A public Asset is readable through its public
-    // URI, and its GS1 Digital Link URI is now one of those, so requiring a
-    // session here would make a public Asset unreachable by the very address
+    // URI, and an address a scheme supplies is one of those, so requiring a
+    // session here would make a public Asset unreachable by an address
     // Kannabi prints for it. Lookup still runs over the reader-visible set,
     // so this widens who may ask and never what any reader may see.
     .get('/assets/lookup', validator('query', (value) =>
@@ -459,13 +450,18 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         // rather than in place of it: `asset.id` is the stable address, and
         // these follow whichever identifiers the Asset currently carries.
         // An identifier gets one only where its scheme supplies an address
-        // Kannabi dereferences; a class-level identifier has none.
-        digitalLinks: asset.identifiers.flatMap((identifier) => {
+        // Kannabi dereferences.
+        addresses: asset.identifiers.flatMap((identifier) => {
           const path = store.schemes.address(identifier);
           return path === null ? [] : [{ identifierKey: identifier.key, canonical: identifier.canonical,
             uri: origin.replace(/\/$/, '') + path }];
         }),
-        surfacedUri: new URL(surfacedAssetPath(asset.id, asset.identifiers), origin).toString() });
+        // The address put in front of a person: one an installed plugin
+        // surfaces for this Asset, or its native URI.
+        surfacedUri: new URL(plugins.surfaced(asset) ?? assetPath(asset.id), origin).toString(),
+        // Each installed plugin's statement about this Asset, as the
+        // structured representation carries it.
+        extensions: await plugins.sections(asset, user?.key ?? null) });
     })
     .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {
@@ -479,9 +475,9 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
     .delete('/assets/:id/collaboration/:groupKey', async (c) => c.json(
       await store.setAssetCollaboration(assetId(c.req.param('id')), actor(c.get('user')),
         c.req.param('groupKey'), false, changeOrigin(c))))
-    // Attach an existing external identifier. This validates syntax but does
-    // not claim Kannabi issued it; GIAI issuance has its own namespace-checked
-    // operation below. Knowing an identifier grants no Asset access.
+    // Attach an existing external identifier. This validates it through its
+    // scheme and never claims Kannabi issued it. Knowing an identifier grants
+    // no Asset access.
     .post('/assets/:id/identifiers', validator('json', (value) =>
       record(value, store.schemes.inputFields) as Record<string, string>), async (c) => {
       const asset = await store.attachIdentifier(assetId(c.req.param('id')), actor(c.get('user')),
@@ -493,77 +489,16 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         c.req.param('key'), changeOrigin(c));
       return c.json({ asset });
     })
-    // Issuance is idempotent per scheme: a repeat call returns the existing
-    // issuance of that scheme and leaves any other scheme's alone. Knowing a
-    // namespace or class key grants nothing; the Group joins are re-checked
-    // here. A GIAI takes a namespace alone; a serialised GRAI and an SGTIN
-    // each name the managed class key they are serialised under, which is
-    // exactly what a merely recorded identifier can never supply.
-    .post('/assets/:id/giai', validator('json', (value) =>
-      record(value, ['namespaceKey'])), async (c) =>
-      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
-        'giai', c.req.valid('json'), changeOrigin(c)) }))
-    .post('/assets/:id/grai', validator('json', (value) =>
-      record(value, ['namespaceKey', 'classKeyKey'])), async (c) =>
-      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
-        'grai', c.req.valid('json'), changeOrigin(c)) }))
-    .post('/assets/:id/sgtin', validator('json', (value) =>
-      record(value, ['namespaceKey', 'classKeyKey'])), async (c) =>
-      c.json({ asset: await store.issueKey(assetId(c.req.param('id')), actor(c.get('user')),
-        'sgtin', c.req.valid('json'), changeOrigin(c)) }))
-    .get('/gs1-namespaces', async (c) =>
-      c.json({ namespaces: await store.listGs1Namespaces(actor(c.get('user'))) }))
-    .post('/groups/:key/gs1-namespaces', validator('json', (value) =>
-      record(value, ['gcp', 'giaiExclusions', 'graiTypeExclusions', 'gtinItemExclusions'])), async (c) =>
-      c.json({ namespace: await store.configureGs1Namespace(actor(c.get('user')),
-        c.req.param('key'), c.req.valid('json')) }, 201))
-    .patch('/gs1-namespaces/:key', validator('json', (value) => {
-      const input = record(value, ['active']);
-      if (typeof input.active !== 'boolean') throw new ValidationError('Namespace active state must be a boolean');
-      return { active: input.active };
-    }), async (c) => c.json({ namespace: await store.setGs1NamespaceActive(actor(c.get('user')),
-      c.req.param('key'), c.req.valid('json').active) }))
-    // Class keys are namespace configuration rather than Asset work: managing
-    // one touches no Asset and grants no Asset access.
-    .get('/gs1-namespaces/:key/class-keys', validator('query', (value) => {
-      const input = record(value as Record<string, unknown>, ['scheme']);
-      if (input.scheme !== undefined && input.scheme !== 'grai' && input.scheme !== 'gtin') {
-        throw new ValidationError('A managed class key is a GTIN or a GRAI asset type');
-      }
-      return { scheme: input.scheme as 'grai' | 'gtin' | undefined };
-    }), async (c) => c.json({ classKeys: await store.listClassKeys(actor(c.get('user')),
-      c.req.param('key'), c.req.valid('query').scheme) }))
-    // One route for allocation and adoption, because the difference is a
-    // single recorded fact: supplying the key's own value is what makes it an
-    // adoption, and the stored provenance says which it was.
-    .post('/gs1-namespaces/:key/class-keys', validator('json', (value) =>
-      record(value, ['scheme', 'gtin', 'serial', 'assetType', 'assetReference', 'serialExclusions'])),
-    async (c) => c.json({ classKey: await store.manageClassKey(actor(c.get('user')),
-      c.req.param('key'), c.req.valid('json')) }, 201))
-    .patch('/gs1-namespaces/:key/class-keys/:classKeyKey', validator('json', (value) => {
-      const input = record(value, ['active']);
-      if (typeof input.active !== 'boolean') throw new ValidationError('Class key active state must be a boolean');
-      return { active: input.active };
-    }), async (c) => c.json({ classKey: await store.setClassKeyActive(actor(c.get('user')),
-      c.req.param('classKeyKey'), c.req.valid('json').active) }))
-    .onError((error, c) => {
-      if (error instanceof AdministrationError) return c.json({ error: error.message }, 403);
-      if (error instanceof GtinConflictError) {
-        return c.json({ error: error.message, gtinConflicts: error.conflicts }, 409);
-      }
-      if (error instanceof LastAdministratorError) return c.json({ error: error.message }, 409);
-      if (error instanceof LastCollaborationError) return c.json({ error: error.message }, 409);
-      if (error instanceof MailRevisionConflictError) return c.json({ error: error.message }, 409);
-      if (error instanceof SecretUnavailableError) return c.json({ error: 'Instance master key recovery is required before SMTP credentials can be changed' }, 409);
-      if (error instanceof MailDeliveryError) return c.json({ error: error.message, category: error.category },
-        ['disabled', 'incomplete', 'credential-unavailable'].includes(error.category) ? 409 : 502);
-      if (error instanceof SyntaxError) return c.json({ error: 'Invalid JSON' }, 400);
-      if (error instanceof ValidationError) return c.json({ error: error.message }, 400);
-      if (error instanceof ReferenceError) return c.json({ error: 'Resource or Group access not found' }, 404);
-      if (error instanceof DuplicateIdentityError) return c.json({ error: error.message }, 409);
-      if (error instanceof HTTPException) return c.json({ error: error.message }, error.status);
-      console.error('Inventory request failed', error);
-      return c.json({ error: 'Request failed' }, 500);
-    });
+    .onError(refused);
+  // Each installed plugin's routes, under its own id. They sit behind every
+  // middleware above, so a plugin's route is authenticated, Origin-guarded and
+  // answered for the same caller as core's own, and its refusals are rendered
+  // by the same handler.
+  const api = new Hono<Env>().route('/', core).onError(refused);
+  for (const { id, app } of plugins.http) api.route(`/${id}`, app);
+  return Object.assign(api, { core });
 }
-export type InventoryApi = ReturnType<typeof createInventoryApi>;
+/** Core's own routes, which is what a typed client of core is typed by. A
+ * plugin's routes are mounted at run time and typed by the plugin's own
+ * client. */
+export type InventoryApi = ReturnType<typeof createInventoryApi>['core'];

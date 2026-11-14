@@ -11,8 +11,7 @@ import { useThemeRuntime } from '../theme-runtime';
 import { PasswordField } from '../password-field';
 import { Switch } from '../switch';
 import { notify } from '../notify';
-import { GtinConflictDialog } from '../gtin-conflict-dialog';
-import type { GtinConflictPage } from '../../server/identity-store';
+import { web } from '../plugins';
 import type { Route } from './+types/settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -40,14 +39,19 @@ function mailStateTone(state: string): string {
     'delivery-failed'].includes(state) ? 'bg-danger-surface text-danger-text' : '';
 }
 
+/** The installed plugins that have settings of their own to show here. */
+const sections = web.plugins.filter((plugin) => plugin.adminSettings);
+
 export async function clientLoader() {
   const { user, isAdmin } = await unwrap(await api.me.$get());
   if (!user) throw redirect('/signin');
   if (!isAdmin) throw new Response('Administrator access required.', { status: 403 });
-  const [{ settings }, { configuration }] = await Promise.all([
+  const [{ settings }, { configuration }, pluginSettings] = await Promise.all([
     unwrap(await api.settings.$get()), unwrap(await api.admin.mail.$get()),
+    // Each installed plugin's own settings, read through its own routes.
+    Promise.all(sections.map(async (plugin) => [plugin.id, await plugin.adminSettings!.load()] as const)),
   ]);
-  return { settings, mail: configuration };
+  return { settings, mail: configuration, pluginSettings: Object.fromEntries(pluginSettings) as Record<string, unknown> };
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -88,19 +92,9 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         toastSeconds: Number(data.get('toastSeconds')),
         showAssetId: data.get('showAssetId') === 'on',
         showIdentifierPolicyVersion: data.get('showIdentifierPolicyVersion') === 'on',
-        enforceGtinConsistency: data.get('enforceGtinConsistency') === 'on',
         requireApproval: data.get('requireApproval') === 'on',
         peopleDirectory: String(data.get('peopleDirectory') ?? '') as PeopleDirectory,
       } });
-      // Enforcement refused because Assets still conflict: the body names
-      // them, which a plain error message cannot.
-      if (response.status === 409) {
-        const body = await response.json() as { error?: string; gtinConflicts?: GtinConflictPage };
-        if (body.gtinConflicts) {
-          return { kind: 'settings' as const, saved: false, error: String(body.error),
-            gtinConflicts: body.gtinConflicts };
-        }
-      }
       const { settings } = await unwrap(response);
       return { kind: 'settings' as const, saved: true, error: null, settings };
     }
@@ -267,14 +261,13 @@ function MailSettings({ mail }: { mail: MailConfiguration }) {
   </Panel>;
 }
 
-export default function Administration({ loaderData: { settings, mail } }: Route.ComponentProps) {
+export default function Administration({ loaderData: { settings, mail, pluginSettings } }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof clientAction>();
   const { colorScheme, setColorSchemePreview, setThemeId } = useThemeRuntime();
   const persisted = useRef(settings);
   const previous = useRef(settings);
   const [current, setCurrent] = useState(settings);
   const [previewMode, setPreviewMode] = useState<'light' | 'dark' | null>(null);
-  const [gtinConflicts, setGtinConflicts] = useState<GtinConflictPage | null>(null);
   const busy = fetcher.state !== 'idle';
   useEffect(() => () => setColorSchemePreview(null), [setColorSchemePreview]);
   useEffect(() => {
@@ -289,7 +282,6 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       setCurrent(fetcher.data.settings);
       notify('Instance settings saved');
     } else if (!fetcher.data.saved) {
-      if ('gtinConflicts' in fetcher.data && fetcher.data.gtinConflicts) setGtinConflicts(fetcher.data.gtinConflicts);
       persisted.current = previous.current;
       setCurrent(previous.current);
       setThemeId(previous.current.themeId);
@@ -305,7 +297,6 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       themeId: next.themeId, apiTokenMaxLifetimeDays: next.apiTokenMaxLifetimeDays === null ? '' : String(next.apiTokenMaxLifetimeDays),
       toastSeconds: String(next.toastSeconds), showAssetId: next.showAssetId ? 'on' : '',
       showIdentifierPolicyVersion: next.showIdentifierPolicyVersion ? 'on' : '',
-      enforceGtinConsistency: next.enforceGtinConsistency ? 'on' : '',
       requireApproval: next.requireApproval ? 'on' : '', peopleDirectory: next.peopleDirectory },
     { method: 'post', action: '/admin/settings' });
   }
@@ -321,7 +312,7 @@ export default function Administration({ loaderData: { settings, mail } }: Route
       <div className="flex flex-wrap items-center gap-x-4 gap-y-[.6rem]"><h1>Instance settings</h1>
         <ActionStatus className="h-9 w-52 min-w-0 max-sm:w-44">
           {busy ? <StatusPill>Saving…</StatusPill>
-            : fetcher.data?.kind === 'settings' && fetcher.data.error && !('gtinConflicts' in fetcher.data)
+            : fetcher.data?.kind === 'settings' && fetcher.data.error
               ? <StatusPill tone="error" role="alert" title={fetcher.data.error}>Error: {fetcher.data.error}</StatusPill>
               : null}
         </ActionStatus>
@@ -342,10 +333,9 @@ export default function Administration({ loaderData: { settings, mail } }: Route
           onCheckedChange={(showIdentifierPolicyVersion) => update({ showIdentifierPolicyVersion })}
           label="Show identifier policy version on Asset pages" />
         <p className={settingHelp}>Shows the GS1 policy stamp beside identifiers. This is metadata, not a ranking of identifier schemes.</p>
-        <Switch name="enforceGtinConsistency" checked={current.enforceGtinConsistency} disabled={busy}
-          onCheckedChange={(enforceGtinConsistency) => update({ enforceGtinConsistency })}
-          label="Enforce GTIN consistency" />
-        <p className={settingHelp}>Require GTINs associated with the same Asset to match, including those embedded in SGTINs.</p>
+        {/* Each installed plugin's own settings, saved through its own routes. */}
+        {sections.map((plugin) => { const Section = plugin.adminSettings!.Section;
+          return <Section key={plugin.id} data={pluginSettings?.[plugin.id]} disabled={busy} />; })}
         <Switch name="requireApproval" checked={current.requireApproval} disabled={busy}
           onCheckedChange={(requireApproval) => update({ requireApproval })}
           label="Require approval for new accounts" />
@@ -392,7 +382,6 @@ export default function Administration({ loaderData: { settings, mail } }: Route
         onChange={(themeId) => update({ themeId })} onPreviewModeChange={preview} />
     </Panel>
     <MailSettings mail={mail} />
-    <GtinConflictDialog conflicts={gtinConflicts} onClose={() => setGtinConflicts(null)} />
   </>;
 }
 

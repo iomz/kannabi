@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
@@ -10,7 +11,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import type { ObjectStorage } from './storage.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -30,13 +31,14 @@ test('an Asset attributed to the record it came from', { skip: !uri || !password
   const session = driver.session();
   await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
   await session.close();
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
+  const plugins = connectPlugins(composition, store);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
   const tokens = new ApiTokenService(auth, store);
   const media = new MediaService(store, unusedStorage);
-  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, media, undefined, tokens));
+  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, media, undefined, tokens, plugins));
 
   let peer = 0;
   async function person(name: string) {

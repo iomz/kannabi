@@ -29,20 +29,8 @@ export type Settings = {
   toastSeconds: number;
   /** Show Kannabi's native Asset locator on ordinary Asset pages. */
   showAssetId: boolean;
-  /** Show the accepting GS1 policy stamp beside recorded identifiers. */
+  /** Show the accepting scheme policy stamp beside recorded identifiers. */
   showIdentifierPolicyVersion: boolean;
-  /** Refuse an identifier whose AI 01 disagrees with one the Asset already
-   * carries. On by default, and every instance that predates the setting keeps
-   * it on.
-   *
-   * An acceptance policy for subsequent writes and nothing more. Turning it off
-   * lets an instance record conflicting GTINs it was told about — a migration
-   * from a source that wrote its own numbering in SGTIN syntax, say — and leaves
-   * the conflict visible; it never declares that one Asset is two trade items.
-   * Turning it back on is refused while any Asset still holds a conflict, and
-   * removes nothing to make it succeed. Syntax, check digits,
-   * uniqueness and the same-identifier-twice rule do not depend on it. */
-  enforceGtinConsistency: boolean;
   /** Who a signed-in, approved person can find in the People directory, and
    * whether they see email addresses there.
    *
@@ -99,11 +87,11 @@ export function apiTokenLifetimeDays(value: unknown, field: string): number {
  * stored. */
 export const defaultSettings: Settings = Object.freeze({
   requirePhoto: false, displayTimezone: 'UTC', themeId: 'default', apiTokenMaxLifetimeDays: null,
-  toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false, enforceGtinConsistency: true,
+  toastSeconds: defaultToastSeconds, showAssetId: false, showIdentifierPolicyVersion: false,
   peopleDirectory: 'everyone', requireApproval: true,
 }) as Settings;
 
-const booleanSettings = ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency',
+const booleanSettings = ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion',
   'requireApproval'] as const;
 
 /** A change to some settings: each field present is validated, and each field

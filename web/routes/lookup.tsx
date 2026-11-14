@@ -1,22 +1,22 @@
 import { Form, Link, redirect, useNavigation } from 'react-router';
 import { useState } from 'react';
 import { api, unwrap } from '../api';
-import { identifierSchemes, schemeInputs, schemeLabel, schemeLabels, schemeDescriptions,
-  type IdentifierScheme } from '../../server/gs1.js';
+import { web } from '../plugins';
 import { AssetRow } from '../asset-row';
 import type { Route } from './+types/lookup';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, Hint, NativeSelect, PageHeading, Panel } from '../ui';
 
-type LookupKind = 'id' | IdentifierScheme;
+/** The native Asset ID, or the id of an installed identifier scheme. */
+type LookupKind = string;
 
 /** An unrecognised `kind` is a bad request, not a broken page: indexing the
  * scheme table with it would throw inside the loader and surface the generic
  * error boundary instead of telling the caller what was wrong. */
 function lookupKind(value: string | null): LookupKind | null {
   if (value === null || value === 'id') return 'id';
-  return (identifierSchemes as readonly string[]).includes(value) ? value as IdentifierScheme : null;
+  return web.scheme(value) ? value : null;
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -28,7 +28,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   }
   // Only the fields the chosen kind actually uses are sent, so the deterministic
   // query never receives an ambiguous mixture of identity inputs.
-  const fields = kind === 'id' ? ['id'] : schemeInputs[kind].map((input) => input.name);
+  const fields = kind === 'id' ? ['id'] : web.scheme(kind)!.inputs.map((input) => input.name);
   const supplied = Object.fromEntries(fields
     .map((field) => [field, params.get(field) ?? ''])
     .filter(([, value]) => value !== ''));
@@ -47,8 +47,8 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
   const busy = useNavigation().state !== 'idle';
   const [selected, setSelected] = useState<LookupKind>(kind);
   const inputs = selected === 'id'
-    ? [{ name: 'id', label: 'Asset ID', hint: 'The Asset’s native Kannabi identity.' }]
-    : schemeInputs[selected];
+    ? [{ name: 'id', label: 'Asset ID', hint: 'The Asset’s native Kannabi identity.', required: true }]
+    : web.scheme(selected)?.inputs ?? [];
   return <>
     <Link to="/" className="mb-6 inline-block text-[.85rem]">← Assets</Link>
     <PageHeading eyebrow="Inventory" title="Find by identity"
@@ -56,14 +56,14 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
     <Panel form>
       <Form method="get"><fieldset disabled={busy}>
         <Field label="Identity">
-          <NativeSelect name="kind" value={selected} onChange={(event) => setSelected(event.target.value as LookupKind)}>
+          <NativeSelect name="kind" value={selected} onChange={(event) => setSelected(event.target.value)}>
             <option value="id">Asset ID — Kannabi native identity</option>
-            {identifierSchemes.map((scheme) =>
-              <option key={scheme} value={scheme}>{schemeLabels[scheme]} — {schemeDescriptions[scheme]}</option>)}
+            {web.schemes.map((scheme) =>
+              <option key={scheme.id} value={scheme.id}>{scheme.label} — {scheme.description}</option>)}
           </NativeSelect>
         </Field>
         {inputs.map((input) => <Field key={input.name} label={input.label} hint={input.hint}>
-          <Input name={input.name} required={!('required' in input) || input.required} />
+          <Input name={input.name} required={input.required} />
         </Field>)}
         {error && <p role="alert">{error}</p>}
         <Button type="submit">{busy ? 'Looking up…' : 'Look up'}</Button>
@@ -73,7 +73,7 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
       <Hint className="mb-4">
         {result.identity.kind === 'assetId'
           ? <>Asset ID <code>{result.identity.id}</code></>
-          : <>{schemeLabel(result.identity.scheme)} <code>{result.identity.canonical}</code>
+          : <>{web.schemeLabel(result.identity.scheme)} <code>{result.identity.canonical}</code>
             {result.identity.level === 'class'
               ? ' — a class identifier, which may describe several Assets'
               : ' — an individual identifier, which identifies at most one Asset'}</>}

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
@@ -8,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import type { Mailer, MailMessage } from './mail.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 /** Admin-created accounts send a setup link, so something has to accept it. */
 class DiscardMailer implements Mailer {
@@ -29,11 +30,12 @@ test('a new account waits for approval, and reaches only itself and public Asset
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID(), new DiscardMailer());
     const tokens = new ApiTokenService(auth, store);
-    const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined, tokens));
+    const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined, tokens, plugins));
     let peer = 0;
     function client() {
       let cookie = '';
@@ -154,7 +156,7 @@ test('a new account waits for approval, and reaches only itself and public Asset
       const member = await signUp('member');
       await query("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.approvedAt", { key: veteran.key });
       await query('MATCH (u:User {key: $key}) REMOVE u.approvedAt', { key: member.key });
-      await IdentityStore.open(driver, schemes);
+      await IdentityStore.open(driver, composition);
       assert.equal((await json(veteran.call('/me'))).approved, true, 'administration stays reachable');
       assert.equal((await veteran.call('/admin/users')).status, 200);
       assert.equal((await json(member.call('/me'))).approved, false, 'an ordinary account still waits');

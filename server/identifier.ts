@@ -53,20 +53,16 @@ export type IdentifierScheme = Readonly<{
   address?(identifier: Identifier): string | null;
 }>;
 
-/** What a rule is told about the instance when it judges an Asset's
- * identifiers: the acceptance settings read in the same transaction as the
- * write, or null before that transaction opens. Given null, a rule applies
- * only what does not depend on a setting. Core passes it through unread. */
-export type AcceptanceSettings = Readonly<Record<string, unknown>> | null;
-
 /** A rule over the identifiers of one Asset, owned by whoever owns the meaning
- * the rule is about. Core applies every installed rule inside the write and
- * has no cross-identifier rule of its own beyond refusing an exact repeat. */
+ * the rule is about. It judges the identifiers alone: a rule that depends on
+ * what the instance stores is its owner's part in the write instead. Core
+ * applies every installed rule and has no cross-identifier rule of its own
+ * beyond refusing an exact repeat. */
 export type IdentifierRule = Readonly<{
   /** Refuse the complete set of identifiers an Asset is reported with. */
-  assertSet(identifiers: readonly Identifier[], settings: AcceptanceSettings): void;
+  assertSet(identifiers: readonly Identifier[]): void;
   /** Refuse one more identifier joining those an Asset already carries. */
-  assertAddition(existing: readonly Identifier[], addition: Identifier, settings: AcceptanceSettings): void;
+  assertAddition(existing: readonly Identifier[], addition: Identifier): void;
 }>;
 
 export type IdentifierSchemes = Readonly<{
@@ -78,13 +74,12 @@ export type IdentifierSchemes = Readonly<{
   has(id: unknown): id is string;
   /** Validate one identifier a caller supplied. */
   accept(value: unknown): Identifier;
-  /** Validate a list a caller supplied, and apply every rule that does not
-   * depend on instance settings. */
+  /** Validate a list a caller supplied, and apply every rule. */
   acceptAll(value: unknown): Identifier[];
   restore(scheme: unknown, canonical: unknown, policyVersion: unknown): Identifier;
   address(identifier: Identifier): string | null;
-  assertSet(identifiers: readonly Identifier[], settings: AcceptanceSettings): void;
-  assertAddition(existing: readonly Identifier[], addition: Identifier, settings: AcceptanceSettings): void;
+  assertSet(identifiers: readonly Identifier[]): void;
+  assertAddition(existing: readonly Identifier[], addition: Identifier): void;
 }>;
 
 const repeated = 'An Asset cannot carry the same identifier twice';
@@ -132,13 +127,13 @@ export function identifierSchemes(schemes: readonly IdentifierScheme[],
     // else happens to be installed.
     return scheme.accept(record(input, ['scheme', ...scheme.fields]));
   };
-  const assertSet = (identifiers: readonly Identifier[], settings: AcceptanceSettings): void => {
+  const assertSet = (identifiers: readonly Identifier[]): void => {
     const seen = new Set<string>();
     for (const identifier of identifiers) {
       if (seen.has(identifier.canonical)) throw new ValidationError(repeated);
       seen.add(identifier.canonical);
     }
-    for (const rule of rules) rule.assertSet(identifiers, settings);
+    for (const rule of rules) rule.assertSet(identifiers);
   };
   return Object.freeze({
     ids,
@@ -149,17 +144,17 @@ export function identifierSchemes(schemes: readonly IdentifierScheme[],
       if (value === undefined || value === null) return [];
       if (!Array.isArray(value)) throw new ValidationError('Identifiers must be a list');
       const identifiers = value.map(accept);
-      assertSet(identifiers, null);
+      assertSet(identifiers);
       return identifiers;
     },
     restore: (scheme, canonical, policyVersion) => installed(scheme).restore(canonical, policyVersion),
     address: (identifier) => byId.get(identifier.scheme)?.address?.(identifier) ?? null,
     assertSet,
-    assertAddition(existing, addition, settings) {
+    assertAddition(existing, addition) {
       if (existing.some((identifier) => identifier.canonical === addition.canonical)) {
         throw new ValidationError(repeated);
       }
-      for (const rule of rules) rule.assertAddition(existing, addition, settings);
+      for (const rule of rules) rule.assertAddition(existing, addition);
     },
   });
 }

@@ -5,11 +5,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { assetRecord, assetSummary, notRecorded, summaryOmits } from './asset-representation.js';
 import { createInventoryApi } from './inventory-api.js';
 import { createMcpServer } from './mcp-tools.js';
+import { noPlugins, type Plugins } from './plugin.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { canonicalIdentifier } from './gs1.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 import type { Auth } from './auth.js';
 import type { Asset, IdentityStore } from './identity-store.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 /** The representation is only worth having if its structure carries the
  * distinctions on its own. These tests read it the way a client would — by
@@ -30,9 +32,6 @@ const populated: Asset = Object.freeze({
     acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:01.000Z',
     assertedBy: { id: 'token-1', label: 'legacy loader' }, basis: 'legacy:assetcats:42' } },
   { key: 'i2', ...giai, attachment: null }],
-  issuances: [{ key: 'issuance-1', scheme: 'giai' as const, canonical: giai.canonical, gcp: '0614141',
-    sequence: 5, classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
-    allocatedForAssetId: '0198c2a0-0000-7000-8000-000000000001', allocatedBy: reporter }],
   reportedBy: reporter,
   reportedAt: '2026-06-22T00:00:00.000Z',
   provenance: { acceptedBy: reporter, acceptedAt: '2026-06-23T00:00:00.000Z',
@@ -49,7 +48,7 @@ const populated: Asset = Object.freeze({
  * optional is absent. */
 const sparse: Asset = Object.freeze({
   ...populated, id: '0198c2a0-0000-7000-8000-000000000002', identifiers: [{ key: 'i3', ...gtin, attachment: null }],
-  issuances: [], provenance: null, sourceRecord: null, owner: null, isPublic: false, photos: [],
+  provenance: null, sourceRecord: null, owner: null, isPublic: false, photos: [],
 });
 
 /** Every leaf of a JSON value with its path, `[]` marking a list element. */
@@ -62,12 +61,17 @@ function leaves(value: unknown, path = ''): [string, unknown][] {
 }
 const json = (value: unknown) => JSON.parse(JSON.stringify(value));
 
+/** What an installed plugin states about the populated Asset. Its instants
+ * are the plugin's own acts, stated under the plugin's own key. */
+const extensions = { gs1: { issued: [{ scheme: 'giai', value: giai.canonical,
+  at: '2026-06-23T00:00:00.000Z', by: reporter }] } };
+
 test('every instant is either an act in Kannabi or what a source says', () => {
   // The only places an instant can be. Each is the `at` of something Kannabi
   // did, or the source's own recordedAt: there is no slot an acquisition,
   // loan or other physical event could occupy, so none can be read as one.
-  const kannabiClock = /^(kannabi\.(reported|lastChange|issued\[\])\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at)$/;
-  const instants = leaves(json(assetRecord(populated, schemes)))
+  const kannabiClock = /^(kannabi\.(reported|lastChange)\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at|extensions\.gs1\.issued\[\]\.at)$/;
+  const instants = leaves(json(assetRecord(populated, schemes, extensions)))
     .filter(([, value]) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value));
   assert.ok(instants.length >= 6);
   for (const [path] of instants) {
@@ -138,7 +142,7 @@ test('an unknown stays an explicit null, never a missing key', () => {
 });
 
 test('a summary is the record with stated omissions, never a different record', () => {
-  const record = json(assetRecord(populated, schemes));
+  const record = json(assetRecord(populated, schemes, extensions));
   const summary = json(assetSummary(populated, ['sourceDescription']));
   const { identifiers, matched, ...rest } = summary;
   const recordLeaves = new Map(leaves(record));
@@ -174,23 +178,25 @@ const store = {
 } as unknown as IdentityStore;
 const anonymous = { api: { getSession: async () => null } } as unknown as Auth;
 const origin = 'http://localhost:3000';
-const api = createInventoryApi(store, anonymous, origin);
+/** The GS1 plugin's section, as the composed plugin would supply it. */
+const plugins: Plugins = { ...noPlugins, sections: async (asset) => (asset.id === populated.id ? extensions : { gs1: { issued: [] } }) };
+const api = createInventoryApi(store, anonymous, origin, undefined, undefined, undefined, plugins);
 
 test('the HTTP API and MCP return the same record', async (t) => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
-  await Promise.all([createMcpServer(store, systemAudienceResolver()).connect(serverTransport),
+  await Promise.all([createMcpServer(store, systemAudienceResolver(), plugins).connect(serverTransport),
     client.connect(clientTransport)]);
   t.after(() => client.close());
   for (const asset of [populated, sparse]) {
-    const response = await api.request(origin + `/v2/assets/${asset.id}`);
+    const response = await api.request(origin + `/v3/assets/${asset.id}`);
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.representation, 2);
+    assert.equal(body.representation, 3);
     const result = await client.callTool({ name: 'get_asset', arguments: { assetId: asset.id } }) as {
       structuredContent: { asset: unknown } };
     assert.deepEqual(result.structuredContent.asset, body.asset);
-    assert.deepEqual(body.asset, json(assetRecord(asset, schemes)));
+    assert.deepEqual(body.asset, json(assetRecord(asset, schemes, await plugins.sections(asset, null))));
   }
 });
 

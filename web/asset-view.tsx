@@ -4,7 +4,8 @@ import { displayInstant } from '../server/settings.js';
 import { api, unwrap } from './api';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri';
 import { assetId } from '../server/asset-id.js';
-import { surfacedAssetPath, surfacedTransition, type SurfaceableIdentifier } from '../server/surfaced-uri.js';
+import { web } from './plugins';
+import type { AddressedAsset, CarriedIdentifier } from './plugin';
 import { ReporterAttribution } from './reporter-attribution';
 import { publicShellHandle } from './anonymous-shell';
 import { AssetUri } from './asset-uri';
@@ -20,8 +21,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, Field, HelpTip, Hint, PageHeading, Section, SubHeading } from './ui';
-import { AddIdentifier, IdentifierForm, IdentifierList, IssueIdentifier } from './asset-identifiers';
+import { AddIdentifier, IdentifierForm, IdentifierList } from './asset-identifiers';
 
+
+/** The installed plugins with a part in the Asset page. */
+const assetSlots = web.plugins.filter((plugin) => plugin.assetPage);
 
 export async function loadAsset(id: string, request: Request) {
   const [response, account] = await Promise.all([
@@ -31,9 +35,6 @@ export async function loadAsset(id: string, request: Request) {
   // A waiting account reads an Asset as a visitor does: it has no Groups or
   // namespaces yet, and the server refuses to list them.
   const participant = account.user !== null && account.approved;
-  // Display only: the server re-checks the Group join on every issuance.
-  const { namespaces } = participant
-    ? await unwrap(await api['gs1-namespaces'].$get()) : { namespaces: [] };
   if (!response.ok) throw new Response('Asset not found or access unavailable.', { status: response.status });
   const result = await response.json();
   if (!('asset' in result)) throw new Response('Asset not found.', { status: 404 });
@@ -52,54 +53,36 @@ export async function loadAsset(id: string, request: Request) {
   // The server decides which identifiers have one and what its path is, by
   // asking each identifier's own scheme. This only restates that path on the
   // origin the page was reached at, and builds no address itself.
-  const digitalLinks = Object.fromEntries(result.digitalLinks.map((link) => {
+  const digitalLinks = Object.fromEntries(result.addresses.map((link) => {
     const served = new URL(link.uri);
     return [link.identifierKey, absolute(served.pathname + served.search)];
   }));
-  // Only namespaces this Asset's Groups manage, only active ones, and only
-  // those whose managing Group this reader is a Group Manager of. Issuing is
-  // authority over what a Group manages, so membership alone does not carry
-  // it (#20); a member can still see the namespace and still cannot issue
-  // from it. The server re-checks the Group join, the control and the active
-  // state on every issuance; this narrows what is offered, never what is
-  // permitted.
-  const eligible = namespaces.filter((namespace) =>
-    namespace.active && namespace.group && groupKeys.has(namespace.group.key)
-    && controlled.some((group) => group.key === namespace.group!.key));
-  // The class keys those namespaces manage, flattened with the prefix each
-  // belongs to, so a serialised GRAI or an SGTIN can name the one it is
-  // issued under. Inactive class keys are left out for the same reason
-  // inactive namespaces are.
-  const classKeys = (await Promise.all(eligible.map(async (namespace) => {
-    const { classKeys: managed } = await unwrap(
-      await api['gs1-namespaces'][':key']['class-keys'].$get({
-        param: { key: namespace.key }, query: { scheme: undefined } }));
-    return managed.filter((classKey) => classKey.active).map((classKey) => ({
-      key: classKey.key, namespaceKey: namespace.key, gcp: namespace.gcp,
-      scheme: classKey.scheme, canonical: classKey.canonical,
-    }));
-  }))).flat();
+  // Whatever each installed plugin shows on this page, read by the plugin
+  // through its own routes. Display only: every decision is the server's.
+  const context = { asset: result.asset, participant, assetGroups: [...groupKeys],
+    managedGroups: controlled.map((group) => group.key) };
+  const plugins = Object.fromEntries(await Promise.all(assetSlots.map(async (plugin) =>
+    [plugin.id, await plugin.assetPage!.load(context)] as const))) as Record<string, unknown>;
   // The Groups whose page this reader can open: their memberships, exactly as
   // the Group destination decides it.
   const reachableGroups = memberships.map((group) => group.key);
-  return { ...result, settings, authenticated: participant,
+  const surfaced = new URL(result.surfacedUri);
+  return { ...result, settings, plugins, authenticated: participant,
     controlled, canGrant, reachableGroups,
-    namespaces: eligible,
-    classKeys,
     digitalLinks,
     // The native URI is always present and always valid. The surfaced one is
-    // what Kannabi puts in front of a person, and is the native URI again when
-    // the Asset has no eligible Digital Link identity.
+    // what Kannabi puts in front of a person, decided by the server, and is the
+    // native URI again when nothing else is surfaced for the Asset. Restated
+    // on the origin the page was reached at, as the addresses above are.
     nativeUri: absolute(assetPath(result.asset.id)),
-    surfacedUri: absolute(surfacedAssetPath(result.asset.id, result.asset.identifiers)) };
+    surfacedUri: absolute(surfaced.pathname + surfaced.search) };
 }
 /** Fields every submission carries to route and address itself, which are
  * never part of the payload any API is given. */
-const submissionFields = new Set(['intent', 'assetId', 'at']);
+const submissionFields = new Set(['intent', 'assetId', 'at', 'plugin']);
 
 /** An Asset as a mutation response returns it, which is all a transition needs. */
-type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[];
-  issuances: readonly { scheme: string; canonical: string }[] };
+type MutatedAsset = AddressedAsset;
 
 /** Leave an address that no longer serves this Asset.
  *
@@ -117,7 +100,7 @@ type MutatedAsset = { id: string; identifiers: readonly SurfaceableIdentifier[];
  * because an action that redirects returns the fetcher no data to react to.
  */
 function transition(asset: MutatedAsset, message: string, at: string) {
-  const target = surfacedTransition(at, asset.id, asset.identifiers);
+  const target = web.transition(at, asset);
   if (!target) return null;
   notify(message);
   return redirect(target);
@@ -152,7 +135,7 @@ export async function submitAsset(request: Request) {
     : intent === 'delete-photo' ? 'delete-photo' as const
       : intent === 'attach-identifier' ? 'attach-identifier' as const
         : intent === 'detach-identifier' ? 'detach-identifier' as const
-          : intent === 'issue-identifier' ? 'issue-identifier' as const
+          : intent === 'add-identifier' ? 'add-identifier' as const
             : intent === 'visibility' ? 'visibility' as const : 'rename' as const;
   const requestedPhotoKey = kind === 'delete-photo' ? String(data.get('photoKey') ?? '') : null;
   try {
@@ -189,26 +172,23 @@ export async function submitAsset(request: Request) {
       return transition(asset, 'Identifier detached', at)
         ?? { kind, saved: true as const, error: null, photoKey: null };
     }
-    if (kind === 'issue-identifier') {
-      // One route per scheme, because the three take different inputs: a GIAI
-      // names only a namespace, while a serialised GRAI and an SGTIN each name
-      // the managed class key they are issued under.
-      const scheme = String(data.get('scheme') ?? 'giai');
-      const namespaceKey = String(data.get('namespaceKey') ?? '');
-      const classKeyKey = String(data.get('classKeyKey') ?? '');
-      const { asset } = await unwrap<{ asset: MutatedAsset }>(
-        scheme === 'grai'
-          ? await api.assets[':id'].grai.$post({ param: { id }, json: { namespaceKey, classKeyKey } })
-          : scheme === 'sgtin'
-            ? await api.assets[':id'].sgtin.$post({ param: { id }, json: { namespaceKey, classKeyKey } })
-            : await api.assets[':id'].giai.$post({ param: { id }, json: { namespaceKey } }));
-      // Which value this issuance produced, so the card for it can be picked
-      // out where the reader was already looking. Only meaningful when the
-      // viewer stays: a transition is a navigation, and the page it lands on
-      // shows the identifiers directly under the header anyway.
-      const issued = asset.issuances.find((issuance) => issuance.scheme === scheme)?.canonical ?? null;
-      return transition(asset, 'Identifier issued', at)
-        ?? { kind, saved: true as const, error: null, photoKey: null, issued };
+    if (kind === 'add-identifier') {
+      // An installed plugin's own way of adding an identifier, such as
+      // issuing one. The plugin performs it through its own routes and says
+      // which value it added, so the card for it can be picked out where the
+      // reader was already looking. Only meaningful when the viewer stays: a
+      // transition is a navigation, and the page it lands on shows the
+      // identifiers directly under the header anyway.
+      const panel = assetSlots.find((plugin) => plugin.id === data.get('plugin'))?.assetPage?.add;
+      if (!panel) throw new Error('Unknown action');
+      try {
+        const { asset, added } = await panel.submit(id, data);
+        return transition(asset, panel.done, at)
+          ?? { kind, saved: true as const, error: null, photoKey: null, added, done: panel.done };
+      } catch (error) {
+        return { kind, saved: false as const, photoKey: null,
+          error: error instanceof Error ? error.message : panel.failed };
+      }
     }
     // One field per request. Name and visibility are edited from two places
     // now, and a PATCH carrying both would let either control write back a
@@ -225,14 +205,15 @@ export async function submitAsset(request: Request) {
           : kind === 'delete-photo' ? 'Delete failed'
             : kind === 'attach-identifier' ? 'Identifier could not be added'
               : kind === 'detach-identifier' ? 'Identifier could not be detached'
-                : kind === 'issue-identifier' ? 'Identifier could not be issued' : 'Update failed',
+                : 'Update failed',
       photoKey: requestedPhotoKey };
   }
 }
 export type AssetViewData = Awaited<ReturnType<typeof loadAsset>>;
 
 export function AssetView({ asset, canEdit, canViewReporterProfile, settings, authenticated,
-  nativeUri, surfacedUri, digitalLinks, namespaces, classKeys, controlled, canGrant, reachableGroups = [] }: AssetViewData) {
+  nativeUri, surfacedUri, digitalLinks, controlled, canGrant, reachableGroups = [],
+  plugins = {} }: AssetViewData) {
   const collaboration = useFetcher<typeof submitAsset>();
   const upload = useFetcher<typeof submitAsset>();
   const edit = useFetcher<typeof submitAsset>();
@@ -271,9 +252,18 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const identifierResult = identifiers.data?.kind === 'attach-identifier'
     || identifiers.data?.kind === 'detach-identifier' ? identifiers.data : null;
   const identifierBusy = identifiers.state !== 'idle';
-  const issueResult = issue.data?.kind === 'issue-identifier' ? issue.data : null;
-  // The value just issued, while it is still the newest thing on the page.
-  const justIssued = issueResult?.saved ? issueResult.issued ?? null : null;
+  const issueResult = issue.data?.kind === 'add-identifier' ? issue.data : null;
+  // The value just added, while it is still the newest thing on the page.
+  const justIssued = issueResult?.saved && 'added' in issueResult ? issueResult.added ?? null : null;
+  /** What an installed plugin says about one identifier this Asset carries. */
+  const standing = (identifier: CarriedIdentifier) => {
+    for (const plugin of assetSlots) {
+      const said = plugin.assetPage!.standing?.(plugins[plugin.id], identifier) ?? null;
+      if (said) return said;
+    }
+    return null;
+  };
+  const detaching = asset.identifiers.find((i) => i.key === identifierToDetach) ?? null;
   const issueBusy = issue.state !== 'idle';
   const uploadBusy = upload.state !== 'idle';
   const editBusy = edit.state !== 'idle';
@@ -302,7 +292,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
     }
   }, [identifiers.data]);
   useEffect(() => {
-    if (issueResult?.saved) notify('Identifier issued');
+    if (issueResult?.saved && 'done' in issueResult) notify(issueResult.done);
   }, [issueResult]);
   useEffect(() => {
     if (collaboration.data?.saved) notify('Collaboration updated');
@@ -321,12 +311,12 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
         comes to this page for, so they no longer wait below it. */}
     <Section title="Identifiers" defaultOpen>
       <AssetUri surfacedUri={surfacedUri} nativeUri={nativeUri}
-        showNativeUri={settings.showAssetId} />
+        showNativeUri={settings.showAssetId} label={web.surfacedLabel(asset)} />
       {/* Only when there is something to head. An empty subsection heading
           announces a group that is not there. */}
       {asset.identifiers.length > 0 && <>
         <SubHeading>Recorded IDs</SubHeading>
-        <IdentifierList identifiers={asset.identifiers} issuances={asset.issuances}
+        <IdentifierList identifiers={asset.identifiers} standing={standing}
           digitalLinks={digitalLinks} justIssued={justIssued}
           showPolicyVersion={settings.showIdentifierPolicyVersion} displayTimezone={settings.displayTimezone}
           canEdit={canEdit} busy={identifierBusy}
@@ -335,16 +325,24 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       {!asset.identifiers.length && <p className="mt-5 mb-0 text-[.875rem]">
         No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>}
       {canEdit && <AddIdentifier
-        issue={<issue.Form method="post" key={asset.issuances.map((issuance) => issuance.key).join()}>
-          {identityFields}
-          <IssueIdentifier namespaces={namespaces} classKeys={classKeys}
-            issuances={asset.issuances} identifiers={asset.identifiers}
-            enforceGtinConsistency={settings.enforceGtinConsistency} busy={issueBusy} error={issueResult?.error ?? null} />
-        </issue.Form>}
-        record={<identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
-          {identityFields}
-          <IdentifierForm busy={identifierBusy} error={identifierResult?.error ?? null} />
-        </identifiers.Form>} />}
+        panels={assetSlots.flatMap((plugin) => {
+          const slot = plugin.assetPage!;
+          if (!slot.add) return [];
+          const Panel = slot.add.Panel;
+          return [{ id: plugin.id, label: slot.add.label,
+            content: <issue.Form method="post" key={slot.revision?.(plugins[plugin.id]) ?? plugin.id}>
+              {identityFields}
+              <input type="hidden" name="intent" value="add-identifier" />
+              <input type="hidden" name="plugin" value={plugin.id} />
+              <Panel data={plugins[plugin.id]} asset={asset} busy={issueBusy}
+                error={issueResult?.error ?? null} />
+            </issue.Form> }];
+        })}
+        record={web.schemes.length === 0 ? null
+          : <identifiers.Form method="post" key={asset.identifiers.map((i) => i.key).join()}>
+            {identityFields}
+            <IdentifierForm busy={identifierBusy} error={identifierResult?.error ?? null} />
+          </identifiers.Form>} />}
     </Section>
     {/* Access and provenance, compressed to one line per fact. It is context
         for the identifiers above rather than the subject of the page. */}
@@ -436,9 +434,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       </>}
     </Section>
     {canEdit && <DetachIdentifierConfirmation
-      identifier={asset.identifiers.find((i) => i.key === identifierToDetach)?.canonical ?? null}
-      issued={asset.issuances.some((issuance) => issuance.canonical
-        === asset.identifiers.find((i) => i.key === identifierToDetach)?.canonical)}
+      identifier={detaching?.canonical ?? null}
+      consequence={detaching ? standing(detaching)?.detachConsequence ?? null : null}
       busy={identifierBusy}
       error={identifierResult?.kind === 'detach-identifier' ? identifierResult.error : null}
       onClose={() => setIdentifierToDetach(null)}

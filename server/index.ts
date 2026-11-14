@@ -11,8 +11,9 @@ import { ApiTokenService } from './api-token.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
-import { digitalLinkDocuments } from './digital-link-routes.js';
-import { schemes } from './composition.js';
+import { addressDocuments } from './address-routes.js';
+import { composition } from './composition.js';
+import { connectPlugins } from './plugin.js';
 
 const password = process.env.NEO4J_PASSWORD;
 if (!password) throw new Error('NEO4J_PASSWORD is required');
@@ -32,7 +33,8 @@ const appURL = process.env.APP_URL;
 const authSecret = process.env.BETTER_AUTH_SECRET;
 if (!appURL || !authSecret) throw new Error('APP_URL and BETTER_AUTH_SECRET are required');
 const applicationOrigin = new URL(appURL).origin;
-const store = await IdentityStore.open(driver, schemes);
+const store = await IdentityStore.open(driver, composition);
+const plugins = connectPlugins(composition, store);
 const masterKey = await MasterKeyManager.open(await store.hasEncryptedSecrets());
 if (masterKey.state !== 'ready') {
   console.warn(`Mail credentials unavailable: instance master key is ${masterKey.state}. Restore it or use the explicit Administration reset.`);
@@ -52,17 +54,17 @@ app.use('/api/*', async (c, next) => {
   if (address) c.req.raw.headers.set('x-kannabi-client-ip', address);
   await next();
 });
-app.route('/api', createInventoryApi(store, auth, applicationOrigin, media, mail, new ApiTokenService(auth, store)));
+app.route('/api', createInventoryApi(store, auth, applicationOrigin, media, mail, new ApiTokenService(auth, store), plugins));
 
 // Unknown API paths must never fall through to the SPA.
 app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 app.use('/assets/*', serveStatic({ root: './build/client' }));
 app.all('/assets/*', (c) => c.notFound());
-// Digital Link dereferencing and the native URI's redirect need a status the
-// single-page build cannot produce, so they are decided here. An address that
-// resolves falls through to the same static handler as before.
-app.use('*', digitalLinkDocuments(store, auth, './build/client/index.html'));
+// An address a plugin claims, and the native URI's redirect to one, need a
+// status the single-page build cannot produce, so they are decided here. An
+// address that resolves falls through to the same static handler as before.
+app.use('*', addressDocuments(store, auth, plugins, './build/client/index.html'));
 app.get('*', serveStatic({ path: './build/client/index.html' }));
 
 const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {

@@ -7,9 +7,14 @@ import { readdirSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 
 const exec = promisify(execFile);
-const suites = readdirSync('server').filter((file) => file.endsWith('.integration.test.ts')).sort();
+// Core's suites live in server/, and each plugin keeps its own beside the code
+// they exercise. A suite is named by its path from the repository root.
+const suites = ['server', 'plugins'].flatMap((root) => readdirSync(root, { recursive: true })
+  .filter((file) => file.endsWith('.integration.test.ts')).map((file) => `${root}/${file}`)).sort();
 const selected = process.argv.slice(2);
-if (selected.some((file) => !suites.includes(file))) throw new Error('Pass integration test filenames from server/');
+if (selected.some((file) => !suites.includes(file))) {
+  throw new Error('Pass integration test paths, such as server/users.integration.test.ts');
+}
 const queue = [...(selected.length ? selected : suites)];
 // Suites share nothing: each has its own containers on random localhost ports,
 // so they run side by side. Most of a suite's time is a container starting, so
@@ -58,8 +63,8 @@ async function runSuite(testFile) {
     // Suites that put bytes through the photo routes need object storage. The
     // rest do not, and starting a container for them would make every run slower
     // for nothing.
-    const needsObjectStorage = ['media.integration.test.ts', 'demo.integration.test.ts',
-      'corpus-load.integration.test.ts'];
+    const needsObjectStorage = ['server/media.integration.test.ts', 'server/demo.integration.test.ts',
+      'server/corpus-load.integration.test.ts'];
     if (needsObjectStorage.includes(testFile)) {
       await exec('docker', ['run', '--rm', '-d', '--name', name + '-s3', '-p', '127.0.0.1::8080',
         '-e', 'ADMIN_PASSWORD=' + password, '-e', 'JWT=' + randomUUID() + randomUUID(),
@@ -80,7 +85,7 @@ async function runSuite(testFile) {
       } finally { s3.destroy(); }
     }
     const code = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, ['--import', 'tsx', '--test', `server/${testFile}`], {
+      const child = spawn(process.execPath, ['--import', 'tsx', '--test', testFile], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, ...storageEnv, KANNABI_TEST_NEO4J_URI: uri, KANNABI_TEST_NEO4J_PASSWORD: password },
       });
@@ -98,9 +103,9 @@ async function runSuite(testFile) {
     // Removed rather than stopped: nothing in a disposable container is worth
     // a graceful shutdown, and Neo4j's takes most of the ten seconds `docker
     // stop` allows, once per suite.
-    if (objectStarted) await exec('docker', ['rm', '-f', name + '-s3']).catch(() => {});
+    if (objectStarted) await exec('docker', ['rm', '-fv', name + '-s3']).catch(() => {});
     if (started) {
-      await exec('docker', ['rm', '-f', name]).catch(() => {});
+      await exec('docker', ['rm', '-fv', name]).catch(() => {});
       log('Disposable Neo4j removed; no user database was used.');
     }
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);

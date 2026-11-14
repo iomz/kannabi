@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
-import { canonicalIdentifiers } from './gs1.js';
+import { canonicalIdentifiers } from '../plugins/gs1/toolkit/gs1.js';
 import { demoAccounts, demoAdministrators, demoAllocatedSequences, demoAllocations, demoAssets,
   demoDiscoverable, demoGroupMembers, demoMembers, demoNamespaces, demoScopes,
   evaluatorScopes } from '../scripts/demo/fixtures.js';
-import { allocatableSequence, canonicalExclusions, firstSequence } from './reference-allocation.js';
-import { canonicalGcp } from './gs1.js';
+import { allocatableSequence, canonicalExclusions, firstSequence } from '../plugins/gs1/toolkit/reference-allocation.js';
+import { canonicalGcp } from '../plugins/gs1/toolkit/gs1.js';
 import { demoConfiguration, requireStoppedApp, requireUnversionedBucket } from '../scripts/demo/safety.js';
 
 const env = { KANNABI_DEMO: 'local', NODE_ENV: 'development', APP_URL: 'http://127.0.0.1:3000',
