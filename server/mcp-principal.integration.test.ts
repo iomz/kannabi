@@ -7,7 +7,8 @@ import { DuplicateIdentityError, IdentityStore, ReferenceError as DomainReferenc
 import { assetPageRequest } from './asset-page.js';
 import { PrincipalError, principalAudienceResolver, principalMetaKey } from './mcp-principal.js';
 import { systemAudience } from './asset-audience.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -25,7 +26,7 @@ function asserted(overrides: Record<string, unknown> = {}) {
 test('MCP operations run under an authenticated Kannabi principal', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
   async function query(cypher: string, params: Record<string, unknown> = {}) {
     const session = driver.session();
     try { return await session.run(cypher, params); } finally { await session.close(); }

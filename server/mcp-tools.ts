@@ -2,23 +2,19 @@ import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { assetPageRequest, assetSorts, assetDirections } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
-import { gs1LedgerQuery } from './gs1-ledger.js';
 import { isAssetId } from './asset-id.js';
-import { classKeySchemes, identifierSchemes, issuanceSchemes } from './gs1.js';
 import { assetRecord, assetSummary, notRecorded, summaryOmits } from './asset-representation.js';
 import { ValidationError } from './identity.js';
 import { PrincipalError, type AudienceResolver } from './mcp-principal.js';
-import {
-  namespaceCounters, ReferenceError as DomainReferenceError,
-  type Gs1ClassKeyAllocation, type Gs1LedgerEntry, type Gs1Namespace, type IdentityStore,
-} from './identity-store.js';
+import { ReferenceError as DomainReferenceError, type IdentityStore } from './identity-store.js';
+import { noPlugins, type McpTool, type Plugins } from './plugin.js';
 
 /** Kannabi's domain MCP surface.
  *
  * Every tool answers a question Kannabi owns the answer to: which Assets it
- * knows, which identities address them, which Groups and GS1 Company Prefix
- * namespaces exist, and which values Kannabi itself issued. Nothing here
- * proxies another information source, and nothing here exposes the graph as a
+ * knows, which identities address them and which Groups exist, together with
+ * whatever each installed plugin owns the answer to. Nothing here proxies
+ * another information source, and nothing here exposes the graph as a
  * graph: events, observations and arbitrary traversal belong to their own
  * systems and their own MCP servers.
  *
@@ -43,68 +39,17 @@ const basisSchema = z.string().nullable()
   .describe('The opaque reference the request named as its basis, such as a source row. A reference, not evidence.');
 
 const identifierSchema = z.object({
-  scheme: z.enum(identifierSchemes as readonly [string, ...string[]]),
-  value: z.string().describe('The GS1 element string, e.g. "(01)04901234567894".'),
+  scheme: z.string().describe('The identifier scheme that accepted the value.'),
+  value: z.string().describe('The identifier in its scheme\'s canonical form.'),
   level: z.enum(['individual', 'class'])
     .describe('"individual" identifies this one Asset; "class" names a kind of thing other Assets may carry too.'),
   components: z.record(z.string(), z.string())
     .describe('The arguments resolve_external_identifier takes for this identity, unchanged.'),
 });
 
-const attributionSchema = z.object({
+export const attributionSchema = z.object({
   key: z.string(), name: z.string(), status: z.enum(['active', 'deleted']),
 }).describe('Who acted, as immutable provenance. "deleted" means the account is gone and only the name was kept. Never an indication of who may access the Asset.');
-
-const issuanceSchema = z.object({
-  key: z.string().describe('Kannabi\'s handle for this ledger row.'),
-  scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]])
-    .describe('Which GS1 key Kannabi issued. A GIAI comes straight from the company prefix; a serialised GRAI and an SGTIN are serials under a managed class key.'),
-  canonical: z.string()
-    .describe('The issued identifier in GS1 element-string form, which is what get_asset and resolve_external_identifier report for the same value.'),
-  gcp: z.string().describe('The GS1 Company Prefix this value was issued from.'),
-  sequence: z.number().int()
-    .describe('The number the counter produced. Unique only within the counter that produced it — the namespace for a GIAI, the class key for a serial — so it orders issuances within one counter and nowhere else. Gaps are excluded ranges, not missing issuances.'),
-  classKeyCanonical: z.string().nullable()
-    .describe('The managed class key this was serialised under, for a serialised GRAI or an SGTIN. Null for a GIAI, which has no class level.'),
-  allocatedAt: z.string().describe('When Kannabi issued the value.'),
-  allocatedForAssetId: z.string()
-    .describe('The Asset this issuance is permanently bound to. The binding survives detaching the identifier, and the value is never reissued elsewhere.'),
-  allocatedBy: attributionSchema,
-});
-
-const classKeySchema = z.object({
-  classKeyKey: z.string().describe('Kannabi\'s handle for this managed class key.'),
-  scheme: z.enum(classKeySchemes as unknown as readonly [string, ...string[]])
-    .describe('gtin for a trade item, grai for a returnable asset type.'),
-  canonical: z.string().describe('The class key in GS1 element-string form.'),
-  provenance: z.enum(['allocated', 'adopted'])
-    .describe('allocated means Kannabi produced this reference from the namespace counter. adopted means the Group asserted a key it had already allocated elsewhere so Kannabi could issue serials under it. Kannabi claims to have allocated only the first.'),
-  active: z.boolean()
-    .describe('Whether new serials may be issued under it. Configuration state only: a deactivated class key keeps every serial it already issued.'),
-  sequence: z.number().int().nullable()
-    .describe('The counter position that produced it, or null when adopted.'),
-  nextSerial: z.number().int()
-    .describe('The next serial number the counter would consider under this class key. Not a count of issuances: it also advances past excluded ranges.'),
-  excludedSerials: z.array(z.object({ from: z.number().int(), to: z.number().int() }))
-    .describe('Decimal serials Kannabi must never issue under this class key, because they were already in use elsewhere when it was brought into the namespace. Kannabi issues decimal serials; serials in another form that exist elsewhere for the same class key cannot be expressed here, and serial non-duplication for a GTIN remains the GTIN allocator\'s responsibility as a party.'),
-  assertedAt: z.string().describe('When this class key was brought into the namespace.'),
-  assertedBy: attributionSchema,
-});
-
-function describeClassKey(classKey: Gs1ClassKeyAllocation) {
-  return {
-    classKeyKey: classKey.key,
-    scheme: classKey.scheme,
-    canonical: classKey.canonical,
-    provenance: classKey.provenance,
-    active: classKey.active,
-    sequence: classKey.sequence,
-    nextSerial: classKey.serial.nextSequence,
-    excludedSerials: classKey.serial.exclusions.map((range) => ({ from: range.from, to: range.to })),
-    assertedAt: classKey.assertedAt,
-    assertedBy: classKey.assertedBy,
-  };
-}
 
 const actSchema = z.object({
   at: z.string(), by: attributionSchema, via: credentialSchema.nullable(), basis: basisSchema,
@@ -119,19 +64,20 @@ const assetRecordSchema = z.object({
     public: z.boolean(),
     reported: z.object({ at: z.string(), by: attributionSchema }),
     lastChange: actSchema.nullable().describe('The latest change only, never a history.'),
-    issued: z.array(z.object({
-      scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]),
-      value: z.string(), at: z.string(), by: attributionSchema,
-    })),
     photos: z.array(z.object({
       key: z.string(), contentType: z.string(), size: z.number(), receivedAt: z.string().nullable(),
     })),
   }),
   identifiers: z.array(identifierSchema.extend({
-    accepted: actSchema.extend({ gs1Policy: z.string() }).nullable()
+    accepted: actSchema.extend({
+      policy: z.string().describe('The version of the scheme\'s policy that accepted the value. Historical: never a claim that today\'s policy would.'),
+    }).nullable()
       .describe('Who accepted this identifier onto this Asset: an acceptance, not a verification. Null for one accepted before Kannabi kept this.'),
-    digitalLink: z.string().nullable(),
+    address: z.string().nullable()
+      .describe('A path at which Kannabi dereferences this identifier, or null when its scheme supplies none.'),
   })),
+  extensions: z.record(z.string(), z.unknown())
+    .describe('What each installed plugin states about this Asset, keyed by plugin id. Each is that plugin\'s statement, described in the connection instructions; empty when none contributes.'),
   source: z.object({
     reference: z.string(),
     says: z.object({
@@ -141,7 +87,7 @@ const assetRecordSchema = z.object({
   notRecorded: z.array(z.string()),
 });
 
-const assetSummarySchema = z.object({
+export const assetSummarySchema = z.object({
   id: z.string().describe('The native Kannabi Asset ID. Pass it to get_asset for the full record.'),
   kannabi: z.object({
     name: z.string(), owner: entitySchema.nullable(), groups: z.array(entitySchema), public: z.boolean(),
@@ -152,70 +98,8 @@ const assetSummarySchema = z.object({
   matched: z.array(z.string()).describe('Where the query text matched, as paths in the full record.'),
 });
 
-const omittedSchema = z.array(z.string())
+export const omittedSchema = z.array(z.string())
   .describe('Paths of the full record these summaries leave out. get_asset returns them.');
-
-const counterSchema = z.object({
-  nextSequence: z.number().int()
-    .describe('The next number this counter would consider. NOT a count of issuances: it also advances past excluded ranges.'),
-  excludedReferences: z.array(z.object({ from: z.number().int(), to: z.number().int() }))
-    .describe('Numbers Kannabi must never issue from this counter, because they were already in use elsewhere when the namespace was configured.'),
-});
-
-const namespaceSchema = z.object({
-  namespaceKey: z.string().describe('Pass this to list_gs1_issuances and list_managed_class_keys. Match a namespace by its gcp field when a request names a company prefix.'),
-  gcp: z.string().describe('The GS1 Company Prefix this namespace issues from.'),
-  active: z.boolean()
-    .describe('Whether new issuance is enabled. Configuration state only: a deactivated namespace keeps every value it already issued.'),
-  group: z.object({ key: z.string(), name: z.string() })
-    .describe('The one Kannabi Group that manages this prefix.'),
-  counters: z.object(Object.fromEntries(namespaceCounters.map((counter) => [counter, counterSchema])))
-    .describe('One independent counter per key type: giai for AI 8004 asset references, graiType for AI 8003 asset types, gtinItem for GTIN item references. They never share numbers, because a GTIN and a GRAI made of the same digits are different keys. Use list_gs1_issuances.matching for how many values Kannabi issued.'),
-  classKeyIssuable: z.boolean()
-    .describe('Whether this prefix leaves room for a twelve-digit class reference. False means it can still issue GIAIs but cannot allocate a GTIN or a GRAI asset type — a reduced capability, not an invalid namespace.'),
-  unissuableReason: z.string().nullable()
-    .describe('Why this namespace can issue nothing further, or null when it can. Set only for a prefix configured under an earlier, looser policy. Its already-issued values and its ledger stay valid and readable; only new issuance is refused.'),
-  gtinFormat: z.enum(['GTIN-12', 'GTIN-13'])
-    .describe('Which GTIN format this namespace\'s own allocations take, derived from the prefix. Presentation for whoever prints the symbol; the stored value is the same fourteen digits either way.'),
-  configuredAt: z.string().describe('When a Group asserted this prefix. Kannabi cannot verify GS1 licensing.'),
-});
-
-function describeNamespace(namespace: Gs1Namespace) {
-  return {
-    namespaceKey: namespace.key,
-    gcp: namespace.gcp,
-    active: namespace.active,
-    group: { key: namespace.group.key, name: namespace.group.name },
-    // The next number each counter would consider, not a count of issuances:
-    // they also advance past excluded ranges. What Kannabi actually issued is
-    // `list_gs1_issuances`, and nothing else.
-    counters: Object.fromEntries(namespaceCounters.map((counter) => [counter, {
-      nextSequence: namespace.counters[counter].nextSequence,
-      excludedReferences: namespace.counters[counter].exclusions
-        .map((range) => ({ from: range.from, to: range.to })),
-    }])),
-    classKeyIssuable: namespace.classKeyIssuable,
-    unissuableReason: namespace.unissuableReason,
-    gtinFormat: namespace.gtinFormat,
-    configuredAt: namespace.configuredAt,
-  };
-}
-
-function describeEntry(entry: Gs1LedgerEntry) {
-  const { issuance, asset } = entry;
-  return {
-    issuance,
-    assetId: issuance.allocatedForAssetId,
-    asset: asset ? assetSummary(asset) : null,
-    // An issued value stays bound to its Asset in the ledger even when the
-    // identifier has been detached, so the two facts are reported apart. The
-    // comparison is on the canonical form, which is what makes it one rule for
-    // every scheme rather than a per-scheme component match.
-    stillAttached: asset
-      ? asset.identifiers.some((identifier) => identifier.canonical === issuance.canonical)
-      : null,
-  };
-}
 
 /** A tool result carries both renderings of the same value: the structured one
  * for the client, and its JSON text for models that only read content. */
@@ -234,7 +118,7 @@ function failed(error: unknown) {
 /** Turn typed tool arguments into the query record the shared request parsers
  * accept, so the MCP surface reuses Kannabi's validation rather than restating
  * it. Absent arguments are omitted, which is what "unset" means to a parser. */
-function queryRecord(entries: Record<string, string | string[] | number | undefined>) {
+export function queryRecord(entries: Record<string, string | string[] | number | undefined>) {
   return Object.fromEntries(Object.entries(entries)
     .filter(([, value]) => value !== undefined)
     .map(([field, value]) => [field, typeof value === 'number' ? String(value) : value]));
@@ -250,7 +134,7 @@ function queryRecord(entries: Record<string, string | string[] | number | undefi
 export const serverInfo = {
   name: 'kannabi',
   title: 'Kannabi Asset registry',
-  version: '0.3.0',
+  version: '0.4.0',
 } as const;
 
 /** What a client learns before it calls anything.
@@ -267,26 +151,37 @@ const knowledgeBoundary = `Kannabi is an Asset registry and an identity mediator
 An Asset record says whose statement each value is:
 - kannabi: what Kannabi holds and did, by its own clock. kannabi.reported.at is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only Asset chronology.
 - source.says: what the pre-existing record named by source.reference states about itself, quoted exactly. Report it as that source's statement, never as a fact Kannabi holds.
+- extensions: what each installed plugin states about the Asset, keyed by plugin id. Each plugin describes its own section below; with none installed it is empty.
 - notRecorded: ${notRecorded.join(', ')}. Kannabi does not own these facts; they belong to other systems, such as an EPCIS repository for events. Say Kannabi does not record them rather than inferring them from other fields.
 A field Kannabi holds no value for is null; that is not evidence about the world. Search and lookup return summaries and name the paths they omit; get_asset returns the full record.
 
-Choosing a tool: a description such as "the inspection camera" -> search_assets; a complete GS1 identifier -> resolve_external_identifier; an Asset id -> get_asset; list_groups and list_gs1_namespaces supply the keys the others take.
+Choosing a tool: a description such as "the inspection camera" -> search_assets; an Asset id -> get_asset; a complete external identifier -> resolve_external_identifier, which exists when an identifier scheme is installed; list_groups supplies the Group keys search_assets takes.
 
-Identifiers: a class-level identifier such as a GTIN may be carried by several Assets, which is an answer rather than an ambiguity; an individual-level one resolves to at most one. Storing an identifier is not issuing it: only kannabi.issued and list_gs1_issuances show what Kannabi issued, and a managed GTIN carries no product data. A digitalLink path is one Kannabi dereferences; Kannabi is not a GS1-Conformant Resolver and emits no canonical GS1 Digital Link URI.`;
+Identifiers: an Asset may carry none, one or several, each belonging to a scheme an installed plugin supplies. A class-level identifier describes a class and may be carried by several Assets; an individual-level one identifies at most one. Kannabi core records identifiers and issues none: whether a value was issued, and by whom, is the statement of the plugin that issued it.`;
 
 /** The connection instructions for a server reading under `reach`. How far a
  * result reaches is the one part that depends on how the server was built, so
- * it comes from the audience rule rather than being written here. */
-export const instructions = (reach: string): string => `${knowledgeBoundary}\n\n${reach}`;
+ * it comes from the audience rule rather than being written here. Each
+ * installed plugin adds one paragraph stating its own knowledge boundary. */
+export const instructions = (reach: string, plugins: Plugins = noPlugins): string => [
+  knowledgeBoundary,
+  ...plugins.mcp.map((contribution) => contribution.instructions),
+  reach,
+].join('\n\n');
 
 /** Build the server around a store and a rule for whose view each request runs
  * under. The rule is a parameter rather than a mode flag read here, so the
  * tools are identical whether this process reads the whole instance or acts as
  * one User: only the audience they are handed differs. */
-export function createMcpServer(store: IdentityStore, resolveAudience: AudienceResolver): McpServer {
+export function createMcpServer(store: IdentityStore, resolveAudience: AudienceResolver,
+  plugins: Plugins = noPlugins): McpServer {
   const server = new McpServer(serverInfo, { capabilities: { tools: {} },
-    instructions: instructions(resolveAudience.reach) });
+    instructions: instructions(resolveAudience.reach, plugins) });
   const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
+  const schemeIds = store.schemes.ids;
+  // The fields a caller may supply across every installed scheme. What each
+  // means is its scheme's to say, in the owning plugin's instructions.
+  const schemeFields = store.schemes.inputFields.filter((field) => field !== 'scheme');
 
   server.registerTool('search_assets', {
     title: 'Search Assets',
@@ -301,8 +196,8 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
         .describe('Substring of kannabi.name or source.says.description. Omit to browse everything.'),
       groupKeys: z.array(z.string()).optional()
         .describe('Restrict to Assets a listed Group collaborates on. Keys come from list_groups.'),
-      schemes: z.array(z.enum(identifierSchemes as readonly [string, ...string[]])).optional()
-        .describe('Restrict to Assets carrying an identifier in one of these GS1 schemes.'),
+      schemes: z.array(z.string()).optional()
+        .describe(`Restrict to Assets carrying an identifier in one of these schemes. Installed: ${schemeIds.join(', ') || 'none'}.`),
       identified: z.enum(['any', 'none']).optional()
         .describe('"any": Assets with at least one external identifier. "none": Assets with none.'),
       reportedFrom: z.string().optional()
@@ -343,36 +238,33 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     } catch (error) { return failed(error); }
   });
 
-  server.registerTool('resolve_external_identifier', {
+  // With no scheme installed there is no external identifier to resolve, and
+  // the tool is absent rather than present and always refusing.
+  if (schemeIds.length) server.registerTool('resolve_external_identifier', {
     title: 'Resolve an external identifier',
     description: [
-      'Resolve one complete GS1 identifier to the Assets that carry it. Exact and deterministic:',
-      'the value is validated by Kannabi\'s GS1 boundary and compared against the stored canonical',
-      'form. Nothing is matched by substring or prefix.',
-      'An individual-level identifier (SGTIN, GIAI, serialised GRAI) resolves to at most one Asset.',
-      'A class-level identifier (GTIN, unserialised GRAI) describes a class and may legitimately',
-      'resolve to many, which are paged.',
+      'Resolve one complete external identifier to the Assets that carry it. Exact and deterministic:',
+      'the value is validated by its scheme and compared against the stored canonical form. Nothing is',
+      'matched by substring or prefix.',
+      'An individual-level identifier resolves to at most one Asset. A class-level identifier describes',
+      'a class and may legitimately resolve to many, which are paged.',
       'An empty result means no Asset carries the identifier — it never means the value is invalid,',
       'which is reported as an error instead.',
       'This tool takes external identities only; a native Kannabi Asset ID goes to get_asset.',
       'Returns summaries; get_asset returns the full record.',
     ].join(' '),
     inputSchema: z.object({
-      scheme: z.enum(identifierSchemes as readonly [string, ...string[]])
-        .describe('gtin and unserialised grai are class-level; sgtin, giai and serialised grai are individual.'),
-      gtin: z.string().optional().describe('For gtin and sgtin: the GTIN/JAN, up to 14 digits.'),
-      serial: z.string().optional().describe('For sgtin (required) and grai (optional).'),
-      assetType: z.string().optional()
-        .describe('For grai: the 13-digit asset type including its check digit, without the AI 8003 zero filler.'),
-      assetReference: z.string().optional()
-        .describe('For giai: the complete AI 8004 value including the company prefix.'),
+      scheme: z.enum(schemeIds as readonly [string, ...string[]])
+        .describe('The identifier scheme. Which fields each scheme takes is stated in the connection instructions.'),
+      ...Object.fromEntries(schemeFields.map((field) => [field, z.string().optional()
+        .describe(`A field of the chosen scheme, where that scheme takes one named ${field}.`)])),
       limit: z.number().int().min(1).max(100).optional().describe('Page size for a class identifier, default 30.'),
       cursor: z.string().optional().describe('nextCursor from the previous page for this same identifier.'),
     }),
     outputSchema: z.object({
       identity: z.object({
-        scheme: z.enum(identifierSchemes as readonly [string, ...string[]]),
-        canonical: z.string().describe('The GS1 element-string form the input resolved to.'),
+        scheme: z.string(),
+        canonical: z.string().describe('The canonical form the input resolved to.'),
         level: z.enum(['individual', 'class']),
         levelMeaning: z.string()
           .describe('What this level means for the result count, so several Assets read as an answer rather than an ambiguity.'),
@@ -384,7 +276,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
         .describe('Pass back as cursor for the next page of a class identity, or null when this page is the last.'),
     }),
     annotations: readOnly,
-  }, async (input, ctx) => {
+  }, async (input: Record<string, unknown>, ctx) => {
     try {
       const audience = await resolveAudience(ctx.mcpReq._meta);
       const { limit, cursor, ...identifier } = input;
@@ -410,7 +302,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     title: 'Inspect an Asset',
     description: [
       'Return the full record of one Asset by its native Kannabi Asset ID, the id every other tool',
-      'returns. The ID is not a GS1 identifier and its embedded timestamp means nothing.',
+      'returns. The ID is not an external identifier and its embedded timestamp means nothing.',
       'Returns found: false when no such Asset exists.',
     ].join(' '),
     inputSchema: z.object({
@@ -427,11 +319,12 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
       const audience = await resolveAudience(ctx.mcpReq._meta);
       if (!isAssetId(assetId)) {
         throw new ValidationError('A native Kannabi Asset ID is required: the lowercase UUIDv7 that search_assets '
-          + 'and resolve_external_identifier return as assetId. To find an Asset from a description, use search_assets; '
-          + 'from a GS1 identifier, use resolve_external_identifier.');
+          + 'and resolve_external_identifier return as id. To find an Asset from a description, use search_assets; '
+          + 'from an external identifier, use resolve_external_identifier.');
       }
       const asset = await store.getAsset(assetId, audience);
-      return result({ found: asset !== null, asset: asset ? assetRecord(asset, store.schemes) : null });
+      return result({ found: asset !== null, asset: asset
+        ? assetRecord(asset, store.schemes, await plugins.sections(asset, audience)) : null });
     } catch (error) { return failed(error); }
   });
 
@@ -456,115 +349,26 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
     } catch (error) { return failed(error); }
   });
 
-  server.registerTool('list_gs1_namespaces', {
-    title: 'List managed GS1 namespaces',
-    description: [
-      'List the GS1 Company Prefix namespaces a Kannabi Group has configured for issuing GS1 keys.',
-      'A namespace is the only place Kannabi claims allocation authority, and each belongs to one Group.',
-      'One prefix issues GIAIs directly, and issues GRAI asset types and GTINs as class keys that',
-      'serialised GRAIs and SGTINs are then issued under.',
-      'Use a namespaceKey with list_gs1_issuances to see what Kannabi actually issued from it,',
-      'and with list_managed_class_keys to see what it can issue serials under.',
-      'Kannabi cannot verify GS1 licensing: a configured prefix is an assertion by an authorized member.',
-    ].join(' '),
-    outputSchema: z.object({
-      namespaces: z.array(namespaceSchema)
-        .describe('Every managed prefix in this instance. An empty list means no Group has configured one, so Kannabi has issued nothing at all.'),
-    }),
-    annotations: readOnly,
-  }, async (ctx) => {
-    try {
-      const namespaces = await store.listGs1Namespaces(await resolveAudience(ctx.mcpReq._meta));
-      return result({ namespaces: namespaces.map(describeNamespace) });
-    } catch (error) { return failed(error); }
-  });
-
-  server.registerTool('list_managed_class_keys', {
-    title: 'List managed class keys in a namespace',
-    description: [
-      'List the class-level keys a namespace manages: the GTINs and GRAI asset types under which',
-      'Kannabi may issue SGTIN and serialised GRAI serials.',
-      'A class key is here only because a Group brought it into a prefix it manages, either by having',
-      'Kannabi allocate the reference or by asserting one it had already allocated elsewhere;',
-      'provenance says which. A GTIN merely recorded on an Asset is not a managed class key and',
-      'cannot be serialised.',
-      'These are allocation records and carry no product data: Kannabi holds no name, description or',
-      'other trade-item detail for them, and is not a product catalogue.',
-    ].join(' '),
-    inputSchema: z.object({
-      namespaceKey: z.string()
-        .describe('namespaceKey from list_gs1_namespaces. When a request names a company prefix, find the namespace whose gcp matches; the prefix itself is not a key.'),
-      scheme: z.enum(classKeySchemes as unknown as readonly [string, ...string[]]).optional()
-        .describe('Narrow to gtin or grai. Omit for both.'),
-    }),
-    outputSchema: z.object({
-      classKeys: z.array(classKeySchema)
-        .describe('Every class key this namespace manages. An empty list means Kannabi can issue GIAIs from this prefix but has no class key to issue serials under.'),
-    }),
-    annotations: readOnly,
-  }, async (input, ctx) => {
-    try {
-      const audience = await resolveAudience(ctx.mcpReq._meta);
-      const classKeys = await store.listClassKeys(audience, input.namespaceKey,
-        input.scheme as 'gtin' | 'grai' | undefined);
-      return result({ classKeys: classKeys.map(describeClassKey) });
-    } catch (error) { return failed(error); }
-  });
-
-  server.registerTool('list_gs1_issuances', {
-    title: 'List GS1 key issuances from a namespace',
-    description: [
-      'Read Kannabi\'s issuance ledger for one managed namespace: the GIAIs, serialised GRAIs and',
-      'SGTINs Kannabi itself allocated, each permanently bound to the Asset it was issued for.',
-      'This is the only evidence of Kannabi allocation provenance. An Asset whose stored identifier',
-      'merely begins with the same company prefix was not allocated by Kannabi and does not appear',
-      'here: storing an identifier is not issuing it.',
-      'stillAttached reports whether the issued value is still attached to that Asset; a detached',
-      'issuance stays in the ledger and its value is never reissued.',
-      'Ordered by canonical form, because a sequence is unique only within the counter that produced',
-      'it and an Asset\'s issuances can come from several.',
-    ].join(' '),
-    inputSchema: z.object({
-      namespaceKey: z.string()
-        .describe('namespaceKey from list_gs1_namespaces. When a request names a company prefix, find the namespace whose gcp matches and use its namespaceKey; the prefix itself is not a key.'),
-      scheme: z.enum(issuanceSchemes as unknown as readonly [string, ...string[]]).optional()
-        .describe('Narrow to one issued scheme: giai, grai or sgtin. Omit for all three.'),
-      limit: z.number().int().min(1).max(100).optional().describe('Page size, default 30.'),
-      cursor: z.string().optional()
-        .describe('nextCursor from the previous page for this same namespace and scheme filter. A cursor does not carry across a change of filter.'),
-    }),
-    outputSchema: z.object({
-      namespace: namespaceSchema.describe('The namespace these issuances came from.'),
-      omitted: omittedSchema,
-      entries: z.array(z.object({
-        issuance: issuanceSchema,
-        assetId: z.string().describe('The Asset this value was issued for. Pass it to get_asset.'),
-        asset: assetSummarySchema.nullable().describe('The Asset itself, when this server can read it.'),
-        stillAttached: z.boolean().nullable()
-          .describe('Whether the issued value is still attached to that Asset. False means it was detached: the issuance stands and the value is never reissued.'),
-      })).describe('One page of issuances. The ledger is the only record of what Kannabi allocated from this namespace; matching gives its full size, and nextCursor the rest.'),
-      matching: z.number().int()
-        .describe('How many values Kannabi issued from this namespace under the current scheme filter. Zero means it has issued none.'),
-      nextCursor: z.string().nullable()
-        .describe('Pass back as cursor for the next page, or null when this page is the last.'),
-    }),
-    annotations: readOnly,
-  }, async (input, ctx) => {
-    try {
-      const audience = await resolveAudience(ctx.mcpReq._meta);
-      const page = await store.gs1Issuances(audience, gs1LedgerQuery(queryRecord({
-        namespaceKey: input.namespaceKey, scheme: input.scheme,
-        limit: input.limit, cursor: input.cursor,
-      })));
-      return result({
-        namespace: describeNamespace(page.namespace),
-        omitted: summaryOmits,
-        entries: page.entries.map(describeEntry),
-        matching: page.matching,
-        nextCursor: page.nextCursor,
+  // Each installed plugin's tools. The handler is given the audience this
+  // server resolved, never the request, and its result and refusals are
+  // rendered exactly as core's own are.
+  const pluginTools: McpTool[] = plugins.mcp.flatMap((contribution) => [...contribution.tools]);
+  for (const tool of pluginTools) {
+    const config = { title: tool.title, description: tool.description,
+      outputSchema: tool.outputSchema as z.ZodObject, annotations: readOnly };
+    if (tool.inputSchema === undefined) {
+      server.registerTool(tool.name, config, async (ctx) => {
+        try { return result(await tool.handler({}, await resolveAudience(ctx.mcpReq._meta)) as Record<string, unknown>); }
+        catch (error) { return failed(error); }
       });
-    } catch (error) { return failed(error); }
-  });
+    } else {
+      server.registerTool(tool.name, { ...config, inputSchema: tool.inputSchema as z.ZodObject },
+        async (input: Record<string, unknown>, ctx) => {
+          try { return result(await tool.handler(input, await resolveAudience(ctx.mcpReq._meta)) as Record<string, unknown>); }
+          catch (error) { return failed(error); }
+        });
+    }
+  }
 
   return server;
 }

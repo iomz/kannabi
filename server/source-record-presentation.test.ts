@@ -1,4 +1,7 @@
 import './dom.js';
+
+/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
+const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -35,9 +38,9 @@ function loaderData(overrides: Record<string, unknown> = {}) {
     },
     canEdit: false, canViewReporterProfile: false, authenticated: true,
     settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
-    digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
+    plugins: { gs1: gs1Data }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
     surfacedUri: `http://127.0.0.1/asset/${id}`,
-    namespaces: [], classKeys: [], controlled: [], canGrant: false,
+    controlled: [], canGrant: false,
   };
 }
 

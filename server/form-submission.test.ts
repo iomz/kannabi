@@ -1,18 +1,23 @@
 import './dom.js';
+
+/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
+const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement, type FormEvent } from 'react';
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router';
 import Groups, { clientAction as groupAction } from '../web/routes/groups.js';
-import GroupPrefixes, { clientAction as prefixesAction } from '../web/routes/group-prefixes.js';
+import GroupPrefixes, { clientAction as prefixesAction } from '../plugins/gs1/web/group-prefixes.js';
 import AssetPage, { clientAction as assetAction } from '../web/routes/asset.js';
 import { mount, settle } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
 import { Button } from '../web/components/ui/button.js';
-import { IdentifierForm, IssueIdentifier } from '../web/asset-identifiers.js';
+import { IdentifierForm } from '../web/asset-identifiers.js';
+import { IssueIdentifier } from '../plugins/gs1/web/asset-page.js';
 import { InventoryControls, noFilters } from '../web/inventory-controls.js';
 import { assetPageRequest } from './asset-page.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 const group = { key: 'workshop', name: 'Workshop' };
 const counter = { nextSequence: 1, exclusions: [] };
@@ -45,10 +50,10 @@ test('every existing GS1 prefix form submits its intended API mutation on click'
   const view = mount(createElement(RouterProvider, { router }));
   try {
     for (const [label, fields, path, method, body] of [
-      ['Configure prefix', { gcp: '1234567', giaiExclusions: '1-3' }, '/api/groups/workshop/gs1-namespaces', 'POST',
+      ['Configure prefix', { gcp: '1234567', giaiExclusions: '1-3' }, '/api/gs1/groups/workshop/namespaces', 'POST',
         { gcp: '1234567', giaiExclusions: [{ from: 1, to: 3 }] }],
-      ['Deactivate', {}, '/api/gs1-namespaces/active', 'PATCH', { active: false }],
-      ['Reactivate', {}, '/api/gs1-namespaces/inactive', 'PATCH', { active: true }],
+      ['Deactivate', {}, '/api/gs1/namespaces/active', 'PATCH', { active: false }],
+      ['Reactivate', {}, '/api/gs1/namespaces/inactive', 'PATCH', { active: true }],
     ] as const) {
       const button = view.button(label);
       assert.ok(button, label);
@@ -148,7 +153,7 @@ test('Asset name and visibility submit independently through their own fetchers'
         identifiers: [], photos: [], issuances: [] },
       settings: { displayTimezone: 'UTC' }, canEdit: true, authenticated: true, canViewReporterProfile: false,
       nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
-      digitalLinks: {}, namespaces: [{ key: 'eligible', gcp: '0614141' }], classKeys: [], controlled: [], canGrant: false,
+      plugins: { gs1: { ...gs1Data, namespaces: [{ key: 'eligible', gcp: '0614141' }] } }, digitalLinks: {}, controlled: [], canGrant: false,
     } } as never), action: (args) => assetAction(args as never),
   }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
@@ -173,7 +178,7 @@ test('Asset name and visibility submit independently through their own fetchers'
     await settle();
     assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}`, method: 'PATCH', body: { isPublic: true } });
     await settle(() => view.button('Issue GIAI')!.click());
-    assert.deepEqual(calls.at(-1), { path: `/api/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
+    assert.deepEqual(calls.at(-1), { path: `/api/gs1/assets/${id}/giai`, method: 'POST', body: { namespaceKey: 'eligible' } });
     // Issuing and recording are two tabs, not two forms standing open, so the
     // recording form exists only once somebody has selected it.
     assert.ok(view.field('input[name="gtin"]') === null, 'recording is not offered until chosen');
@@ -209,7 +214,7 @@ test('enabling Kannabi ID presentation shows UUID while retaining the Asset URI'
     settings: { displayTimezone: 'UTC', showAssetId: true, showIdentifierPolicyVersion: false },
     canEdit: false, authenticated: true, canViewReporterProfile: false,
     nativeUri: `https://kannabi.test/asset/${id}`, surfacedUri: `https://kannabi.test/asset/${id}`,
-    digitalLinks: {}, namespaces: [], classKeys: [], controlled: [], canGrant: false,
+    plugins: { gs1: gs1Data }, digitalLinks: {}, controlled: [], canGrant: false,
   } } as never) }], { initialEntries: [`/assets/${id}`] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
@@ -274,7 +279,7 @@ test('allocating and adopting a class key stay separate assertions in the UI', a
     // Allocating asks Kannabi to produce a reference: it sends no value.
     await settle(() => allocate!.click());
     await settle();
-    assert.deepEqual(calls.at(-1), { path: '/api/gs1-namespaces/active/class-keys', method: 'POST',
+    assert.deepEqual(calls.at(-1), { path: '/api/gs1/namespaces/active/class-keys', method: 'POST',
       body: { scheme: 'gtin', serialExclusions: [] } });
 
     // Adopting asserts a key this Group already allocated: it sends the value,
@@ -283,7 +288,7 @@ test('allocating and adopting a class key stay separate assertions in the UI', a
     value.value = '0614141000012';
     await settle(() => adopt!.click());
     await settle();
-    assert.deepEqual(calls.at(-1), { path: '/api/gs1-namespaces/active/class-keys', method: 'POST',
+    assert.deepEqual(calls.at(-1), { path: '/api/gs1/namespaces/active/class-keys', method: 'POST',
       body: { scheme: 'gtin', gtin: '0614141000012', serialExclusions: [] } });
 
     // Adoption without a value never reaches the API. The browser's own

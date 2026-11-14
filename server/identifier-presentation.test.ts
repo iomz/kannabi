@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { IdentifierList } from '../web/asset-identifiers.js';
+import { issuedStanding } from '../plugins/gs1/web/asset-page.js';
 import { mount } from './dom-render.js';
-import { canonicalIdentifier } from './gs1.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 
 const recorded = canonicalIdentifier({ scheme: 'giai', assetReference: '024' });
 const issued = canonicalIdentifier({ scheme: 'giai', assetReference: '061414112' });
@@ -12,10 +13,10 @@ const issued = canonicalIdentifier({ scheme: 'giai', assetReference: '061414112'
 test('identifier cards show issuance provenance only for ledger-matched GIAI and hide policy stamp by default', () => {
   const view = mount(createElement(IdentifierList, { identifiers: [
     { ...recorded, key: 'recorded', attachment: null }, { ...issued, key: 'issued', attachment: null },
-  ], issuances: [{ key: 'issuance', scheme: 'giai', canonical: issued.canonical, gcp: '0614141',
+  ], standing: (identifier) => issuedStanding([{ key: 'issuance', scheme: 'giai', canonical: issued.canonical, gcp: '0614141',
     sequence: 12, classKeyCanonical: null,
     allocatedAt: '2026-01-01T00:00:00Z', allocatedForAssetId: 'asset-id',
-    allocatedBy: { key: 'user', name: 'User', status: 'active' } }],
+    allocatedBy: { key: 'user', name: 'User', status: 'active' } }], identifier),
   digitalLinks: {}, showPolicyVersion: false, canEdit: false, busy: false, onDetach: () => {} }));
   try {
     const cards = [...document.querySelectorAll('li')];
@@ -28,7 +29,7 @@ test('identifier cards show issuance provenance only for ledger-matched GIAI and
 
 test('policy provenance appears only when instance presentation setting enables it', () => {
   const view = mount(createElement(IdentifierList, { identifiers: [{ ...recorded, key: 'recorded', attachment: null }],
-    issuances: [], digitalLinks: {}, showPolicyVersion: true, canEdit: false, busy: false, onDetach: () => {} }));
+    standing: () => null, digitalLinks: {}, showPolicyVersion: true, canEdit: false, busy: false, onDetach: () => {} }));
   try {
     assert.match(view.text(), /Recorded existing/);
     assert.ok(view.text().includes('GS1 policy ' + recorded.policyVersion));
@@ -40,7 +41,7 @@ test('a Digital Link appears only on identifiers Kannabi also dereferences', () 
   const sgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '0614141123452', serial: 'aB/c%D' });
   const view = mount(createElement(IdentifierList, { identifiers: [
     { ...gtin, key: 'class', attachment: null }, { ...sgtin, key: 'individual', attachment: null },
-  ], issuances: [],
+  ], standing: () => null,
   // The class-level GTIN deliberately has none: its URI is constructible and
   // Kannabi answers it with 404, so offering the link would be a dead end.
   digitalLinks: { individual: 'https://kannabi.example/01/00614141123452/21/aB%2Fc%25D' },
@@ -71,7 +72,7 @@ test('each identifier says who accepted it and on what basis, and claims nothing
   };
   const view = mount(createElement(IdentifierList, { identifiers: [
     { ...recorded, key: 'recorded', attachment }, { ...issued, key: 'issued', attachment: null },
-  ], issuances: [], digitalLinks: {}, showPolicyVersion: false, canEdit: false, busy: false,
+  ], standing: () => null, digitalLinks: {}, showPolicyVersion: false, canEdit: false, busy: false,
   displayTimezone: 'UTC', onDetach: () => {} }));
   try {
     const cards = [...document.querySelectorAll('li')];

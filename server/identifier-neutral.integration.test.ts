@@ -4,7 +4,7 @@ import neo4j from 'neo4j-driver';
 import { assetLookupQuery } from './asset-lookup.js';
 import { assetPageRequest } from './asset-page.js';
 import { assetRecord } from './asset-representation.js';
-import { gs1Rule, gs1Schemes } from './gs1-schemes.js';
+import { gs1Rule, gs1Schemes } from '../plugins/gs1/adapter/schemes.js';
 import { ValidationError } from './identity.js';
 import { DuplicateIdentityError, IdentityStore } from './identity-store.js';
 import { identifierSchemes, type Identifier, type IdentifierScheme } from './identifier.js';
@@ -34,7 +34,7 @@ test('Kannabi with no identifier scheme installed registers and finds Assets',
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
     const none = identifierSchemes([]);
-    const store = await IdentityStore.open(driver, none);
+    const store = await IdentityStore.open(driver, { schemes: none });
     const alex = await store.createUser('Alex');
     const group = await store.createReportingGroup('Workshop', alex.key);
     const context = { actorKey: alex.key, groupKey: group.key };
@@ -64,7 +64,7 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
     const schemes = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, { schemes: schemes });
     const alex = await store.createUser('Alex');
     const group = await store.createReportingGroup('Stores', alex.key);
     const context = { actorKey: alex.key, groupKey: group.key };
@@ -83,7 +83,7 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
 
     // The record gives it no address, because its scheme supplies none.
     const record = assetRecord(stored, schemes);
-    assert.deepEqual(record.identifiers.map((identifier) => [identifier.scheme, identifier.digitalLink]),
+    assert.deepEqual(record.identifiers.map((identifier) => [identifier.scheme, identifier.address]),
       [['gtin', null], ['tag', null]]);
 
     // Found by exact identity and by the scheme filter.
@@ -125,7 +125,7 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
     });
     const colliding = identifierSchemes([...gs1Schemes, tag, verbatim('alias', 'individual'), verbatim('kind', 'class')],
       [gs1Rule]);
-    const crowded = await IdentityStore.open(driver, colliding);
+    const crowded = await IdentityStore.open(driver, { schemes: colliding });
     // A lookup under one scheme never answers with another scheme's Asset.
     const other = await crowded.lookupAssets(alex.key, assetLookupQuery({ scheme: 'alias', text: 'tag:T-7' }, colliding));
     assert.deepEqual(other.assets, []);
@@ -150,7 +150,7 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
     assert.deepEqual(shared.assets.map((asset) => asset.id).sort(), [chisel.id, drill.id].sort());
 
     // Reopening reads every stored identifier back through its own scheme.
-    const reopened = await IdentityStore.open(driver, schemes);
+    const reopened = await IdentityStore.open(driver, { schemes: schemes });
     assert.deepEqual((await reopened.getAsset(drill.id, alex.key))!.identifiers.map((identifier) => identifier.canonical),
       ['(01)04901234567894', 'tag:T-7']);
   });

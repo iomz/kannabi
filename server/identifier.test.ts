@@ -5,7 +5,7 @@ import { assetFilters } from './asset-page.js';
 import { assetRecord } from './asset-representation.js';
 import type { Auth } from './auth.js';
 import { createInventoryApi } from './inventory-api.js';
-import { gs1Rule, gs1Schemes } from './gs1-schemes.js';
+import { gs1Rule, gs1Schemes } from '../plugins/gs1/adapter/schemes.js';
 import { ValidationError } from './identity.js';
 import type { Asset, IdentityStore } from './identity-store.js';
 import {
@@ -77,23 +77,23 @@ test('a scheme is known to core only by what it supplies', () => {
 test('core refuses only an exact repeat; every other rule belongs to its owner', () => {
   const calls: string[] = [];
   const rule: IdentifierRule = {
-    assertSet: (identifiers, settings) => { calls.push(`set:${identifiers.length}:${settings === null ? 'unread' : 'read'}`); },
-    assertAddition: (existing, addition, settings) => {
-      calls.push(`add:${existing.length}:${addition.canonical}:${settings === null ? 'unread' : 'read'}`);
-      if (settings?.frozen === true) throw new ValidationError('Identifiers are frozen');
+    assertSet: (identifiers) => { calls.push(`set:${identifiers.length}`); },
+    assertAddition: (existing, addition) => {
+      calls.push(`add:${existing.length}:${addition.canonical}`);
+      if (addition.canonical === 'tag:T-999') throw new ValidationError('Identifiers are frozen');
     },
   };
   const schemes = identifierSchemes([tag], [rule]);
   const [one, two] = schemes.acceptAll([{ scheme: 'tag', code: 'T-1' }, { scheme: 'tag', code: 'T-2' }]);
-  // Before the write's transaction opens, no setting has been read.
-  assert.deepEqual(calls, ['set:2:unread']);
-  schemes.assertSet([one, two], { frozen: false });
-  schemes.assertAddition([one], two, { frozen: false });
-  assert.deepEqual(calls.slice(1), ['set:2:read', 'add:1:tag:T-2:read']);
-  assert.throws(() => schemes.assertAddition([one], two, { frozen: true }), /Identifiers are frozen/);
+  assert.deepEqual(calls, ['set:2']);
+  schemes.assertSet([one, two]);
+  schemes.assertAddition([one], two);
+  assert.deepEqual(calls.slice(1), ['set:2', 'add:1:tag:T-2']);
+  const frozen = schemes.accept({ scheme: 'tag', code: 'T-999' });
+  assert.throws(() => schemes.assertAddition([one], frozen), /Identifiers are frozen/);
   assert.throws(() => schemes.acceptAll([{ scheme: 'tag', code: 'T-1' }, { scheme: 'tag', code: 'T-1' }]),
     /An Asset cannot carry the same identifier twice/);
-  assert.throws(() => schemes.assertAddition([one], one, null), /An Asset cannot carry the same identifier twice/);
+  assert.throws(() => schemes.assertAddition([one], one), /An Asset cannot carry the same identifier twice/);
   assert.throws(() => schemes.acceptAll('T-1'), /Identifiers must be a list/);
 });
 
@@ -103,18 +103,19 @@ test('GS1 rules judge GS1 identifiers and no others', () => {
   assert.deepEqual(schemes.inputFields, ['scheme', 'gtin', 'serial', 'assetType', 'assetReference', 'code']);
   const product = schemes.accept({ scheme: 'gtin', gtin: '04901234567894' });
   const shelf = schemes.accept({ scheme: 'tag', code: 'T-7' });
-  const enforcing = { enforceGtinConsistency: true };
   // The tag's component is named `gtin` and holds a different value. It is not
-  // a trade item, so it conflicts with nothing.
-  schemes.assertSet([product, shelf], enforcing);
-  schemes.assertAddition([product], shelf, enforcing);
-  schemes.assertAddition([shelf], product, enforcing);
-  // The GS1 rule itself is unchanged.
-  const other = schemes.accept({ scheme: 'sgtin', gtin: '04912345678904', serial: 'A1' });
-  assert.throws(() => schemes.assertSet([product, other], enforcing), /conflicting GTINs/);
-  assert.throws(() => schemes.assertAddition([product, shelf], other, enforcing), /conflicting GTINs/);
-  schemes.assertSet([product, other], { enforceGtinConsistency: false });
+  // a trade item, so it conflicts with nothing, in the rule or in the
+  // plugin's part of the write, which is where GTIN consistency is enforced.
+  schemes.assertSet([product, shelf]);
+  schemes.assertAddition([product], shelf);
+  schemes.assertAddition([shelf], product);
+  // The GS1 rule that needs no setting is unchanged: one asset-type series.
+  const crate = schemes.accept({ scheme: 'grai', assetType: '0614141234561' });
+  const pallet = schemes.accept({ scheme: 'grai', assetType: '0614141234578' });
+  assert.throws(() => schemes.assertSet([crate, pallet, shelf]), /conflicting GRAI asset types/);
+  assert.throws(() => schemes.assertAddition([crate, shelf], pallet), /conflicting GRAI asset types/);
   // GS1 supplies an address for an individual identity and none for a class.
+  const other = schemes.accept({ scheme: 'sgtin', gtin: '04912345678904', serial: 'A1' });
   assert.equal(schemes.address(product), null);
   assert.equal(schemes.address(other), '/01/04912345678904/21/A1');
   assert.equal(schemes.address(shelf), null);
@@ -158,7 +159,10 @@ test('an Asset carrying an identifier with no address is still served', async ()
   const response = await createInventoryApi(store, anonymous, origin).request(`${origin}/assets/${rig.id}`);
   assert.equal(response.status, 200, await response.clone().text());
   const body = await response.json();
-  assert.deepEqual(body.digitalLinks, [{ identifierKey: 'i1', canonical: '(01)04912345678904(21)A1',
+  assert.deepEqual(body.addresses, [{ identifierKey: 'i1', canonical: '(01)04912345678904(21)A1',
     uri: origin + '/01/04912345678904/21/A1' }]);
-  assert.equal(body.surfacedUri, origin + '/01/04912345678904/21/A1');
+  // Which address is surfaced is an installed plugin's presentation choice;
+  // with none installed it is the native Asset URI.
+  assert.equal(body.surfacedUri, origin + '/asset/' + rig.id);
+  assert.deepEqual(body.extensions, {});
 });

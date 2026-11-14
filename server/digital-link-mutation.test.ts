@@ -1,11 +1,14 @@
 import './dom.js';
+
+/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
+const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import DigitalLinkPage, { clientAction } from '../web/routes/digital-link.js';
-import { canonicalIdentifier } from './gs1.js';
-import { digitalLinkPath } from './gs1-digital-link.js';
+import DigitalLinkPage, { clientAction } from '../plugins/gs1/web/digital-link.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
+import { digitalLinkPath } from '../plugins/gs1/toolkit/digital-link.js';
 import { newAssetId } from './asset-id.js';
 import { mount, settle } from './dom-render.js';
 
@@ -39,10 +42,10 @@ const asset = {
 const loaderData = {
   asset, canEdit: true, canViewReporterProfile: false, authenticated: true,
   settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
-  digitalLinks: { i1: 'http://127.0.0.1:3000' + digitalLink },
+  plugins: { gs1: gs1Data }, digitalLinks: { i1: 'http://127.0.0.1:3000' + digitalLink },
   nativeUri: `http://127.0.0.1:3000/asset/${id}`,
   surfacedUri: 'http://127.0.0.1:3000' + digitalLink,
-  namespaces: [], classKeys: [], controlled: [], canGrant: false,
+  controlled: [], canGrant: false,
 };
 
 /** Answers the API the way the running instance does, and records the calls.

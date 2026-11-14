@@ -1,6 +1,6 @@
 {
   "name": "kannabi",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,7 +16,7 @@
     "typecheck": "react-router typegen && tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "build": "react-router build && tsc -p tsconfig.server.json",
     "start": "node --env-file-if-exists=.env dist/server/index.js",
-    "test": "node --import tsx --test server/*.test.ts",
+    "test": "node --import tsx --test server/*.test.ts 'plugins/**/*.test.ts'",
     "test:integration": "node scripts/test-identity.mjs",
     "admin:grant": "node --import tsx --env-file-if-exists=.env server/grant-admin.ts",
     "identity:link": "node --import tsx --env-file-if-exists=.env server/link-identity.ts",

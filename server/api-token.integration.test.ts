@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
+import { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
@@ -8,7 +10,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -22,12 +24,14 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('API token authentication, authority and provenance', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
+  const plugins = connectPlugins(composition, store);
+  const gs1 = new Gs1Store(store);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
   const tokens = new ApiTokenService(auth, store);
-  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined, tokens));
+  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined, tokens, plugins));
   const userPassword = 'A-test-password-' + randomUUID();
 
   async function query(cypher: string, params = {}) {
@@ -434,17 +438,17 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
   });
 
   await t.test('allocation authority stays independent of the asserting credential', async () => {
-    const namespace = await store.configureGs1Namespace(people.owner.key, ownerGroup, { gcp: '0991122' });
+    const namespace = await gs1.configureGs1Namespace(people.owner.key, ownerGroup, { gcp: '0991122' });
     const call = bearer(adminSecret);
-    const allocated = await call(`/assets/${ownedAsset}/giai`, 'POST', { namespaceKey: namespace.key },
+    const allocated = await call(`/gs1/assets/${ownedAsset}/giai`, 'POST', { namespaceKey: namespace.key },
       { 'X-Kannabi-Basis': 'depot:assets:900' });
     assert.equal(allocated.status, 200);
-    const { asset } = await allocated.json();
+    const { asset, issuances } = await allocated.json();
     // The ledger records the authorizing User, never the credential, and the
     // credential appears only where it belongs.
-    assert.equal(asset.issuances.length, 1);
-    assert.equal(asset.issuances[0].scheme, 'giai');
-    assert.deepEqual(asset.issuances[0].allocatedBy, attribution(people.owner, 'active'));
+    assert.equal(issuances.length, 1);
+    assert.equal(issuances[0].scheme, 'giai');
+    assert.deepEqual(issuances[0].allocatedBy, attribution(people.owner, 'active'));
     assert.equal(asset.provenance.assertedBy.label, 'Admin automation');
     assert.equal(asset.provenance.basis, 'depot:assets:900');
   });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
@@ -8,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import type { Mailer, MailMessage } from './mail.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -36,12 +37,13 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const mailer = new CaptureMailer();
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID(), mailer);
-    const app = new Hono().route('/api', createInventoryApi(store, auth, origin));
+    const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined, undefined, plugins));
     function client(peer: number) {
       let cookie = '';
       return async (path: string, method = 'GET', body?: unknown) => {
@@ -66,7 +68,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
     const setup = driver.session();
     await setup.run("MATCH (u:User {key: $key}) SET u.isAdmin = true REMOVE u.role", { key: keys[0] });
     await setup.close();
-    await IdentityStore.open(driver, schemes);
+    await IdentityStore.open(driver, composition);
     const migrated = driver.session();
     const migration = await migrated.run(`MATCH (u:User {key: $key})
       RETURN u.role AS role, u.isAdmin IS NULL AS legacyRemoved`, { key: keys[0] });

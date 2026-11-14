@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import { Gs1Store } from '../../plugins/gs1/adapter/store.js';
 import neo4j from 'neo4j-driver';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand, GetBucketVersioningCommand } from '@aws-sdk/client-s3';
 import { IdentityStore } from '../../server/identity-store.js';
-import { schemes } from '../../server/composition.js';
+import { composition } from '../../server/composition.js';
 import { emptyAssetFilters } from '../../server/asset-page.js';
 import { createAuth } from '../../server/auth.js';
 import { S3Storage } from '../../server/storage.js';
@@ -57,7 +58,8 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
       if ((await objects()).length) throw new Error('Media bucket is not empty; keep the application stopped and retry reset');
       await session.executeWrite((tx) => tx.run('MATCH (n) DETACH DELETE n'));
     }
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const gs1 = new Gs1Store(store);
     const auth = await createAuth(driver, config.app.origin, env.BETTER_AUTH_SECRET!);
     const users: string[] = [];
     for (const account of demoAccounts) {
@@ -88,10 +90,10 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     const owners = [];
     for (const name of demoOwners) owners.push(await store.createOwner(name));
     for (const namespace of demoNamespaces) {
-      await store.configureGs1Namespace(users[[0, 1, 0, 2][namespace.group]], groups[namespace.group].key,
+      await gs1.configureGs1Namespace(users[[0, 1, 0, 2][namespace.group]], groups[namespace.group].key,
         { gcp: namespace.gcp, giaiExclusions: namespace.exclusions });
     }
-    const namespaces = await store.listGs1Namespaces(users[0]);
+    const namespaces = await gs1.listGs1Namespaces(users[0]);
     const allocateFrom = namespaces.find((namespace) => namespace.gcp === demoNamespaces[0].gcp)!;
     const media = new MediaService(store, storage);
     const reportedIds: string[] = [];
@@ -123,7 +125,7 @@ export async function runDemo(mode: DemoMode, args: string[], env: NodeJS.Proces
     }
     // Allocation order is fixed, so the issued references are deterministic.
     for (const index of demoAllocations) {
-      await store.issueKey(reportedIds[index], users[demoAssets()[index].reporter], 'giai', { namespaceKey: allocateFrom.key });
+      await gs1.issueKey(reportedIds[index], users[demoAssets()[index].reporter], 'giai', { namespaceKey: allocateFrom.key });
     }
     const page = await store.findAssets(users[0], { q: '', scope: 'all', sort: 'name', dir: 'asc', filters: emptyAssetFilters, limit: 1, after: null });
     for (const scope of ['all', 'mine', 'group', 'public'] as const) {

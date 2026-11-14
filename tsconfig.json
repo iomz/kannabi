@@ -1,5 +1,5 @@
 {
-  "include": ["web/**/*", "server/**/*", ".react-router/types/**/*", "*.ts", "scripts/demo/**/*.ts"],
+  "include": ["web/**/*", "server/**/*", "plugins/**/*", ".react-router/types/**/*", "*.ts", "scripts/demo/**/*.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["DOM", "DOM.Iterable", "ES2022"],

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { CopyField } from './copy-field';
 import { HelpTip, SubHeading } from './ui';
 
@@ -22,8 +23,10 @@ export function copyAssetUri(uri: string, clipboard: ClipboardWriter): Promise<v
  * Neither is described as canonical. The Digital Link standard reserves that
  * word for the `id.gs1.org` form, which Kannabi does not emit.
  */
-export function AssetUri({ surfacedUri, nativeUri, showNativeUri }: {
+export function AssetUri({ surfacedUri, nativeUri, showNativeUri, label }: {
   surfacedUri: string; nativeUri: string; showNativeUri: boolean;
+  /** What the surfaced address is called, from the plugin that surfaces it. */
+  label: Readonly<{ name: string; help: ReactNode }> | null;
 }) {
   if (surfacedUri === nativeUri) {
     return showNativeUri
@@ -40,13 +43,13 @@ export function AssetUri({ surfacedUri, nativeUri, showNativeUri }: {
   // The standing explanation moved behind the heading's own help: what a
   // reader wants here is the address, and what Kannabi does and does not claim
   // about it is worth reading once rather than every visit.
+  const name = label?.name ?? 'Surfaced address';
   return <div className="grid gap-3">
-    <SubHeading className="mb-0">GS1 Digital Link
-      <HelpTip label="About GS1 Digital Link">Kannabi resolves this URI to this Asset.
-        Canonical GS1 Digital Link URIs use the <code>id.gs1.org</code> domain.</HelpTip>
+    <SubHeading className="mb-0">{name}
+      {label && <HelpTip label={'About ' + name}>{label.help}</HelpTip>}
     </SubHeading>
-    <CopyField id="asset-uri" value={surfacedUri} hiddenLabel="GS1 Digital Link URI"
-      copyLabel="Copy GS1 Digital Link URI" copiedLabel="GS1 Digital Link URI copied" />
+    <CopyField id="asset-uri" value={surfacedUri} hiddenLabel={name + ' URI'}
+      copyLabel={'Copy ' + name + ' URI'} copiedLabel={name + ' URI copied'} />
     {showNativeUri && <>
       <SubHeading className="mt-3 mb-0">Kannabi Asset URI
         <HelpTip label="About the Kannabi Asset URI">Kannabi’s stable address for this Asset.
