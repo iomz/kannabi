@@ -4,7 +4,6 @@ import { displayInstant } from '../server/settings.js';
 import { api, unwrap } from './api';
 import { assetPath, assetPhotoPath } from '../shared/asset-uri';
 import { assetId } from '../server/asset-id.js';
-import { digitalLinkPath } from '../server/gs1-digital-link.js';
 import { surfacedAssetPath, surfacedTransition, type SurfaceableIdentifier } from '../server/surfaced-uri.js';
 import { ReporterAttribution } from './reporter-attribution';
 import { publicShellHandle } from './anonymous-shell';
@@ -50,9 +49,13 @@ export async function loadAsset(id: string, request: Request) {
   // A Digital Link URI is shown only where Kannabi also answers it, so a
   // class-level identifier gets none: `/01/{gtin}` is constructible and valid,
   // and Kannabi does not dereference it (#50).
-  const digitalLinks = Object.fromEntries(result.asset.identifiers
-    .filter((identifier) => identifier.level === 'individual')
-    .map((identifier) => [identifier.key, absolute(digitalLinkPath(identifier))]));
+  // The server decides which identifiers have one and what its path is, by
+  // asking each identifier's own scheme. This only restates that path on the
+  // origin the page was reached at, and builds no address itself.
+  const digitalLinks = Object.fromEntries(result.digitalLinks.map((link) => {
+    const served = new URL(link.uri);
+    return [link.identifierKey, absolute(served.pathname + served.search)];
+  }));
   // Only namespaces this Asset's Groups manage, only active ones, and only
   // those whose managing Group this reader is a Group Manager of. Issuing is
   // authority over what a Group manages, so membership alone does not carry

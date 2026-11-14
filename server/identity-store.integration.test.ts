@@ -7,6 +7,7 @@ import { gs1Policy } from './gs1.js';
 import { emptyAssetFilters } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { isAssetId, newAssetId } from './asset-id.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -28,7 +29,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await seed.run(`CREATE (:Asset {name: 'Legacy grai'})-[:IDENTIFIED_BY]->
         (:Identifier {scheme: 'grai', value: '00614141234561LEGACY-2', serial: ''})`);
   } finally { await seed.close(); }
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   const legacyIds = async (): Promise<Record<string, unknown>> => {
     const session = driver.session();
     try {
@@ -69,11 +70,11 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
       }
     } finally { await session.close(); }
     // Reopening must never replace an already assigned native identity.
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
     assert.deepEqual(await legacyIds(), assigned);
   });
 
-  const otherStore = await IdentityStore.open(driver);
+  const otherStore = await IdentityStore.open(driver, schemes);
 
   await t.test('pre-Phase-2 identifiers migrate into the external identifier model', async () => {
     const migrated = await query(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:IndividualIdentifier)
@@ -96,7 +97,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     assert.equal((await query('MATCH (c:ClassIdentifier) RETURN count(c) AS n')).records[0].get('n').toNumber(), 0);
     assert.equal((await query("SHOW CONSTRAINTS YIELD name WHERE name = 'identifier_claim' RETURN name")).records.length, 0);
     // Reopening is idempotent: attachment keys and values are untouched.
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
     const again = await query(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:IndividualIdentifier)
       WHERE a.name STARTS WITH 'Legacy ' RETURN i.key AS key ORDER BY a.name`);
     assert.deepEqual(again.records.map((r) => r.get('key')), rows.map((row) => row.key));
@@ -115,14 +116,14 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     ]) {
       await query(`CREATE (:Asset {name: 'Corrupt legacy', id: $id})-[:IDENTIFIED_BY]->(:Identifier $legacy)`,
         { id: newAssetId(), legacy });
-      await assert.rejects(IdentityStore.open(driver), (error: Error) =>
+      await assert.rejects(IdentityStore.open(driver, schemes), (error: Error) =>
         /cannot be migrated|not a zero-filled|GTIN|check digit|Serial|GRAI/.test(error.message), JSON.stringify(legacy));
       // Nothing was repaired or discarded on the way out.
       const survived = await query('MATCH (i:Identifier) RETURN i.scheme AS scheme, i.value AS value, i.serial AS serial');
       assert.deepEqual(survived.records.map((r) => r.toObject()), [legacy]);
       await query("MATCH (a:Asset {name: 'Corrupt legacy'})-[:IDENTIFIED_BY]->(i:Identifier) DETACH DELETE a, i");
     }
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
   });
 
   await t.test('concurrent startup never replaces or double-assigns a native Asset ID', async () => {
@@ -135,7 +136,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
       finally { await session.close(); }
       const peers = [neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!)),
         neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!))];
-      const results = await Promise.allSettled(peers.map((peer) => IdentityStore.open(peer)));
+      const results = await Promise.allSettled(peers.map((peer) => IdentityStore.open(peer, schemes)));
       await Promise.all(peers.map((peer) => peer.close()));
       // Unrelated concurrent startup contention may fail one peer; the identity
       // invariants below must hold regardless.
@@ -169,12 +170,12 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
       '01A0BC17-85AD-71D2-B740-C1B89E050F3C',
     ]) {
       await run("MATCH (a:Asset {name: 'Legacy 1'}) SET a.id = $invalid", { invalid });
-      await assert.rejects(IdentityStore.open(driver), /missing or invalid native id/, String(invalid));
+      await assert.rejects(IdentityStore.open(driver, schemes), /missing or invalid native id/, String(invalid));
       assert.deepEqual(await readId(), invalid, String(invalid));
     }
     // A removed id is legacy data, not corruption: it is backfilled, not rejected.
     await run("MATCH (a:Asset {name: 'Legacy 1'}) REMOVE a.id");
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
     const replacement = await readId();
     assert.ok(isAssetId(replacement), String(replacement));
     assert.notEqual(replacement, original);
@@ -747,7 +748,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     { actorKey: outsider.key, groupKey: outsiderGroup.key });
 
     const lookup = (query: Record<string, unknown>) =>
-      store.lookupAssets(seeker.key, assetLookupQuery(query));
+      store.lookupAssets(seeker.key, assetLookupQuery(query, schemes));
 
     // Native Asset ID: an exact hit, and a well-formed miss.
     const byId = await lookup({ id: readable.id });
@@ -818,6 +819,6 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     // This test runs last and only against the disposable database.
     await query('DROP CONSTRAINT individual_identifier');
     await query('CREATE CONSTRAINT individual_identifier FOR (n:Unrelated) REQUIRE n.key IS UNIQUE');
-    await assert.rejects(IdentityStore.open(driver), /Required uniqueness constraint is missing for IndividualIdentifier/);
+    await assert.rejects(IdentityStore.open(driver, schemes), /Required uniqueness constraint is missing for IndividualIdentifier/);
   });
 });

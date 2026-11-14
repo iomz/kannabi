@@ -8,6 +8,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -23,7 +24,7 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('Group roles: one membership, with a role', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
@@ -201,13 +202,13 @@ test('Group roles: one membership, with a role', { skip: !uri || !password }, as
   await t.test('startup refuses Group data that predates roles', async () => {
     await query(`MATCH (u:User {key: $user}), (g:Group {key: $group}) CREATE (u)-[:CONTROLS]->(g)`,
       { user: key.outsider, group: group.key });
-    await assert.rejects(IdentityStore.open(driver), /predates Group roles/);
+    await assert.rejects(IdentityStore.open(driver, schemes), /predates Group roles/);
     await query('MATCH ()-[c:CONTROLS]->() DELETE c');
     await query(`MATCH (u:User {key: $user}), (g:Group {key: $group}) CREATE (u)-[:MEMBER_OF]->(g)`,
       { user: key.outsider, group: group.key });
-    await assert.rejects(IdentityStore.attachReadOnly(driver), /predates Group roles/);
+    await assert.rejects(IdentityStore.attachReadOnly(driver, schemes), /predates Group roles/);
     await query(`MATCH (:User {key: $user})-[m:MEMBER_OF]->(:Group {key: $group}) DELETE m`,
       { user: key.outsider, group: group.key });
-    await IdentityStore.open(driver);
+    await IdentityStore.open(driver, schemes);
   });
 });

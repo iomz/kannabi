@@ -10,6 +10,7 @@ import type {
   Asset, AssetLookup, AssetPage, Gs1LedgerPage, IdentityStore,
 } from './identity-store.js';
 import type { AudienceInput } from './asset-audience.js';
+import { schemes } from './composition.js';
 
 /** These tests exercise the agent-facing contract — tool discovery, schemas,
  * projections and error shape — against a recorded store, so they run without
@@ -106,6 +107,7 @@ function recordingStore(calls: Call[]) {
       // elsewhere and one that originated in Kannabi.
       return [camera, microscope].find((candidate) => candidate.id === id) ?? null;
     },
+    schemes,
     async listGroups(audience: AudienceInput) {
       calls.push({ method: 'listGroups', audience });
       return [workshop, studio];

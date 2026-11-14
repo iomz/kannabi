@@ -17,6 +17,7 @@ import { assetPageRequest } from './asset-page.js';
 import { runDemo } from '../scripts/demo/run.js';
 import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoMembers, demoPassword,
   demoScopes } from '../scripts/demo/fixtures.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -68,7 +69,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     assert.deepEqual(await keys(), mediaKeys);
   });
   await t.test('demo credentials, administration, every scope, pagination, and media authorization work', async () => {
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     const auth = await createAuth(driver, env.APP_URL, env.BETTER_AUTH_SECRET);
     const media = new MediaService(store, new S3Storage(s3, bucket));
     const app = new Hono().route('/api', createInventoryApi(store, auth, env.APP_URL, media));
@@ -84,7 +85,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
       assert.equal(me.isAdmin, (demoAdministrators as readonly number[]).includes(index));
       const expected = demoScopes(index);
       for (const scope of ['all', 'mine', 'group', 'public'] as const) {
-        const page = await store.findAssets(me.user.key, assetPageRequest({ scope }));
+        const page = await store.findAssets(me.user.key, assetPageRequest({ scope }, schemes.ids));
         assert.deepEqual(page.scopes, expected);
         assert.equal(page.matching, expected[scope]);
       }
@@ -115,7 +116,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     const nativeIds: string[] = [];
     let withoutIdentifiers = 0;
     do {
-      const page = await store.findAssets(users[0], assetPageRequest({ ...(cursor ? { cursor } : {}) }));
+      const page = await store.findAssets(users[0], assetPageRequest({ ...(cursor ? { cursor } : {}) }, schemes.ids));
       page.assets.forEach((a) => {
         nativeIds.push(a.id);
         if (!a.identifiers.length) withoutIdentifiers++;
@@ -167,7 +168,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
 
   await t.test('confirmed reset replaces all local data and objects without bookkeeping', async () => {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: 'unrelated-local-object', Body: 'local development data' }));
-    await (await IdentityStore.open(driver)).createOwner('Old local Owner');
+    await (await IdentityStore.open(driver, schemes)).createOwner('Old local Owner');
     const output = await promisify(execFile)('pnpm', ['demo:reset', '--', '--yes'], { env });
     assert.match(output.stdout, /DESTRUCTIVE RESET/);
     assert.deepEqual(await snapshot(), before);

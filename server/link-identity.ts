@@ -1,5 +1,6 @@
 import neo4j from 'neo4j-driver';
 import { IdentityStore } from './identity-store.js';
+import { schemes } from './composition.js';
 
 /** Bind an authenticated external identity to an existing Kannabi User.
  *
@@ -23,7 +24,7 @@ try {
     'MATCH (u:User {email: $email}) WHERE u.accountDeletedAt IS NULL RETURN u.key AS key',
     { email: email.toLowerCase() }));
   if (found.records.length !== 1) throw new Error('Expected one active account with that email');
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   const user = await store.linkExternalIdentity(found.records[0].get('key') as string, issuer, subject);
   console.log(`Linked ${issuer} subject ${subject} to ${user.name}. Asset access still requires Group membership.`);
 } finally { await session.close(); await driver.close(); }

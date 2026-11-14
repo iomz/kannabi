@@ -9,6 +9,7 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailDeliveryError, type Mailer, type MailMessage } from './mail.js';
 import { passwordResetPrefix } from './password-recovery.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const databasePassword = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -44,7 +45,7 @@ test('Better Auth password recovery uses Mailer, consumes tokens, clears sibling
   { skip: !uri || !databasePassword }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', databasePassword!));
     t.after(() => driver.close());
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const mailer = new CaptureMailer();

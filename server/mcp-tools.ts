@@ -332,7 +332,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
         q: input.query, group: input.groupKeys, scheme: input.schemes, identified: input.identified,
         reportedFrom: input.reportedFrom, reportedTo: input.reportedTo,
         sort: input.sort, dir: input.direction, limit: input.limit, cursor: input.cursor,
-      }));
+      }), store.schemes.ids);
       const page = await store.findAssets(audience, request);
       return result({
         omitted: summaryOmits,
@@ -392,7 +392,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
         ...Object.fromEntries(Object.entries(identifier).filter(([, value]) => value !== undefined)),
         ...(limit === undefined ? {} : { limit }),
         ...(cursor === undefined ? {} : { cursor }),
-      });
+      }, store.schemes);
       const lookup = await store.lookupAssets(audience, request);
       if (lookup.identity.kind !== 'identifier') throw new ValidationError('An external identifier is required');
       const { canonical, scheme, level } = lookup.identity;
@@ -431,7 +431,7 @@ export function createMcpServer(store: IdentityStore, resolveAudience: AudienceR
           + 'from a GS1 identifier, use resolve_external_identifier.');
       }
       const asset = await store.getAsset(assetId, audience);
-      return result({ found: asset !== null, asset: asset ? assetRecord(asset) : null });
+      return result({ found: asset !== null, asset: asset ? assetRecord(asset, store.schemes) : null });
     } catch (error) { return failed(error); }
   });
 

@@ -8,6 +8,7 @@ import { IdentityStore } from './identity-store.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import type { Mailer, MailMessage } from './mail.js';
+import { schemes } from './composition.js';
 
 /** Admin-created accounts send a setup link, so something has to accept it. */
 class DiscardMailer implements Mailer {
@@ -28,7 +29,7 @@ test('a new account waits for approval, and reaches only itself and public Asset
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID(), new DiscardMailer());
     const tokens = new ApiTokenService(auth, store);
@@ -153,7 +154,7 @@ test('a new account waits for approval, and reaches only itself and public Asset
       const member = await signUp('member');
       await query("MATCH (u:User {key: $key}) SET u.role = 'admin' REMOVE u.approvedAt", { key: veteran.key });
       await query('MATCH (u:User {key: $key}) REMOVE u.approvedAt', { key: member.key });
-      await IdentityStore.open(driver);
+      await IdentityStore.open(driver, schemes);
       assert.equal((await json(veteran.call('/me'))).approved, true, 'administration stays reachable');
       assert.equal((await veteran.call('/admin/users')).status, 200);
       assert.equal((await json(member.call('/me'))).approved, false, 'an ordinary account still waits');

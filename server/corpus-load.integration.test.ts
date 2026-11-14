@@ -11,6 +11,7 @@ import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import { storageFromEnv } from './storage.js';
 import { checkDigit } from './gs1-syntax.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -56,7 +57,7 @@ test('an existing Asset corpus loads over the public HTTP API',
     t.after(() => driver.close());
     // Nothing is seeded by hand: opening the store is what a deployment does,
     // and it leaves the instance ready for a client to use.
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     await admitSignups(driver);
     const storage = storageFromEnv();
     await storage.check();

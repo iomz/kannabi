@@ -9,6 +9,7 @@ import { systemAudienceResolver } from './mcp-principal.js';
 import { canonicalIdentifier } from './gs1.js';
 import type { Auth } from './auth.js';
 import type { Asset, IdentityStore } from './identity-store.js';
+import { schemes } from './composition.js';
 
 /** The representation is only worth having if its structure carries the
  * distinctions on its own. These tests read it the way a client would — by
@@ -66,7 +67,7 @@ test('every instant is either an act in Kannabi or what a source says', () => {
   // did, or the source's own recordedAt: there is no slot an acquisition,
   // loan or other physical event could occupy, so none can be read as one.
   const kannabiClock = /^(kannabi\.(reported|lastChange|issued\[\])\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at)$/;
-  const instants = leaves(json(assetRecord(populated)))
+  const instants = leaves(json(assetRecord(populated, schemes)))
     .filter(([, value]) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value));
   assert.ok(instants.length >= 6);
   for (const [path] of instants) {
@@ -76,11 +77,11 @@ test('every instant is either an act in Kannabi or what a source says', () => {
   assert.deepEqual(instants.filter(([, value]) => value === populated.sourceRecord!.recordedAt)
     .map(([path]) => path), ['source.says.recordedAt']);
   // Kannabi's report time is the report, not the source's past.
-  assert.equal(assetRecord(populated).kannabi.reported.at, populated.reportedAt);
+  assert.equal(assetRecord(populated, schemes).kannabi.reported.at, populated.reportedAt);
 });
 
 test('everything a source stated is under source, and nothing else is', () => {
-  const record = json(assetRecord(populated));
+  const record = json(assetRecord(populated, schemes));
   // The reference is the one exception, and not a quotation: a loader may name
   // the same row as the basis of its write, which is Kannabi's record of what
   // that request said.
@@ -93,7 +94,7 @@ test('everything a source stated is under source, and nothing else is', () => {
     assert.match(at[0], /^source\./);
   }
   // The quotation is exact: no trimming, newline conversion or normalisation.
-  assert.equal(assetRecord(populated).source!.says.description, description);
+  assert.equal(assetRecord(populated, schemes).source!.says.description, description);
   // Kannabi's own section holds Kannabi's values: the reporter, not the
   // source's recorder.
   assert.equal(record.kannabi.reported.by.name, reporter.name);
@@ -103,26 +104,26 @@ test('everything a source stated is under source, and nothing else is', () => {
 test('nothing the source mentions becomes a field of its own', () => {
   // A date, supplier, holder or room in quoted text stays quoted text: no key
   // anywhere in the record could hold an acquisition, custody or location.
-  const keys = leaves(json(assetRecord(populated))).flatMap(([path]) => path.split(/[.[\]]+/))
+  const keys = leaves(json(assetRecord(populated, schemes))).flatMap(([path]) => path.split(/[.[\]]+/))
     .filter((key) => key !== '');
   for (const key of keys) {
     assert.doesNotMatch(key, /acqui|purchas|supplier|vendor|custod|holder|borrow|loan|lent|location|room|place|cost|price|condition/i);
   }
   for (const fragment of ['2015-11-02', 'Example Trading', 'Lab B', '402号室']) {
-    const at = leaves(json(assetRecord(populated)))
+    const at = leaves(json(assetRecord(populated, schemes)))
       .filter(([, leaf]) => typeof leaf === 'string' && leaf.includes(fragment)).map(([path]) => path);
     assert.deepEqual(at, ['source.says.description'], `${fragment} escaped the quotation`);
   }
   // What Kannabi records none of is named rather than left to an absent key.
   for (const fact of ['acquisition', 'location', 'custody', 'ownership history']) {
-    assert.ok(assetRecord(populated).notRecorded.includes(fact as never));
+    assert.ok(assetRecord(populated, schemes).notRecorded.includes(fact as never));
   }
 });
 
 test('an unknown stays an explicit null, never a missing key', () => {
-  const record = json(assetRecord(sparse));
-  assert.deepEqual(Object.keys(record).sort(), Object.keys(json(assetRecord(populated))).sort());
-  assert.deepEqual(Object.keys(record.kannabi).sort(), Object.keys(json(assetRecord(populated)).kannabi).sort());
+  const record = json(assetRecord(sparse, schemes));
+  assert.deepEqual(Object.keys(record).sort(), Object.keys(json(assetRecord(populated, schemes))).sort());
+  assert.deepEqual(Object.keys(record.kannabi).sort(), Object.keys(json(assetRecord(populated, schemes)).kannabi).sort());
   assert.equal(record.kannabi.owner, null);
   assert.equal(record.kannabi.lastChange, null);
   assert.equal(record.source, null);
@@ -131,13 +132,13 @@ test('an unknown stays an explicit null, never a missing key', () => {
   assert.deepEqual(record.notRecorded, [...notRecorded]);
   // A source that stated no time or name says so with null inside source.says.
   const silent = assetRecord({ ...sparse, sourceRecord: { reference: 'legacy:assets:7', recordedAt: null,
-    recordedBy: null, description: null } });
+    recordedBy: null, description: null } }, schemes);
   assert.deepEqual(silent.source, { reference: 'legacy:assets:7',
     says: { recordedAt: null, recordedBy: null, description: null } });
 });
 
 test('a summary is the record with stated omissions, never a different record', () => {
-  const record = json(assetRecord(populated));
+  const record = json(assetRecord(populated, schemes));
   const summary = json(assetSummary(populated, ['sourceDescription']));
   const { identifiers, matched, ...rest } = summary;
   const recordLeaves = new Map(leaves(record));
@@ -168,6 +169,7 @@ test('a summary is the record with stated omissions, never a different record', 
 });
 
 const store = {
+  schemes,
   async getAsset(id: string) { return [populated, sparse].find((asset) => asset.id === id) ?? null; },
 } as unknown as IdentityStore;
 const anonymous = { api: { getSession: async () => null } } as unknown as Auth;
@@ -188,7 +190,7 @@ test('the HTTP API and MCP return the same record', async (t) => {
     const result = await client.callTool({ name: 'get_asset', arguments: { assetId: asset.id } }) as {
       structuredContent: { asset: unknown } };
     assert.deepEqual(result.structuredContent.asset, body.asset);
-    assert.deepEqual(body.asset, json(assetRecord(asset)));
+    assert.deepEqual(body.asset, json(assetRecord(asset, schemes)));
   }
 });
 

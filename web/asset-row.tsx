@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router';
 import { useState } from 'react';
 import { assetPhotoPath } from '../shared/asset-uri';
 import { surfacedAssetPath } from '../server/surfaced-uri.js';
-import { schemeLabels } from '../server/gs1.js';
+import { schemeLabel } from '../server/gs1.js';
 import type { Asset, MatchedField } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
 import { Icon } from './icon';
@@ -30,7 +30,7 @@ export function AssetRow({ asset, detail, matchedFields = [] }: {
       <div className="min-w-0 [overflow-wrap:anywhere]">
         <strong className="text-base font-[650] text-foreground max-sm:text-[.9rem]">{asset.name}</strong>
         <span className="mt-1 block text-[.85rem] text-muted-foreground max-sm:text-[.72rem]">{asset.identifiers.length
-          ? asset.identifiers.map((identifier) => schemeLabels[identifier.scheme] + ' ' + identifier.canonical).join(' · ')
+          ? asset.identifiers.map((identifier) => schemeLabel(identifier.scheme) + ' ' + identifier.canonical).join(' · ')
           : 'No external identifier'}</span>
         <span className="mt-[.4rem] flex flex-wrap items-center gap-x-2 gap-y-[.35rem] text-[.8rem] text-muted-foreground max-sm:gap-x-[.35rem] max-sm:gap-y-[.25rem] max-sm:text-[.73rem] [&_.icon]:size-4"><Icon name="groups" />
           <span>{asset.groups.map((group) => group.name).join(', ')}</span>

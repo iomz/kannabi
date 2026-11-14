@@ -4,6 +4,7 @@ import neo4j from 'neo4j-driver';
 import { DuplicateIdentityError, IdentityStore, ReferenceError } from './identity-store.js';
 import { ValidationError } from './identity.js';
 import { allocatedGtin, gs1Policy, storedIdentifier } from './gs1.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -14,7 +15,7 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('class keys carry the authority a serial is issued under', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   const owner = await store.createUser('Namespace owner');
   const outsider = await store.createUser('Outsider');
   const group = await store.createReportingGroup('Issuing team', owner.key);

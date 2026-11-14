@@ -13,6 +13,7 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -23,7 +24,7 @@ test('mail configuration, authorization, encrypted persistence, recovery, and SM
     t.after(() => driver.close());
     const data = mkdtempSync(join(tmpdir(), 'kannabi-mail-integration-'));
     t.after(() => rmSync(data, { recursive: true, force: true }));
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     await admitSignups(driver);
     const keyManager = await MasterKeyManager.open(await store.hasEncryptedSecrets(), { KANNABI_DATA_DIR: data });
     const mail = new MailService(store, keyManager);

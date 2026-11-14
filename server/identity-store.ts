@@ -19,12 +19,12 @@ import { gravatarIdentifier } from './avatar.js';
 import { externalIdentityKey } from './external-principal.js';
 import {
   adoptableClassKey, allocatedGiai, allocatedGraiAssetType, allocatedGraiSerial, allocatedGtin,
-  allocatedGtinFormat, allocatedSgtin, assertAttachable, assertCompatible, canIssueClassKey, canonicalGcp,
-  canonicalIdentifier, canonicalIdentifiers, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
-  hasGtinConflict, issuanceClassScheme,
-  storedIdentifier, type ClassKeyScheme, type CoherencePolicy, type ExternalIdentifier, type IdentifierLevel,
-  type IdentifierScheme, type IssuanceScheme,
+  allocatedGtinFormat, allocatedSgtin, canIssueClassKey, canonicalGcp,
+  canonicalIdentifier, classKeyWithinGcp, gcpRefusalReason, gs1Policy,
+  hasGtinConflict, isGs1Scheme, issuanceClassScheme,
+  storedIdentifier, type ClassKeyScheme, type ExternalIdentifier, type IssuanceScheme,
 } from './gs1.js';
+import type { AcceptanceSettings, Identifier, IdentifierLevel, IdentifierSchemes } from './identifier.js';
 import {
   allocatableSequence, canonicalExclusions, firstSequence, storedExclusions, type ExclusionRange,
 } from './reference-allocation.js';
@@ -144,7 +144,7 @@ export type IdentifierAttachment = Readonly<{
  * attachment for detachment; everything else is derived by the GS1 boundary,
  * except `attachment`, which is null for an association recorded before
  * Kannabi kept it. */
-export type AttachedIdentifier = ExternalIdentifier & Readonly<{
+export type AttachedIdentifier = Identifier & Readonly<{
   key: string;
   attachment: IdentifierAttachment | null;
 }>;
@@ -397,15 +397,24 @@ function classKeyFrom(stored: StoredClassKey): Gs1ClassKeyAllocation {
   return Object.freeze({ ...stored, serial: counterFrom(stored.serial) });
 }
 
-/** Components and level are always re-derived from the canonical form, so a
- * stored identifier cannot become an independent source of GS1 truth. */
+/** The GS1 identifiers among what an Asset carries, as GS1 reads them. The
+ * GTIN conflict set is a GS1 fact, and an identifier of another scheme is not
+ * GS1's to interpret. */
+function gs1Identifiers(rows: readonly StoredIdentifier[]): ExternalIdentifier[] {
+  return rows.filter((row) => isGs1Scheme(row.scheme))
+    .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+}
+
 function byCanonical<T extends { canonical: string }>(left: T, right: T): number {
   return left.canonical < right.canonical ? -1 : left.canonical > right.canonical ? 1 : 0;
 }
 
-function assetFrom(stored: StoredAsset): Asset {
+/** Components and level are always re-derived from the canonical form by the
+ * scheme that owns it, so a stored identifier cannot become an independent
+ * source of truth about what its value means. */
+function assetFrom(stored: StoredAsset, schemes: IdentifierSchemes): Asset {
   const identifiers = stored.identifiers
-    .map((row) => ({ key: row.key, ...storedIdentifier(row.scheme, row.canonical, row.policyVersion),
+    .map((row) => ({ key: row.key, ...schemes.restore(row.scheme, row.canonical, row.policyVersion),
       attachment: row.attachment ?? null }))
     .sort(byCanonical);
   // Issued values are ordered by their canonical form rather than by the
@@ -430,7 +439,7 @@ export type AssetPage = {
  * therefore discloses nothing about what exists. */
 export type ResolvedIdentity =
   | Readonly<{ kind: 'assetId'; id: string }>
-  | Readonly<{ kind: 'identifier'; canonical: string; scheme: IdentifierScheme; level: IdentifierLevel }>;
+  | Readonly<{ kind: 'identifier'; canonical: string; scheme: string; level: IdentifierLevel }>;
 
 /** A native Asset ID and an individual identifier each resolve to at most one
  * Asset; a class identifier describes a class, so it legitimately resolves to
@@ -540,6 +549,19 @@ const indexes = [
   'CREATE INDEX asset_reported_at IF NOT EXISTS FOR (n:Asset) ON (n.reportedAt)',
 ];
 
+/** Refuse a class identifier whose canonical form is already recorded under a
+ * different scheme. The uniqueness constraint would refuse it too; asking
+ * first lets the refusal say what actually happened. */
+async function assertClassSchemes(tx: ManagedTransaction, identifiers: readonly Identifier[]): Promise<void> {
+  const rows = identifiers.filter((identifier) => identifier.level === 'class')
+    .map((identifier) => ({ canonical: identifier.canonical, scheme: identifier.scheme }));
+  if (!rows.length) return;
+  const clash = await tx.run(`UNWIND $rows AS c
+    MATCH (n:ClassIdentifier {canonical: c.canonical}) WHERE n.scheme <> c.scheme
+    RETURN c.canonical AS canonical LIMIT 1`, { rows });
+  if (clash.records.length) throw new ValidationError('That identifier is already recorded under another scheme');
+}
+
 function isDuplicateIdentifier(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && error.code === 'Neo.ClientError.Schema.ConstraintValidationFailed';
@@ -559,14 +581,14 @@ function legacyIdentifier(scheme: unknown, value: unknown, serial: unknown): Ext
   throw new ValidationError(`Legacy identifier scheme ${JSON.stringify(scheme)} cannot be migrated`);
 }
 
-function identifierRows(identifiers: readonly ExternalIdentifier[], level: 'individual' | 'class') {
+function identifierRows(identifiers: readonly Identifier[], level: IdentifierLevel) {
   return identifiers.filter((identifier) => identifier.level === level).map((identifier) => ({
     key: randomUUID(), canonical: identifier.canonical,
     scheme: identifier.scheme, policyVersion: identifier.policyVersion,
   }));
 }
 
-function identifierParams(identifiers: readonly ExternalIdentifier[]) {
+function identifierParams(identifiers: readonly Identifier[]) {
   return {
     individualIdentifiers: identifierRows(identifiers, 'individual'),
     classIdentifiers: identifierRows(identifiers, 'class'),
@@ -578,7 +600,9 @@ function identifierParams(identifiers: readonly ExternalIdentifier[]) {
 // record the GS1 level an identifier already has; they add no meaning of their
 // own. Individual identifiers are CREATEd so the uniqueness constraint rejects a
 // second Asset claiming them; class identifiers are MERGEd so Assets share one
-// node.
+// node. The MERGE matches the scheme as well as the canonical form, so a value
+// already recorded under another scheme is refused by that constraint rather
+// than silently attached as the other scheme's identifier.
 //
 // Each association records who accepted it, when, and on what stated basis, on
 // the relationship itself: the association is what the provenance describes,
@@ -587,7 +611,7 @@ function identifierParams(identifiers: readonly ExternalIdentifier[]) {
 // same statement-clock instant as the Asset's `changeAcceptedAt`. It says
 // nothing about who issued the value or whether it is correct. `ON CREATE`
 // keeps an existing association's origin even if a repeat ever reached here;
-// `assertCompatible` refuses repeats before that.
+// the scheme registry refuses repeats before that.
 const attachIdentifiers = `
   FOREACH (i IN $individualIdentifiers |
     CREATE (a)-[:IDENTIFIED_BY {
@@ -596,8 +620,8 @@ const attachIdentifiers = `
       }]->(:IndividualIdentifier {
         key: i.key, canonical: i.canonical, scheme: i.scheme, policyVersion: i.policyVersion }))
   FOREACH (c IN $classIdentifiers |
-    MERGE (n:ClassIdentifier {canonical: c.canonical})
-      ON CREATE SET n.key = c.key, n.scheme = c.scheme, n.policyVersion = c.policyVersion
+    MERGE (n:ClassIdentifier {canonical: c.canonical, scheme: c.scheme})
+      ON CREATE SET n.key = c.key, n.policyVersion = c.policyVersion
     MERGE (a)-[r:CLASSIFIED_AS]->(n)
       ON CREATE SET r.acceptedBy = $actorKey, r.acceptedAt = datetime(),
         r.assertedById = $assertedById, r.assertedByLabel = $assertedByLabel,
@@ -957,9 +981,11 @@ const assetProjection = `
  * The supplied driver belongs to the caller and is never closed here.
  */
 export class IdentityStore {
-  private constructor(private readonly driver: Driver) {}
+  /** `schemes` is what this store was composed with: every identifier it
+   * accepts or reads back goes through them, and it knows no scheme itself. */
+  private constructor(private readonly driver: Driver, readonly schemes: IdentifierSchemes) {}
 
-  static async open(driver: Driver): Promise<IdentityStore> {
+  static async open(driver: Driver, schemes: IdentifierSchemes): Promise<IdentityStore> {
     const session = driver.session();
     try {
       // Fail closed if constraints cannot be installed, including on dirty data.
@@ -1007,7 +1033,7 @@ export class IdentityStore {
     } finally {
       await session.close();
     }
-    return new IdentityStore(driver);
+    return new IdentityStore(driver, schemes);
   }
 
   /** Attach to a database Kannabi has already opened, without writing to it.
@@ -1018,13 +1044,13 @@ export class IdentityStore {
    * and fails closed on a database the application has never opened. It never
    * repairs one.
    */
-  static async attachReadOnly(driver: Driver): Promise<IdentityStore> {
+  static async attachReadOnly(driver: Driver, schemes: IdentifierSchemes): Promise<IdentityStore> {
     const session = driver.session({ defaultAccessMode: neo4j.session.READ });
     try {
       await IdentityStore.verifyConstraints(session);
       await IdentityStore.verifyGroupRoles(session);
     } finally { await session.close(); }
-    return new IdentityStore(driver);
+    return new IdentityStore(driver, schemes);
   }
 
   /** Startup invariant: every membership carries a role, and nothing records
@@ -1560,7 +1586,7 @@ export class IdentityStore {
     // Every rule but the configurable AI 01 one is checked here, before the
     // transaction opens; that one is an instance policy, so it is read and
     // applied inside the transaction below.
-    const identifiers = canonicalIdentifiers(input.identifiers, { enforceGtinConsistency: false });
+    const identifiers = this.schemes.acceptAll(input.identifiers);
     const params = {
       assetId: newAssetId(),
       name: requiredText(input.name, 'name'),
@@ -1580,7 +1606,8 @@ export class IdentityStore {
         const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
           RETURN s.requirePhoto AS required, ${coherencePolicyProjection} AS coherence`);
         if (!photoKey && policy.records[0].get('required')) throw new ValidationError('A photo is required when reporting an Asset');
-        assertCompatible(identifiers, policy.records[0].get('coherence') as CoherencePolicy);
+        this.schemes.assertSet(identifiers, policy.records[0].get('coherence') as AcceptanceSettings);
+        await assertClassSchemes(tx, identifiers);
         if (photoKey) await this.consumePhoto(tx, photoKey);
         const result = await tx.run(`
           MATCH (u:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
@@ -1602,7 +1629,7 @@ export class IdentityStore {
           throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
         }
         await IdentityStore.recordGtinConflict(tx, params.assetId);
-        return assetFrom(result.records[0].get('asset'));
+        return assetFrom(result.records[0].get('asset'), this.schemes);
       });
     } catch (error) {
       // CREATE, rather than MERGE, makes every second claim a conflict.
@@ -1621,7 +1648,7 @@ export class IdentityStore {
         `${assetMatch} WHERE ${readableAsset} ${assetProjection}`,
         { assetId: assetId(id), ...audienceParameters(audience) },
       ));
-      return result.records.length ? assetFrom(result.records[0].get('asset')) : null;
+      return result.records.length ? assetFrom(result.records[0].get('asset'), this.schemes) : null;
     } finally { await session.close(); }
   }
 
@@ -1674,11 +1701,13 @@ export class IdentityStore {
         assets: asset ? [asset] : [], matching: asset ? 1 : 0, nextCursor: null });
     }
     const { canonical, scheme, level } = query.identifier;
-    // The level is derived by the GS1 boundary, so the label and relationship
-    // follow from policy rather than from any query-layer GS1 knowledge.
+    // The level is derived by the scheme, so the label and relationship follow
+    // from it rather than from anything the query layer knows. The scheme is
+    // matched too: the same canonical form under another scheme is a different
+    // identity, and must not answer for this one.
     const individual = level === 'individual';
     const identifierMatch = `MATCH (a:Asset)-[:${individual ? 'IDENTIFIED_BY' : 'CLASSIFIED_AS'}]->
-      (:${individual ? 'IndividualIdentifier' : 'ClassIdentifier'} {canonical: $canonical})`;
+      (:${individual ? 'IndividualIdentifier' : 'ClassIdentifier'} {canonical: $canonical, scheme: $scheme})`;
     const session = this.driver.session();
     try {
       // Ordered by name then id: the same total ordering browse uses by
@@ -1699,10 +1728,10 @@ export class IdentityStore {
           ${assetRowsProjection(order)}
         }
         RETURN matching, rows`,
-      { canonical, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
+      { canonical, scheme, after, fetchSize: int(limit + 1), ...audienceParameters(audience) }));
       const row = result.records[0];
       const rows = row.get('rows') as StoredAsset[];
-      const assets = rows.slice(0, limit).map(assetFrom);
+      const assets = rows.slice(0, limit).map((stored) => assetFrom(stored, this.schemes));
       return Object.freeze({
         identity: Object.freeze({ kind: 'identifier' as const, canonical, scheme, level }),
         assets,
@@ -1747,7 +1776,7 @@ export class IdentityStore {
         ...audienceParameters(audience), ...filterParameters(filters) }));
       const row = result.records[0];
       const rows = (row.get('rows') as (StoredAsset & { matchedFields: MatchedField[] })[]).slice(0, limit);
-      const assets = rows.map(({ matchedFields: _matched, ...stored }) => assetFrom(stored));
+      const assets = rows.map(({ matchedFields: _matched, ...stored }) => assetFrom(stored, this.schemes));
       const matchedFields = Object.fromEntries(rows.map((stored) => [stored.id, stored.matchedFields]));
       const scopes = Object.fromEntries(Object.entries(row.get('scopes')).map(([key, value]) =>
         [key, (value as { toNumber(): number }).toNumber()])) as Record<AssetScope, number>;
@@ -2198,15 +2227,15 @@ export class IdentityStore {
    * separate namespace-authorized operation. Group authorization is unchanged. */
   async attachIdentifier(id: string, actorKey: string, value: unknown,
     origin: ChangeOrigin = {}): Promise<Asset> {
-    const identifier = canonicalIdentifier(value);
+    const identifier = this.schemes.accept(value);
     const assetKey = assetId(id);
     const change = changeParams(origin);
     try {
       return await this.write(async (tx) => {
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
+        await IdentityStore.attachIdentifierWithin(tx, this.schemes, assetKey, actorKey, identifier, change);
         const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
           { assetId: assetKey, actorKey });
-        return assetFrom(result.records[0].get('asset'));
+        return assetFrom(result.records[0].get('asset'), this.schemes);
       });
     } catch (error) {
       if (isDuplicateIdentifier(error)) {
@@ -2216,11 +2245,11 @@ export class IdentityStore {
     }
   }
 
-  /** Shared attachment implementation: Asset authorization, GS1 set
-   * compatibility, issued-value binding, and persistence. Allocation invokes
+  /** Shared attachment implementation: Asset authorization, the installed
+   * identifier rules, issued-value binding, and persistence. Allocation invokes
    * it only after creating its ledger record in the same transaction. */
-  private static async attachIdentifierWithin(tx: ManagedTransaction, assetKey: string,
-    actorKey: string, identifier: ExternalIdentifier,
+  private static async attachIdentifierWithin(tx: ManagedTransaction, schemes: IdentifierSchemes, assetKey: string,
+    actorKey: string, identifier: Identifier,
     change: ReturnType<typeof changeParams>): Promise<void> {
     await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
@@ -2228,13 +2257,14 @@ export class IdentityStore {
     { assetId: assetKey, actorKey });
     if (!current.records.length) throw new ReferenceError('Asset access not found');
     const existing = (current.records[0].get('identifiers') as StoredIdentifier[])
-      .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+      .map((row) => schemes.restore(row.scheme, row.canonical, row.policyVersion));
     // Read under the Settings lock, as reporting does, so an attachment and a
     // change of policy are ordered: a write that commits after enforcement is
     // switched back on has been judged by it.
     const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
       RETURN ${coherencePolicyProjection} AS coherence`);
-    assertAttachable(existing, identifier, policy.records[0].get('coherence') as CoherencePolicy);
+    schemes.assertAddition(existing, identifier, policy.records[0].get('coherence') as AcceptanceSettings);
+    await assertClassSchemes(tx, [identifier]);
     // A value Kannabi issued may only ever return to the Asset it was issued
     // for. One check for every scheme, matched on the canonical form: an
     // externally assigned value has no ledger row and keeps the ordinary
@@ -2268,8 +2298,7 @@ export class IdentityStore {
   private static async recordGtinConflict(tx: ManagedTransaction, assetKey: string): Promise<void> {
     const current = await tx.run(`${assetMatch} RETURN ${assetIdentifierRows} AS identifiers`,
       { assetId: assetKey });
-    const identifiers = (current.records[0].get('identifiers') as StoredIdentifier[])
-      .map((row) => storedIdentifier(row.scheme, row.canonical, row.policyVersion));
+    const identifiers = gs1Identifiers(current.records[0].get('identifiers') as StoredIdentifier[]);
     await tx.run(hasGtinConflict(identifiers)
       ? `MATCH (s:Settings {key: 'instance'}) ${assetMatch} MERGE (s)-[:HAS_GTIN_CONFLICT]->(a)`
       : `MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(:Asset {id: $assetId}) DELETE c`,
@@ -2296,8 +2325,7 @@ export class IdentityStore {
           WHERE COUNT { (a)-[:IDENTIFIED_BY|CLASSIFIED_AS]->() } > 1
           RETURN a.id AS id, ${assetIdentifierRows} AS identifiers`);
         const conflicting = candidates.records
-          .filter((row) => hasGtinConflict((row.get('identifiers') as StoredIdentifier[])
-            .map((stored) => storedIdentifier(stored.scheme, stored.canonical, stored.policyVersion))))
+          .filter((row) => hasGtinConflict(gs1Identifiers(row.get('identifiers') as StoredIdentifier[])))
           .map((row) => row.get('id') as string);
         await tx.run(`MATCH (:Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(a:Asset)
           WHERE NOT a.id IN $conflicting DELETE c`, { conflicting });
@@ -2414,7 +2442,7 @@ export class IdentityStore {
           ${assetRowsProjection('ORDER BY a.name ASC, a.id ASC')}`,
         { ids: issuances.map((issuance) => issuance.allocatedForAssetId), ...parameters });
         const assets = new Map((readable.records[0].get('rows') as StoredAsset[])
-          .map((stored) => [stored.id, assetFrom(stored)]));
+          .map((stored) => [stored.id, assetFrom(stored, this.schemes)]));
         return Object.freeze({
           namespace: namespaceFrom(found.records[0].get('namespace')),
           matching: found.records[0].get('matching').toNumber(),
@@ -2659,7 +2687,7 @@ export class IdentityStore {
     const project = async (tx: ManagedTransaction) => {
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
-      return assetFrom(result.records[0].get('asset'));
+      return assetFrom(result.records[0].get('asset'), this.schemes);
     };
     try {
       return await this.write(async (tx) => {
@@ -2749,7 +2777,7 @@ export class IdentityStore {
           sequence: int(sequence), assetId: assetKey, actorKey,
           classKeyKey: under === null ? null : under.key });
         // 7. Phase 2 attachment semantics, unchanged and not duplicated.
-        await IdentityStore.attachIdentifierWithin(tx, assetKey, actorKey, identifier, change);
+        await IdentityStore.attachIdentifierWithin(tx, this.schemes, assetKey, actorKey, identifier, change);
         return project(tx);
       });
     } catch (error) {
@@ -2790,7 +2818,7 @@ export class IdentityStore {
       await IdentityStore.recordGtinConflict(tx, assetKey);
       const result = await tx.run(`${assetMatch} WHERE ${collaboration} ${assetProjection}`,
         { assetId: assetKey, actorKey });
-      return assetFrom(result.records[0].get('asset'));
+      return assetFrom(result.records[0].get('asset'), this.schemes);
     });
   }
 
@@ -2825,7 +2853,7 @@ export class IdentityStore {
         WITH a ${assetProjection}`,
       { assetId: assetId(id), actorKey, photoKey, ...changeParams(origin) });
       if (!result.records.length) throw new ReferenceError('Asset access not found');
-      return assetFrom(result.records[0].get('asset'));
+      return assetFrom(result.records[0].get('asset'), this.schemes);
     });
   }
 
@@ -2901,7 +2929,7 @@ export class IdentityStore {
           CREATE (a)-[:OWNED_BY]->(o))
         WITH a ${assetProjection}`, params);
       if (!result.records.length) throw new ReferenceError('Asset or Owner does not exist');
-      return assetFrom(result.records[0].get('asset'));
+      return assetFrom(result.records[0].get('asset'), this.schemes);
     });
   }
 }

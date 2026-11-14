@@ -9,6 +9,7 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import { checkDigit } from './gs1-syntax.js';
+import { schemes } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -30,7 +31,7 @@ test('managed GS1 authority is the Group Manager role in the managing Group',
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
-    const store = await IdentityStore.open(driver);
+    const store = await IdentityStore.open(driver, schemes);
     await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID());

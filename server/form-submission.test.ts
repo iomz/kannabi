@@ -12,6 +12,7 @@ import { Button } from '../web/components/ui/button.js';
 import { IdentifierForm, IssueIdentifier } from '../web/asset-identifiers.js';
 import { InventoryControls, noFilters } from '../web/inventory-controls.js';
 import { assetPageRequest } from './asset-page.js';
+import { schemes } from './composition.js';
 
 const group = { key: 'workshop', name: 'Workshop' };
 const counter = { nextSequence: 1, exclusions: [] };
@@ -357,7 +358,7 @@ test('existing visibility scopes navigate without losing search, filters, or ord
         .find((node) => new URL(node.href).searchParams.get('scope') === scope)!;
       assert.ok(link);
       await settle(() => link.click());
-      const parsed = assetPageRequest(Object.fromEntries(new URLSearchParams(router.state.location.search)));
+      const parsed = assetPageRequest(Object.fromEntries(new URLSearchParams(router.state.location.search)), schemes.ids);
       assert.equal(parsed.scope, scope);
       assert.equal(parsed.q, 'bench');
       assert.deepEqual(parsed.filters.groups, ['workshop']);

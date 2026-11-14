@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
 import { IdentityStore } from './identity-store.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -51,7 +52,7 @@ test('the GIAI-only allocation schema upgrades without losing provenance', { ski
     (await query(cypher, params)).records[0].get('n').toNumber();
 
   // 1. A database as the previous milestone left it.
-  const before = await IdentityStore.open(driver);
+  const before = await IdentityStore.open(driver, schemes);
   const owner = await before.createUser('Prefix owner');
   const group = await before.createReportingGroup('Issuing team', owner.key);
   const context = { actorKey: owner.key, groupKey: group.key };
@@ -67,7 +68,7 @@ test('the GIAI-only allocation schema upgrades without losing provenance', { ski
   assert.equal(await count('MATCH (l:GiaiAllocation) RETURN count(l) AS n'), 1);
 
   // 2. Opening the store migrates it.
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
 
   await t.test('no GIAI-only node or constraint survives', async () => {
     assert.equal(await count('MATCH (n) WHERE n:GiaiNamespace OR n:GiaiAllocation RETURN count(n) AS n'), 0);
@@ -154,7 +155,7 @@ test('the GIAI-only allocation schema upgrades without losing provenance', { ski
     await query("MATCH (m:Migration {key: 'gs1-allocation'}) DELETE m");
 
     // Startup migrates it rather than failing closed on it.
-    const reopened = await IdentityStore.open(driver);
+    const reopened = await IdentityStore.open(driver, schemes);
     const migrated = (await reopened.listGs1Namespaces(owner.key))
       .find((entry) => entry.gcp === '0455123')!;
     assert.ok(migrated, 'the namespace survived migration');
@@ -178,7 +179,7 @@ test('the GIAI-only allocation schema upgrades without losing provenance', { ski
   });
 
   await t.test('migration is idempotent and safe to repeat', async () => {
-    const again = await IdentityStore.open(driver);
+    const again = await IdentityStore.open(driver, schemes);
     const reread = (await again.getAsset(asset.id, owner.key))!;
     assert.equal(reread.issuances.length, 2);
     assert.ok(reread.issuances.some((issuance) => issuance.canonical === original.canonical));

@@ -102,7 +102,7 @@ test('a waiting account reads a public Asset as a visitor does, asking for no Gr
     const body = path === '/api/me' ? { user: { key: 'waiting', name: 'Waiting', email: 'w@example.test' }, approved: false }
       : path === '/api/settings' ? { settings: defaultSettings }
         : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers: [] },
-          canEdit: false } : null;
+          canEdit: false, digitalLinks: [] } : null;
     return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
   };
   const { loadAsset } = await import('../web/asset-view.js');
@@ -132,4 +132,28 @@ test('an administrator orders Users by a column, and the header says which way',
     assert.ok([...document.querySelectorAll('select option')].some((option) => option.textContent === 'Name, A–Z'),
       'the same choice where the headers are not shown');
   } finally { view.stop(); router.dispose(); }
+});
+
+test('the Asset page takes each identifier address from the server and builds none itself', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  // One address of a scheme the client knows nothing about, served from an
+  // origin other than the one the page was reached at.
+  const identifiers = [
+    { key: 'i1', scheme: 'tag', canonical: 'tag:T 7', components: {}, level: 'individual', policyVersion: 'tag-1', attachment: null },
+    { key: 'i2', scheme: 'gtin', canonical: '(01)04901234567894', components: { gtin: '04901234567894' },
+      level: 'class', policyVersion: 'p', attachment: null },
+  ];
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input), 'https://kannabi.test').pathname;
+    const body = path === '/api/me' ? { user: null }
+      : path === '/api/settings' ? { settings: defaultSettings }
+        : path.startsWith('/api/assets/') ? { asset: { id: 'a', name: 'Public rig', isPublic: true, groups: [], identifiers },
+          canEdit: false, digitalLinks: [{ identifierKey: 'i1', canonical: 'tag:T 7',
+            uri: 'https://internal.example/tags/T%207?v=1' }] } : null;
+    return new Response(JSON.stringify(body), { status: body ? 200 : 401, headers: { 'Content-Type': 'application/json' } });
+  };
+  const { loadAsset } = await import('../web/asset-view.js');
+  const loaded = await loadAsset('a', new Request('https://kannabi.test/asset/a'));
+  assert.deepEqual(loaded.digitalLinks, { i1: 'https://kannabi.test/tags/T%207?v=1' });
 });

@@ -1,7 +1,7 @@
 import { Form, Link, redirect, useNavigation } from 'react-router';
 import { useState } from 'react';
 import { api, unwrap } from '../api';
-import { identifierSchemes, schemeInputs, schemeLabels, schemeDescriptions,
+import { identifierSchemes, schemeInputs, schemeLabel, schemeLabels, schemeDescriptions,
   type IdentifierScheme } from '../../server/gs1.js';
 import { AssetRow } from '../asset-row';
 import type { Route } from './+types/lookup';
@@ -73,7 +73,7 @@ export default function Lookup({ loaderData: { kind, result, error } }: Route.Co
       <Hint className="mb-4">
         {result.identity.kind === 'assetId'
           ? <>Asset ID <code>{result.identity.id}</code></>
-          : <>{schemeLabels[result.identity.scheme]} <code>{result.identity.canonical}</code>
+          : <>{schemeLabel(result.identity.scheme)} <code>{result.identity.canonical}</code>
             {result.identity.level === 'class'
               ? ' — a class identifier, which may describe several Assets'
               : ' — an individual identifier, which identifies at most one Asset'}</>}

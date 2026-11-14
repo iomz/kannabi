@@ -6,6 +6,7 @@ import { cursorVersion, encodeCursor } from './cursor.js';
 import { newAssetId } from './asset-id.js';
 import { inventoryPath, noFilters } from '../web/inventory-controls.js';
 import { ValidationError } from './identity.js';
+import { schemes } from './composition.js';
 
 const asset = { name: '測定器 — A', reportedAt: '2026-09-20T08:01:49.123000000Z', id: newAssetId() };
 const request = { q: '測定', scope: 'all' as const, sort: 'name' as const, dir: 'asc' as const,
@@ -14,7 +15,7 @@ const request = { q: '測定', scope: 'all' as const, sort: 'name' as const, dir
 const base: Record<string, string> = { q: '測定', scope: 'all', sort: 'name', dir: 'asc' };
 
 test('browse defaults preserve the pre-filter contract', () => {
-  assert.deepEqual(assetPageRequest({}), { q: '', scope: 'all', sort: 'name', dir: 'asc',
+  assert.deepEqual(assetPageRequest({}, schemes.ids), { q: '', scope: 'all', sort: 'name', dir: 'asc',
     filters: emptyAssetFilters, limit: 30, after: null });
   assert.deepEqual(assetSorts, ['name', 'reportedAt']);
   // No filter parameters means no discovery predicate at all.
@@ -23,7 +24,7 @@ test('browse defaults preserve the pre-filter contract', () => {
 
 test('filters parse, validate and canonicalise into a stable key', () => {
   const parsed = assetPageRequest({ group: ['b', 'a'], scheme: 'sgtin,gtin',
-    identified: 'any', reportedFrom: '2026-01-01', reportedTo: '2026-02-01T00:00:00Z' });
+    identified: 'any', reportedFrom: '2026-01-01', reportedTo: '2026-02-01T00:00:00Z' }, schemes.ids);
   assert.deepEqual(parsed.filters.groups, ['a', 'b']);
   assert.deepEqual(parsed.filters.schemes, ['gtin', 'sgtin']);
   assert.equal(parsed.filters.identified, 'any');
@@ -31,15 +32,15 @@ test('filters parse, validate and canonicalise into a stable key', () => {
   // Repeated entries, comma lists, duplicates and ordering all canonicalise the same.
   const other = assetPageRequest({ group: 'a,b,a', scheme: ['gtin', 'sgtin', 'gtin'],
     identified: 'any', reportedFrom: '2026-01-01T00:00:00.000Z',
-    reportedTo: '2026-02-01T00:00:00Z' });
+    reportedTo: '2026-02-01T00:00:00Z' }, schemes.ids);
   assert.equal(canonicalFilters(parsed.filters), canonicalFilters(other.filters));
   assert.equal(canonicalFilters(parsed.filters),
     'groups=a,b|schemes=gtin,sgtin|identified=any'
     + '|from=2026-01-01T00:00:00.000Z|to=2026-02-01T00:00:00.000Z');
   // A date names a whole day and an instant names a point in time, so the two
   // are different predicates and must not share a cursor key.
-  const day = assetPageRequest({ reportedTo: '2026-02-01' }).filters;
-  const moment = assetPageRequest({ reportedTo: '2026-02-01T00:00:00Z' }).filters;
+  const day = assetPageRequest({ reportedTo: '2026-02-01' }, schemes.ids).filters;
+  const moment = assetPageRequest({ reportedTo: '2026-02-01T00:00:00Z' }, schemes.ids).filters;
   assert.equal(day.reportedTo, moment.reportedTo);
   assert.equal(day.reportedToEndOfDay, true);
   assert.equal(moment.reportedToEndOfDay, false);
@@ -47,10 +48,10 @@ test('filters parse, validate and canonicalise into a stable key', () => {
   assert.notEqual(canonicalFilters(day), canonicalFilters(moment));
   // Visibility is not a filter: the scope tabs own that dimension, so the
   // parameter is simply unknown and contributes nothing to the predicate.
-  assert.equal(canonicalFilters(assetPageRequest({ visibility: 'public' }).filters), '');
+  assert.equal(canonicalFilters(assetPageRequest({ visibility: 'public' }, schemes.ids).filters), '');
   for (const query of [{ scheme: 'ean' }, { identified: 'maybe' },
     { reportedFrom: 'yesterday' }, { reportedTo: '' , reportedFrom: 'not-a-date' }]) {
-    assert.throws(() => assetPageRequest(query), ValidationError, JSON.stringify(query));
+    assert.throws(() => assetPageRequest(query, schemes.ids), ValidationError, JSON.stringify(query));
   }
 });
 
@@ -58,7 +59,7 @@ test('the cursor carries the sort value and the tiebreaker', () => {
   for (const sort of assetSorts) {
     for (const dir of ['asc', 'desc'] as const) {
       const sorted = { ...request, sort, dir };
-      const parsed = assetPageRequest({ ...base, sort, dir, cursor: assetCursor(sorted, asset) });
+      const parsed = assetPageRequest({ ...base, sort, dir, cursor: assetCursor(sorted, asset) }, schemes.ids);
       assert.deepEqual(parsed.after, { key: assetSortKey(asset, sort), id: asset.id }, `${sort} ${dir}`);
       assert.equal(parsed.sort, sort);
       assert.equal(parsed.dir, dir);
@@ -70,7 +71,7 @@ test('the cursor carries the sort value and the tiebreaker', () => {
 
 test('a cursor is bound to the whole query shape and fails closed otherwise', () => {
   const cursor = assetCursor(request, asset);
-  assert.doesNotThrow(() => assetPageRequest({ ...base, cursor }));
+  assert.doesNotThrow(() => assetPageRequest({ ...base, cursor }, schemes.ids));
   // Every bound field must match: changing any one rejects the cursor.
   for (const change of [
     { q: 'other' }, { scope: 'mine' }, { sort: 'reportedAt' }, { dir: 'desc' },
@@ -78,7 +79,7 @@ test('a cursor is bound to the whole query shape and fails closed otherwise', ()
     // altering any filter invalidates a cursor taken under another predicate.
     { scheme: 'gtin' }, { identified: 'none' },
     { group: 'a' }, { reportedFrom: '2026-01-01' }, { reportedTo: '2026-01-01' },
-  ]) assert.throws(() => assetPageRequest({ ...base, ...change, cursor }),
+  ]) assert.throws(() => assetPageRequest({ ...base, ...change, cursor }, schemes.ids),
     ValidationError, JSON.stringify(change));
   // A cursor from another version, or carrying anything else, is rejected.
   for (const foreign of [
@@ -88,24 +89,24 @@ test('a cursor is bound to the whole query shape and fails closed otherwise', ()
     encodeCursor({ ...base, key: '', id: asset.id }),
     encodeCursor({ ...base, key: asset.name, id: asset.id, filters: 'future' }),
     '%', 'null',
-  ]) assert.throws(() => assetPageRequest({ ...base, cursor: foreign }), ValidationError, foreign.slice(0, 24));
+  ]) assert.throws(() => assetPageRequest({ ...base, cursor: foreign }, schemes.ids), ValidationError, foreign.slice(0, 24));
   // An empty parameter means unset everywhere, including the cursor, so a
   // stray `?cursor=` starts from the first page instead of failing.
-  assert.equal(assetPageRequest({ ...base, cursor: '' }).after, null);
+  assert.equal(assetPageRequest({ ...base, cursor: '' }, schemes.ids).after, null);
 });
 
 test('sort, direction and page size are validated against closed sets', () => {
   for (const query of [{ sort: 'owner' }, { dir: 'ascending' }, { dir: 'DESC' }, { scope: 'owner' }]) {
-    assert.throws(() => assetPageRequest(query), ValidationError, JSON.stringify(query));
+    assert.throws(() => assetPageRequest(query, schemes.ids), ValidationError, JSON.stringify(query));
   }
   for (const limit of ['0', '-1', '101', '1.5', 'NaN', 'Infinity']) {
-    assert.throws(() => assetPageRequest({ limit }), ValidationError);
+    assert.throws(() => assetPageRequest({ limit }, schemes.ids), ValidationError);
   }
-  assert.throws(() => assetPageRequest({ q: 'a'.repeat(201) }), ValidationError);
+  assert.throws(() => assetPageRequest({ q: 'a'.repeat(201) }, schemes.ids), ValidationError);
   // Empty is unset, never invalid: a form that submits a blank control must not
   // break the page. A present but unrecognised value is still rejected.
-  assert.deepEqual(assetPageRequest({ sort: '', dir: '', scope: '', limit: '', q: '' }),
-    assetPageRequest({}));
+  assert.deepEqual(assetPageRequest({ sort: '', dir: '', scope: '', limit: '', q: '' }, schemes.ids),
+    assetPageRequest({}, schemes.ids));
 });
 
 test('every query-string shape parses identically, and empty means unset', () => {
@@ -122,7 +123,7 @@ test('every query-string shape parses identically, and empty means unset', () =>
   // The exact URL that previously failed to load: every filter serialised empty.
   for (const shape of shapes('/?q=Camera&scope=group&sort=name&dir=asc'
     + '&group=&identified=&scheme=&reportedFrom=&reportedTo=')) {
-    const parsed = assetPageRequest(shape);
+    const parsed = assetPageRequest(shape, schemes.ids);
     assert.equal(canonicalFilters(parsed.filters), '', 'unset filters must mean no predicate');
     assert.deepEqual(parsed.filters, emptyAssetFilters);
     assert.equal(parsed.q, 'Camera');
@@ -131,7 +132,7 @@ test('every query-string shape parses identically, and empty means unset', () =>
   // The second failing URL: filters set, with one bound left empty.
   for (const shape of shapes('/?sort=name&dir=asc&group=7818b2d4-7ad9-4fa1-8f0c-fa3061584091'
     + '&identified=none&scheme=gtin&reportedFrom=2026-09-19&reportedTo=')) {
-    const parsed = assetPageRequest(shape);
+    const parsed = assetPageRequest(shape, schemes.ids);
     assert.equal(canonicalFilters(parsed.filters),
       'groups=7818b2d4-7ad9-4fa1-8f0c-fa3061584091|schemes=gtin'
       + '|identified=none|from=2026-09-19T00:00:00.000Z');
@@ -145,7 +146,7 @@ test('the URLs the inventory generates round-trip through the parser', () => {
   const roundTrip = (path: string) => {
     const params = new URL(path, 'http://kannabi.test').searchParams;
     // Read exactly as the route loader does, through getAll.
-    return assetPageRequest(Object.fromEntries([...params.keys()].map((key) => [key, params.getAll(key)])));
+    return assetPageRequest(Object.fromEntries([...params.keys()].map((key) => [key, params.getAll(key)])), schemes.ids);
   };
   // Apply with everything unset yields a bare path and no predicate.
   assert.equal(inventoryPath(view), '/');

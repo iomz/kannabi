@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, redirect } from 'react-router';
 import { api, unwrap } from '../api';
+import { identifierSchemes } from '../../server/gs1';
 import type { AssetPage, Entity } from '../../server/identity-store';
 import { assetFilters, canonicalFilters, type AssetDirection, type AssetScope, type AssetSort }
   from '../../server/asset-page';
@@ -32,7 +33,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     scope: (params.get('scope') ?? 'all') as AssetScope,
     sort: (params.get('sort') ?? 'name') as AssetSort,
     dir: (params.get('dir') ?? 'asc') as AssetDirection,
-    filters: assetFilters(assetQuery(params)),
+    filters: assetFilters(assetQuery(params), identifierSchemes),
   };
   const [page, { groups }] = await Promise.all([
     unwrap(await api.assets.$get({ query: assetQuery(params) },

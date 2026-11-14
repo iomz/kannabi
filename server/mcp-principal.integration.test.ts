@@ -7,6 +7,7 @@ import { DuplicateIdentityError, IdentityStore, ReferenceError as DomainReferenc
 import { assetPageRequest } from './asset-page.js';
 import { PrincipalError, principalAudienceResolver, principalMetaKey } from './mcp-principal.js';
 import { systemAudience } from './asset-audience.js';
+import { schemes } from './composition.js';
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -24,7 +25,7 @@ function asserted(overrides: Record<string, unknown> = {}) {
 test('MCP operations run under an authenticated Kannabi principal', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver);
+  const store = await IdentityStore.open(driver, schemes);
   async function query(cypher: string, params: Record<string, unknown> = {}) {
     const session = driver.session();
     try { return await session.run(cypher, params); } finally { await session.close(); }
@@ -47,7 +48,7 @@ test('MCP operations run under an authenticated Kannabi principal', { skip: !uri
   await store.linkExternalIdentity(alex.key, idp, 'subject-alex');
   const resolve = principalAudienceResolver(store);
   const readable = async (meta: Json) =>
-    (await store.findAssets(await resolve(meta), assetPageRequest({ q: 'camera' })))
+    (await store.findAssets(await resolve(meta), assetPageRequest({ q: 'camera' }, schemes.ids)))
       .assets.map((asset) => asset.id).sort();
 
   await t.test('a linked identity sees exactly what that User may see', async () => {
@@ -58,13 +59,13 @@ test('MCP operations run under an authenticated Kannabi principal', { skip: !uri
   });
 
   await t.test('the same view the web application would give that User', async () => {
-    const throughTheApp = (await store.findAssets(alex.key, assetPageRequest({ q: 'camera' })))
+    const throughTheApp = (await store.findAssets(alex.key, assetPageRequest({ q: 'camera' }, schemes.ids)))
       .assets.map((asset) => asset.id).sort();
     assert.deepEqual(await readable({ [principalMetaKey]: asserted() }), throughTheApp);
   });
 
   await t.test('narrower than the trusted-local process, which still sees everything', async () => {
-    const everything = (await store.findAssets(systemAudience, assetPageRequest({ q: 'camera' })))
+    const everything = (await store.findAssets(systemAudience, assetPageRequest({ q: 'camera' }, schemes.ids)))
       .assets.map((asset) => asset.id).sort();
     assert.deepEqual(everything, [inWorkshop.id, sealed.id, shared.id].sort());
   });
