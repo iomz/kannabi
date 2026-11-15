@@ -46,3 +46,5 @@ export default function Plugins({ loaderData: { contract, plugins } }: Route.Com
     </Panel>)}
   </>;
 }
+
+export { WorkspaceError as ErrorBoundary } from '../route-error';
