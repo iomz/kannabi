@@ -9,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import type { Mailer, MailMessage } from './mail.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const databasePassword = process.env.KANNABI_TEST_NEO4J_PASSWORD;

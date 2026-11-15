@@ -1,5 +1,5 @@
 import './dom.js';
-import { gs1Web } from '../plugins/gs1/web/index.js';
+import { shelfWeb } from './test-web-fixture.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -19,7 +19,7 @@ test('the native Asset URI is the native ID path and is copied complete', () => 
   assert.equal(assetPhotoPath(id, 'photo-key'), `/api/assets/${id}/photos/photo-key`);
 });
 
-test('an Asset with no Digital Link identity shows one URI, labelled plainly', () => {
+test('an Asset with no surfaced address shows one URI, labelled plainly', () => {
   const uri = `${origin}/asset/${newAssetId()}`;
   const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: true, label: null }));
   try {
@@ -32,10 +32,10 @@ test('an Asset with no Digital Link identity shows one URI, labelled plainly', (
   } finally { view.stop(); }
 });
 
-test('a surfaced Digital Link is offered first and the native URI stays reachable', async () => {
+test('a surfaced address is offered first and the native URI stays reachable', async () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
-  const surfacedUri = `${origin}/8004/0614141ASSET-001`;
-  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true, label: gs1Web.surfacedLabel! }));
+  const surfacedUri = `${origin}/tag/T-1`;
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true, label: shelfWeb.surfacedLabel! }));
   try {
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri, nativeUri]);
@@ -43,19 +43,17 @@ test('a surfaced Digital Link is offered first and the native URI stays reachabl
     const copies = [...document.querySelectorAll('button')]
       .map((button) => button.getAttribute('aria-label'))
       .filter((label) => label?.startsWith('Copy'));
-    assert.deepEqual(copies, ['Copy GS1 Digital Link URI', 'Copy Kannabi Asset URI']);
-    // The word the standard reserves for the id.gs1.org form is never
-    // claimed for either of these.
-    assert.doesNotMatch(view.text(), /canonical Asset URI|canonical GS1 Digital Link URI for/);
+    assert.deepEqual(copies, ['Copy Shelf tag address URI', 'Copy Kannabi Asset URI']);
+    // Neither address is called canonical: that is not Kannabi's word to give.
+    assert.doesNotMatch(view.text(), /canonical Asset URI/);
     // What Kannabi does and does not claim about the address is worth reading
     // once, so it waits behind the heading's help rather than standing under
     // every visit. It has to be reachable without a mouse.
-    const help = view.button('About GS1 Digital Link')!;
+    const help = view.button('About Shelf tag address')!;
     assert.ok(help, 'the explanation has an affordance of its own');
     // Opened by activating it, which is what people do with a question mark.
     await settle(() => help.click());
-    assert.match(document.body.textContent ?? '', /Kannabi resolves this URI to this Asset/);
-    assert.match(document.body.textContent ?? '', /Canonical GS1 Digital Link URIs use the/);
+    assert.match(document.body.textContent ?? '', /Kannabi resolves this address to this Asset/);
     await settle(() => help.click());
 
     const native = view.button('About the Kannabi Asset URI')!;
@@ -74,20 +72,20 @@ test('the copy control hands over the exact value it displays', async () => {
 
 test('the native Asset URI follows the instance Kannabi ID setting', () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
-  const surfacedUri = `${origin}/8004/0614141ASSET-001`;
-  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: false, label: gs1Web.surfacedLabel! }));
+  const surfacedUri = `${origin}/tag/T-1`;
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: false, label: shelfWeb.surfacedLabel! }));
   try {
-    // The Digital Link is surfaced exactly as before.
+    // The plugin's address is surfaced exactly as before.
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri]);
-    assert.match(view.text(), /GS1 Digital Link/);
+    assert.match(view.text(), /Shelf tag address/);
     // The UUIDv7 does not appear anywhere, which is the point of the setting.
     assert.doesNotMatch(view.text(), /Kannabi Asset URI/);
     assert.equal(view.text().includes(nativeUri), false);
   } finally { view.stop(); }
 });
 
-test('with the setting off and no Digital Link, no address is put in front of a person', () => {
+test('with the setting off and no surfaced address, no address is put in front of a person', () => {
   const uri = `${origin}/asset/${newAssetId()}`;
   const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: false, label: null }));
   try {

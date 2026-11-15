@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { connectPlugins } from './plugin.js';
-import { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
@@ -10,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -26,7 +25,6 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver, composition);
   const plugins = connectPlugins(composition, store);
-  const gs1 = new Gs1Store(store);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
@@ -263,7 +261,7 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
       { name: 'Owner bench 6' })).json()).asset.provenance.basis, null);
     // Identifier attachment and bodyless detachment carry it the same way.
     const attached = await call(`/assets/${ownedAsset}/identifiers`, 'POST',
-      { scheme: 'gtin', gtin: '0614141123452' }, { 'X-Kannabi-Basis': 'erp:equipment:4567' });
+      { scheme: 'model', series: 'bench' }, { 'X-Kannabi-Basis': 'erp:equipment:4567' });
     assert.equal(attached.status, 201);
     const attachedAsset = (await attached.json()).asset;
     assert.equal(attachedAsset.provenance.basis, 'erp:equipment:4567');
@@ -437,19 +435,4 @@ test('API token authentication, authority and provenance', { skip: !uri || !pass
     await query("MATCH (s:Settings {key: 'instance'}) SET s.peopleDirectory = 'everyone'");
   });
 
-  await t.test('allocation authority stays independent of the asserting credential', async () => {
-    const namespace = await gs1.configureGs1Namespace(people.owner.key, ownerGroup, { gcp: '0991122' });
-    const call = bearer(adminSecret);
-    const allocated = await call(`/gs1/assets/${ownedAsset}/giai`, 'POST', { namespaceKey: namespace.key },
-      { 'X-Kannabi-Basis': 'depot:assets:900' });
-    assert.equal(allocated.status, 200);
-    const { asset, issuances } = await allocated.json();
-    // The ledger records the authorizing User, never the credential, and the
-    // credential appears only where it belongs.
-    assert.equal(issuances.length, 1);
-    assert.equal(issuances[0].scheme, 'giai');
-    assert.deepEqual(issuances[0].allocatedBy, attribution(people.owner, 'active'));
-    assert.equal(asset.provenance.assertedBy.label, 'Admin automation');
-    assert.equal(asset.provenance.basis, 'depot:assets:900');
-  });
 });

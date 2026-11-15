@@ -13,7 +13,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import { createMcpServer } from './mcp-tools.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;

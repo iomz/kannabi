@@ -1,7 +1,4 @@
 import './dom.js';
-
-/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
-const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -9,7 +6,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { AssetView } from '../web/asset-view.js';
 import { mount } from './dom-render.js';
 import { newAssetId } from './asset-id.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
+import { tag } from './test-fixture.js';
 
 /** What the Asset page puts first.
  *
@@ -18,7 +15,7 @@ import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
  * asserted here rather than left to whoever edits the render next.
  */
 
-const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '0614141ASSET-1' });
+const tagged = tag('T-1');
 const id = newAssetId();
 const loaderData = {
   asset: {
@@ -26,11 +23,11 @@ const loaderData = {
     groups: [{ key: 'workshop', name: 'Workshop' }],
     reportedBy: { key: 'alex', name: 'Alex', status: 'active' as const },
     reportedAt: '2026-01-01T00:00:00Z',
-    identifiers: [{ key: 'i1', ...giai }], photos: [], issuances: [],
+    identifiers: [{ key: 'i1', ...tagged }], photos: [], issuances: [],
   },
   canEdit: true, canViewReporterProfile: false, authenticated: true,
   settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
-  plugins: { gs1: gs1Data }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
+  plugins: { shelf: {} }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
   surfacedUri: `http://127.0.0.1/asset/${id}`,
   controlled: [], canGrant: false,
 };

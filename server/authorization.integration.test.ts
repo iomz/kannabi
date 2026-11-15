@@ -9,7 +9,7 @@ import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -103,8 +103,8 @@ test('local authentication and Group authorization', { skip: !uri || !password }
   });
 
   let groupKey: string;
-  const identifier = { scheme: 'sgtin', gtin: '00614141123452', serial: '001/a%?' };
-  const canonical = '(01)00614141123452(21)001/a%?';
+  const identifier = { scheme: 'tag', code: 'T-1' };
+  const canonical = 'tag:T-1';
   // The canonical native Asset path, assigned when the Asset is reported.
   let assetPath = '';
   let reportedAt: string;
@@ -164,18 +164,18 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     // Identifier mutation is Group-authorized like every other Asset change, and
     // submitting an identifier never grants access to the Asset carrying it.
     const attachPath = assetPath + '/identifiers';
-    assert.equal((await stranger.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141STRANGER' })).status, 404);
-    assert.equal((await anonymous.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141ANON' })).status, 401);
-    const attached = await member.request(attachPath, 'POST', { scheme: 'giai', assetReference: '0614141MEMBER-1' });
+    assert.equal((await stranger.request(attachPath, 'POST', { scheme: 'tag', code: 'T-90' })).status, 404);
+    assert.equal((await anonymous.request(attachPath, 'POST', { scheme: 'tag', code: 'T-91' })).status, 401);
+    const attached = await member.request(attachPath, 'POST', { scheme: 'tag', code: 'T-2' });
     assert.equal(attached.status, 201, await attached.clone().text());
     const identifiers = (await attached.json()).asset.identifiers as { key: string; canonical: string; level: string }[];
-    assert.deepEqual(identifiers.map((i) => i.canonical).sort(), [canonical, '(8004)0614141MEMBER-1']);
+    assert.deepEqual(identifiers.map((i) => i.canonical).sort(), [canonical, 'tag:T-2']);
     // A stranger who learns the identifier still cannot reach or edit the Asset.
     assert.equal((await stranger.request(assetPath)).status, 404);
-    const giaiKey = identifiers.find((i) => i.canonical === '(8004)0614141MEMBER-1')!.key;
-    assert.equal((await stranger.request(attachPath + '/' + giaiKey, 'DELETE')).status, 404);
-    assert.equal((await anonymous.request(attachPath + '/' + giaiKey, 'DELETE')).status, 401);
-    const detached = await member.request(attachPath + '/' + giaiKey, 'DELETE');
+    const attachedKey = identifiers.find((i) => i.canonical === 'tag:T-2')!.key;
+    assert.equal((await stranger.request(attachPath + '/' + attachedKey, 'DELETE')).status, 404);
+    assert.equal((await anonymous.request(attachPath + '/' + attachedKey, 'DELETE')).status, 401);
+    const detached = await member.request(attachPath + '/' + attachedKey, 'DELETE');
     assert.equal(detached.status, 200);
     assert.deepEqual((await detached.json()).asset.identifiers.map((i: { canonical: string }) => i.canonical), [canonical]);
   });
@@ -223,71 +223,12 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.equal((await anonymous.request(assetPath)).status, 404);
   });
 
-  await t.test('GIAI allocation is Group-authorized and idempotent over the API', async () => {
-    // Configuring a prefix takes being a Group Manager of the managing Group;
-    // outsiders cannot reach it, and since #20 neither can an ordinary member.
-    assert.equal((await stranger.request(`/gs1/groups/${groupKey}/namespaces`, 'POST', { gcp: '0614141' })).status, 404);
-    assert.equal((await anonymous.request(`/gs1/groups/${groupKey}/namespaces`, 'POST', { gcp: '0614141' })).status, 401);
-    assert.equal((await member.request(`/gs1/groups/${groupKey}/namespaces`, 'POST', { gcp: '0614141' })).status, 404,
-      'membership alone is no longer namespace authority');
-    // The Group's creator manages it and promotes the member, which is how
-    // authority is obtained; the rest of this test then proceeds as before.
-    assert.equal((await reporter.request(`/groups/${groupKey}/members/${people[1].key}`, 'PATCH', { role: 'manager' })).status, 200);
-    const configured = await member.request(`/gs1/groups/${groupKey}/namespaces`, 'POST',
-      { gcp: '0614141', giaiExclusions: [{ from: 1, to: 4 }] });
-    assert.equal(configured.status, 201, await configured.clone().text());
-    const namespace = (await configured.json()).namespace;
-    assert.equal(namespace.gcp, '0614141');
-    assert.deepEqual(namespace.counters.giai.exclusions, [{ from: 1, to: 4 }]);
-    // One managed GCP belongs to one Group, so the same prefix cannot be
-    // claimed twice.
-    assert.equal((await member.request(`/gs1/groups/${groupKey}/namespaces`, 'POST', { gcp: '0614141' })).status, 409);
-    assert.equal((await member.request(`/gs1/groups/${groupKey}/namespaces`, 'POST', { gcp: '06141A1' })).status, 400);
-
-    const allocatePath = '/gs1' + assetPath + '/giai';
-    assert.equal((await anonymous.request(allocatePath, 'POST', { namespaceKey: namespace.key })).status, 401);
-    assert.equal((await stranger.request(allocatePath, 'POST', { namespaceKey: namespace.key })).status, 404);
-    const allocated = await member.request(allocatePath, 'POST', { namespaceKey: namespace.key });
-    assert.equal(allocated.status, 200, await allocated.clone().text());
-    const allocation = (await allocated.json()).issuances[0];
-    // Exclusions are honoured, and provenance is derived from the ledger rather
-    // than from any flag on the identifier itself.
-    assert.equal(allocation.sequence, 5);
-    assert.equal(allocation.canonical, '(8004)06141415');
-    assert.equal(allocation.scheme, 'giai');
-    // A GIAI is allocated straight from the prefix, so it names no class key.
-    assert.equal(allocation.classKeyCanonical, null);
-    assert.equal(allocation.allocatedForAssetId, assetPath.slice('/assets/'.length));
-    // Public provenance matches reportedBy: attribution, not an internal key,
-    // and nothing private rides along with it.
-    assert.deepEqual(Object.keys(allocation.allocatedBy).sort(), ['key', 'name', 'status']);
-    assert.deepEqual(allocation.allocatedBy, attribution(people[1], 'active'));
-    for (const field of ['email', 'role', 'password']) {
-      assert.equal(field in allocation.allocatedBy, false, field);
-    }
-    const identifiers = (await (await member.request(assetPath)).json()).asset.identifiers;
-    assert.ok(identifiers.some((identifier: { canonical: string }) => identifier.canonical === '(8004)06141415'));
-    assert.ok(identifiers.every((identifier: Record<string, unknown>) => !('origin' in identifier)));
-    // Repeating returns the same issuance.
-    const repeated = await member.request(allocatePath, 'POST', { namespaceKey: namespace.key });
-    assert.deepEqual((await repeated.json()).issuances[0], allocation);
-
-    // Deactivation is Group-scoped too, and blocks only new issuance.
-    assert.equal((await stranger.request(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
-    assert.equal((await member.request(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 200);
-    assert.equal((await member.request(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: 'no' })).status, 400);
-    assert.deepEqual((await (await member.request('/gs1' + assetPath + '/issuances')).json()).issuances[0], allocation);
-    assert.equal((await member.request(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: true })).status, 200);
-    // Anonymous readers of a public Asset see provenance but get no controls.
-    assert.deepEqual((await (await stranger.request('/gs1/namespaces')).json()).namespaces, []);
-  });
-
   await t.test('identity lookup answers only over the readable set and never enumerates', async () => {
     const id = assetPath.slice('/assets/'.length);
     const lookup = (caller: typeof member, params: Record<string, string>) =>
       caller.request('/assets/lookup?' + new URLSearchParams(params));
 
-    // Digital Link resolution uses lookup as the public audience. Anonymous
+    // Address resolution uses lookup as the public audience. Anonymous
     // callers may ask, but this private Asset stays indistinguishable from a
     // missing identity; allowing lookup never broadens the readable set.
     for (const params of [{ id }, identifier]) {
@@ -315,7 +256,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
     assert.equal(strangerById.status, strangerAbsentId.status);
     assert.deepEqual(await strangerById.json(), { ...await strangerAbsentId.json(), identity: { kind: 'assetId', id } });
     const strangerByIdentifier = await lookup(stranger, identifier);
-    const strangerAbsent = await lookup(stranger, { scheme: 'sgtin', gtin: '4901234567894', serial: 'never-used' });
+    const strangerAbsent = await lookup(stranger, { scheme: 'tag', code: 'T-404' });
     assert.equal(strangerByIdentifier.status, strangerAbsent.status);
     for (const response of [strangerByIdentifier, strangerAbsent]) {
       const body = await response.json();
@@ -325,8 +266,8 @@ test('local authentication and Group authorization', { skip: !uri || !password }
 
     // Malformed input is a validation error, not a probe result, and it never
     // depends on whether anything exists.
-    for (const params of [{}, { id: 'not-an-id' }, { id, scheme: 'sgtin' },
-      { scheme: 'sgtin', gtin: '0614141123452' }, { q: 'Bench instrument' }]) {
+    for (const params of [{}, { id: 'not-an-id' }, { id, scheme: 'tag' },
+      { scheme: 'tag' }, { q: 'Bench instrument' }]) {
       assert.equal((await lookup(member, params as Record<string, string>)).status, 400, JSON.stringify(params));
     }
     // Lookup grants nothing: the stranger still cannot read or edit the Asset.
@@ -359,14 +300,13 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       // A third of these carry no external identifier at all, so pagination is
       // exercised without any identifier-cardinality assumption.
       const identifiers = i % 3 === 0 ? []
-        : i % 3 === 1 ? [{ scheme: 'grai', assetType: '0614141234561', serial: 'p' + String(i).padStart(3, '0') }]
-          : [{ scheme: 'sgtin', gtin: '00614141123452', serial: 'page-' + String(i).padStart(3, '0') },
-            { scheme: 'gtin', gtin: '00614141123452' }];
+        : i % 3 === 1 ? [{ scheme: 'tag', code: 'T-1' + String(i).padStart(3, '0') }]
+          : [{ scheme: 'tag', code: 'T-2' + String(i).padStart(3, '0') }, { scheme: 'model', series: 'twin' }];
       await store.reportAsset({ name: i < 103 ? 'Inventory Twin' : 'Inventory Other', identifiers }, context);
     }
     const foreignGroup = await store.createReportingGroup('Foreign', people[2].key);
     for (const serial of ['hidden', 'visible']) {
-      const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial };
+      const identifier = { scheme: 'tag' as const, code: serial === 'hidden' ? 'T-3001' : 'T-3002' };
       const reported = await store.reportAsset({ name: 'Inventory Twin', identifiers: [identifier] },
         { actorKey: people[2].key, groupKey: foreignGroup.key });
       if (serial === 'visible') await store.updateAsset(reported.id, { isPublic: true }, people[2].key);
@@ -400,7 +340,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(page.matching, 104);
       assert.ok(page.assets.length > 0 && page.assets.length <= 17);
       for (const asset of page.assets) {
-        assert.ok(!asset.identifiers.some((i: { canonical: string }) => i.canonical.endsWith('hidden')));
+        assert.ok(!asset.identifiers.some((i: { canonical: string }) => i.canonical === 'tag:T-3001'));
         identities.push(asset.id);
       }
       cursor = page.nextCursor;

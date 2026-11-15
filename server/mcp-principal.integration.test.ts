@@ -7,7 +7,7 @@ import { DuplicateIdentityError, IdentityStore, ReferenceError as DomainReferenc
 import { assetPageRequest } from './asset-page.js';
 import { PrincipalError, principalAudienceResolver, principalMetaKey } from './mcp-principal.js';
 import { systemAudience } from './asset-audience.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
@@ -177,7 +177,8 @@ test('MCP operations run under an authenticated Kannabi principal', { skip: !uri
     .filter((entry): entry is [string, string] => entry[1] !== undefined));
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ['--import', 'tsx', 'server/mcp.ts'],
+    // The server process is composed with the fixture plugin, as this test is.
+    args: ['--import', 'tsx', '--import', './server/test-composition.mjs', 'server/mcp.ts'],
     env: { ...environment, NEO4J_URI: uri!, NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: password!,
       KANNABI_MCP_AUDIENCE: 'principal' },
     stderr: 'pipe',

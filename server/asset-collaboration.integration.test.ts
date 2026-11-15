@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { connectPlugins } from './plugin.js';
-import { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
@@ -11,7 +10,7 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { assetPageRequest } from './asset-page.js';
 import { ApiTokenService } from './api-token.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -21,7 +20,6 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
   t.after(() => driver.close());
   const store = await IdentityStore.open(driver, composition);
   const plugins = connectPlugins(composition, store);
-  const gs1 = new Gs1Store(store);
   await admitSignups(driver);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
@@ -99,24 +97,6 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
     }
   });
 
-  await t.test('B collaboration never grants A namespace authority', async () => {
-    // Configured by bridge, which holds both membership and control of A.
-    // aOnly and dual are members of A without controlling it, so since #20 they
-    // hold no authority over what A manages — asserted below rather than left
-    // as an accident of which actor this line happens to use.
-    const namespace = await gs1.configureGs1Namespace(bridge.key, a.key, { gcp: '0614141' });
-    assert.equal((await bOnly.call(`/gs1${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 404);
-    assert.equal((await bOnly.call(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
-    assert.equal((await bOnly.call(`/gs1/groups/${a.key}/namespaces`, 'POST', { gcp: '9521234' })).status, 404);
-    // Sharing an Asset with B never lends A's authority, and neither does
-    // membership of A on its own.
-    assert.equal((await dual.call(`/gs1${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 404,
-      'membership of the managing Group is no longer sufficient without its control');
-    assert.equal((await aOnly.call(`/gs1/namespaces/${namespace.key}`, 'PATCH', { active: false })).status, 404);
-    assert.equal((await bridge.call(`/gs1${path}/giai`, 'POST', { namespaceKey: namespace.key })).status, 200,
-      'membership and control of the managing Group, which also collaborates');
-  });
-
   await t.test('bearer grants record credential and basis; owner authority remains live', async () => {
     const tokenResponse = await bridge.call('/api-tokens', 'POST', { label: 'Collaboration automation', lifetimeDays: 30 });
     assert.equal(tokenResponse.status, 201, await tokenResponse.clone().text());
@@ -145,14 +125,13 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
     assert.equal(current.reportedBy.status, 'deleted');
   });
 
-  await t.test('revoke target requires its control, keeps other access, and does not erase ledger', async () => {
+  await t.test('revoke target requires its control and keeps other access', async () => {
     assert.equal((await bOnly.call(edge(a.key), 'DELETE')).status, 404);
     assert.deepEqual(await (await bridge.call(edge(b.key), 'DELETE')).json(), { changed: true });
     assert.deepEqual(await (await bridge.call(edge(b.key), 'DELETE')).json(), { changed: false });
     assert.equal((await bOnly.call(path)).status, 404);
     assert.equal((await bOnly.call(path, 'PATCH', { name: 'Denied' })).status, 404);
     assert.equal((await dual.call(path)).status, 200);
-    assert.ok((await gs1.issuedAsset(asset.id, dual.key))?.issuances.length);
     assert.equal((await bridge.call(edge(a.key), 'DELETE')).status, 409);
     await store.updateAsset(asset.id, { isPublic: true }, bridge.key);
     assert.equal((await bridge.call(edge(a.key), 'DELETE')).status, 409);
@@ -184,12 +163,6 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
   });
 
   await t.test('writes waiting behind revocation recheck access before changing anything', async () => {
-    // bOnly is a member of B but not a Group Manager, so since #20 it holds no
-    // authority over what B manages. bridge manages B and promotes it, which is
-    // how authority is obtained; this test is about writes racing a
-    // revocation, not about who may configure.
-    await store.setMemberRole(bridge.key, b.key, bOnly.key, 'manager');
-    const namespace = await gs1.configureGs1Namespace(bOnly.key, b.key, { gcp: '9521234' });
     const target = await store.reportAsset({ name: 'Revocation race' }, { actorKey: bridge.key, groupKey: a.key });
     await store.setAssetCollaboration(target.id, bridge.key, b.key, true);
     const session = driver.session();
@@ -198,8 +171,7 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
       await tx.run('MATCH (a:Asset {id: $id}) SET a.lock = true', { id: target.id });
       const writes = [
         store.updateAsset(target.id, { name: 'Must not commit' }, bOnly.key),
-        store.attachIdentifier(target.id, bOnly.key, { scheme: 'giai', assetReference: '0614141RACE' }),
-        gs1.issueKey(target.id, bOnly.key, 'giai', { namespaceKey: namespace.key }),
+        store.attachIdentifier(target.id, bOnly.key, { scheme: 'tag', code: 'T-1' }),
         store.setAssetCollaboration(target.id, bridge.key, b.key, false),
       ].map((promise) => promise.then(() => null, (error: unknown) => error));
       // Observe actual blocked transactions, rather than assuming a timeout
@@ -209,7 +181,7 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
         const waiting = await query(`SHOW TRANSACTIONS YIELD currentQuery, status
           WHERE currentQuery CONTAINS 'SET a.lock = true' AND status STARTS WITH 'Blocked'
           RETURN count(*) AS waiting`);
-        if (waiting.records[0].get('waiting').toNumber() >= 4) break;
+        if (waiting.records[0].get('waiting').toNumber() >= 3) break;
         assert.ok(Date.now() < deadline, 'writes must wait for the Asset lock');
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
@@ -217,12 +189,11 @@ test('multi-Group collaboration is explicit bilateral management, never ownershi
         { key: b.key, id: target.id });
       await tx.commit();
       const results = await Promise.all(writes);
-      assert.ok(results.slice(0, 3).every((error) => error instanceof AccessError));
-      assert.equal(results[3], null, 'authorized duplicate revoke is a no-op');
-      const unchanged = await gs1.issuedAsset(target.id, bridge.key);
+      assert.ok(results.slice(0, 2).every((error) => error instanceof AccessError));
+      assert.equal(results[2], null, 'authorized duplicate revoke is a no-op');
+      const unchanged = await store.getAsset(target.id, bridge.key);
       assert.equal(unchanged?.name, 'Revocation race');
       assert.equal(unchanged?.identifiers.length, 0);
-      assert.deepEqual(unchanged?.issuances, []);
     } finally { await tx.close(); await session.close(); }
   });
 

@@ -11,6 +11,9 @@ import { test } from 'node:test';
  * nowhere else: the composition file imports the server's generated list, and
  * the entry points that start a process import that file and nothing else of
  * a plugin's.
+ *
+ * Tests are held to the same line: a core test imports no plugin either, and
+ * runs against the fixture plugin beside it.
  */
 const composition = 'server/composition.ts';
 const generated = 'server/plugins.generated.ts';
@@ -46,6 +49,16 @@ test('core imports no plugin', () => {
   assert.deepEqual(found, {});
 });
 
+test('a core test imports no plugin', () => {
+  const found: Record<string, string[]> = {};
+  for (const entry of readdirSync('server')) {
+    if (!/\.test\.tsx?$/.test(entry)) continue;
+    const plugins = imports(join('server', entry)).filter(inPlugin);
+    if (plugins.length) found[entry] = plugins;
+  }
+  assert.deepEqual(found, {});
+});
+
 test('the generated list is the only place the server names a plugin', () => {
   // Which plugins are listed is a deployment's choice, so this holds the
   // shape and not the names: the composition file reaches plugins only
@@ -53,18 +66,6 @@ test('the generated list is the only place the server names a plugin', () => {
   // and nothing deeper.
   assert.deepEqual(imports(composition), ['server/plugin', 'server/plugins.generated']);
   for (const target of imports(generated).filter(inPlugin)) assert.match(target, /^plugins\/[a-z][a-z0-9-]*\/index$/);
-});
-
-test('the GS1 toolkit imports nothing of Kannabi', () => {
-  // The toolkit is GS1 as Kannabi needs it, and stands without Kannabi: it
-  // refuses with its own error, and the adapter beside it is where that
-  // becomes a Kannabi validation error.
-  const found: Record<string, string[]> = {};
-  for (const path of sources('plugins/gs1/toolkit')) {
-    const outside = imports(path).filter((target) => !target.startsWith('plugins/gs1/toolkit/'));
-    if (outside.length) found[path] = outside;
-  }
-  assert.deepEqual(found, {});
 });
 
 test('the web client names a plugin only where it is composed', () => {

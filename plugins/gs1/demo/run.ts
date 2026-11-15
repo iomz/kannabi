@@ -1,13 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { Gs1Store } from '../../plugins/gs1/adapter/store.js';
+import { Gs1Store } from '../adapter/store.js';
 import neo4j from 'neo4j-driver';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand, GetBucketVersioningCommand } from '@aws-sdk/client-s3';
-import { IdentityStore } from '../../server/identity-store.js';
-import { composition } from '../../server/composition.js';
-import { emptyAssetFilters } from '../../server/asset-page.js';
-import { createAuth } from '../../server/auth.js';
-import { S3Storage } from '../../server/storage.js';
-import { MediaService } from '../../server/media.js';
+import { IdentityStore } from '../../../server/identity-store.js';
+import { composition } from '../../../server/composition.js';
+import { emptyAssetFilters } from '../../../server/asset-page.js';
+import { createAuth } from '../../../server/auth.js';
+import { S3Storage } from '../../../server/storage.js';
+import { MediaService } from '../../../server/media.js';
 import { demoAccounts, demoAdministrators, demoAllocations, demoAssets, demoDiscoverable, demoMembers,
   demoGravatarAccounts, demoGroupMembers, demoGroups, demoNamespaces, demoOwners, demoPassword,
   demoScopes, evaluatorScopes } from './fixtures.js';

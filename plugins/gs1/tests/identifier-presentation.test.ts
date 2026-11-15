@@ -1,11 +1,11 @@
-import './dom.js';
+import '../../../server/dom.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { IdentifierList } from '../web/asset-identifiers.js';
-import { issuedStanding } from '../plugins/gs1/web/asset-page.js';
-import { mount } from './dom-render.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
+import { IdentifierList } from '../../../web/asset-identifiers.js';
+import { issuedStanding } from '../web/asset-page.js';
+import { mount } from '../../../server/dom-render.js';
+import { canonicalIdentifier } from '../toolkit/gs1.js';
 
 const recorded = canonicalIdentifier({ scheme: 'giai', assetReference: '024' });
 const issued = canonicalIdentifier({ scheme: 'giai', assetReference: '061414112' });

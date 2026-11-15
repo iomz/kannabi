@@ -3,14 +3,18 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import neo4j from 'neo4j-driver';
 import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { listed } from './plugins.mjs';
 import { availableParallelism } from 'node:os';
 
 const exec = promisify(execFile);
-// Core's suites live in server/, and each plugin keeps its own beside the code
-// they exercise. A suite is named by its path from the repository root.
-const suites = ['server', 'plugins'].flatMap((root) => readdirSync(root, { recursive: true })
-  .filter((file) => file.endsWith('.integration.test.ts')).map((file) => `${root}/${file}`)).sort();
+// Core's suites live in server/, and each plugin the list names keeps its own
+// beside the code they exercise. A suite is named by its path from the
+// repository root.
+const suites = ['server', ...listed(process.cwd()).map((id) => `plugins/${id}`)]
+  .flatMap((root) => readdirSync(root, { recursive: true })
+    .filter((file) => file.endsWith('.integration.test.ts') && !file.includes('node_modules'))
+    .map((file) => `${root}/${file}`)).sort();
 const selected = process.argv.slice(2);
 if (selected.some((file) => !suites.includes(file))) {
   throw new Error('Pass integration test paths, such as server/users.integration.test.ts');
@@ -63,9 +67,10 @@ async function runSuite(testFile) {
     // Suites that put bytes through the photo routes need object storage. The
     // rest do not, and starting a container for them would make every run slower
     // for nothing.
-    const needsObjectStorage = ['server/media.integration.test.ts', 'server/demo.integration.test.ts',
-      'server/corpus-load.integration.test.ts'];
-    if (needsObjectStorage.includes(testFile)) {
+    // A suite that puts bytes through object storage reads S3_ENDPOINT and
+    // skips without it. Asking the suite, rather than keeping a list of paths,
+    // means one that moves or is added is never skipped by omission.
+    if (readFileSync(testFile, 'utf8').includes('S3_ENDPOINT')) {
       await exec('docker', ['run', '--rm', '-d', '--name', name + '-s3', '-p', '127.0.0.1::8080',
         '-e', 'ADMIN_PASSWORD=' + password, '-e', 'JWT=' + randomUUID() + randomUUID(),
         '-e', 'DEFAULT_ACCESS_KEY=' + name, '-e', 'DEFAULT_SECRET_KEY=' + password,

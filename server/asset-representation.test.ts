@@ -7,10 +7,9 @@ import { createInventoryApi } from './inventory-api.js';
 import { createMcpServer } from './mcp-tools.js';
 import { noPlugins, type Plugins } from './plugin.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 import type { Auth } from './auth.js';
 import type { Asset, IdentityStore } from './identity-store.js';
-import { composition } from './composition.js';
+import { composition, model, tag } from './test-fixture.js';
 const { schemes } = composition;
 
 /** The representation is only worth having if its structure carries the
@@ -19,8 +18,8 @@ const { schemes } = composition;
  * one place. */
 
 const reporter = { key: 'user-1', name: 'Alex Demo', status: 'active' as const };
-const gtin = canonicalIdentifier({ scheme: 'gtin', gtin: '04901234567894' });
-const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '06141415' });
+const described = model('camera');
+const tagged = tag('T-5');
 /** What a decade-old record might say, kept as an awkward composite: a dated
  * purchase, a supplier, a loan, a room, CRLF, a tab and non-ASCII text. */
 const description = 'Purchased 2015-11-02 from Example Trading.\r\nLent to Lab B (2018).\t保管: 402号室';
@@ -28,10 +27,10 @@ const description = 'Purchased 2015-11-02 from Example Trading.\r\nLent to Lab B
 const populated: Asset = Object.freeze({
   id: '0198c2a0-0000-7000-8000-000000000001',
   name: 'Spectrum analyser',
-  identifiers: [{ key: 'i1', ...gtin, attachment: {
+  identifiers: [{ key: 'i1', ...described, attachment: {
     acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:01.000Z',
     assertedBy: { id: 'token-1', label: 'legacy loader' }, basis: 'legacy:assetcats:42' } },
-  { key: 'i2', ...giai, attachment: null }],
+  { key: 'i2', ...tagged, attachment: null }],
   reportedBy: reporter,
   reportedAt: '2026-06-22T00:00:00.000Z',
   provenance: { acceptedBy: reporter, acceptedAt: '2026-06-23T00:00:00.000Z',
@@ -47,7 +46,7 @@ const populated: Asset = Object.freeze({
 /** An Asset as one written before provenance existed would read: everything
  * optional is absent. */
 const sparse: Asset = Object.freeze({
-  ...populated, id: '0198c2a0-0000-7000-8000-000000000002', identifiers: [{ key: 'i3', ...gtin, attachment: null }],
+  ...populated, id: '0198c2a0-0000-7000-8000-000000000002', identifiers: [{ key: 'i3', ...described, attachment: null }],
   provenance: null, sourceRecord: null, owner: null, isPublic: false, photos: [],
 });
 
@@ -63,14 +62,14 @@ const json = (value: unknown) => JSON.parse(JSON.stringify(value));
 
 /** What an installed plugin states about the populated Asset. Its instants
  * are the plugin's own acts, stated under the plugin's own key. */
-const extensions = { gs1: { issued: [{ scheme: 'giai', value: giai.canonical,
+const extensions = { shelf: { printed: [{ value: tagged.canonical,
   at: '2026-06-23T00:00:00.000Z', by: reporter }] } };
 
 test('every instant is either an act in Kannabi or what a source says', () => {
   // The only places an instant can be. Each is the `at` of something Kannabi
   // did, or the source's own recordedAt: there is no slot an acquisition,
   // loan or other physical event could occupy, so none can be read as one.
-  const kannabiClock = /^(kannabi\.(reported|lastChange)\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at|extensions\.gs1\.issued\[\]\.at)$/;
+  const kannabiClock = /^(kannabi\.(reported|lastChange)\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at|extensions\.shelf\.printed\[\]\.at)$/;
   const instants = leaves(json(assetRecord(populated, schemes, extensions)))
     .filter(([, value]) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value));
   assert.ok(instants.length >= 6);
@@ -178,8 +177,8 @@ const store = {
 } as unknown as IdentityStore;
 const anonymous = { api: { getSession: async () => null } } as unknown as Auth;
 const origin = 'http://localhost:3000';
-/** The GS1 plugin's section, as the composed plugin would supply it. */
-const plugins: Plugins = { ...noPlugins, sections: async (asset) => (asset.id === populated.id ? extensions : { gs1: { issued: [] } }) };
+/** A plugin's section, as a composed plugin would supply it. */
+const plugins: Plugins = { ...noPlugins, sections: async (asset) => (asset.id === populated.id ? extensions : { shelf: { printed: [] } }) };
 const api = createInventoryApi(store, anonymous, origin, undefined, undefined, undefined, plugins);
 
 test('the HTTP API and MCP return the same record', async (t) => {

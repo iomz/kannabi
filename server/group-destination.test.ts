@@ -8,7 +8,6 @@ import Overview, { clientAction as overviewAction, clientLoader as overviewLoade
   controllerSummary } from '../web/routes/group-overview.js';
 import Assets, { clientLoader as assetsLoader } from '../web/routes/group-assets.js';
 import People, { clientAction as peopleAction, clientLoader as peopleLoader } from '../web/routes/group-people.js';
-import Prefixes, { clientAction as prefixesAction, clientLoader as prefixesLoader } from '../plugins/gs1/web/group-prefixes.js';
 import { GroupViewError } from '../web/group-destination.js';
 import { mount, settle } from './dom-render.js';
 
@@ -24,9 +23,6 @@ const person = (key: string, name: string, role: Role = 'member', email: string 
   ({ key, name, status: 'active', email, role });
 const me = person('me', 'Alex Demo', 'manager');
 const group = { key: 'g1', name: 'Demo Workshop' };
-const counter = { nextSequence: 1, exclusions: [] };
-const namespace = { key: 'ns', gcp: '4512345', active: true, group, classKeyIssuable: true,
-  unissuableReason: null, gtinFormat: 'GTIN-13', counters: { giai: counter, graiType: counter, gtinItem: counter } };
 const asset = (n: number) => ({ id: `01a12000-0000-7000-8000-00000000000${n}`,
   name: `Bench ${n}`, isPublic: false, owner: null, photos: [], issuances: [], identifiers: [], groups: [group],
   reportedBy: person('u2', 'Mira Castell'), reportedAt: `2026-09-2${n}T00:00:00.000Z` });
@@ -73,8 +69,6 @@ function serve(world: World) {
         matching: world.matching, total: world.matching, matchedFields: {},
         scopes: { all: world.matching, mine: 0, group: 0, public: 0 }, nextCursor: null });
     }
-    if (path === '/api/gs1/namespaces') return json({ namespaces: member ? [namespace] : [] });
-    if (path === '/api/gs1/namespaces/ns/class-keys') return json({ classKeys: [] });
     world.after?.(method, path);
     if (method === 'POST' && path === '/api/groups/g1/members') return json({ ok: true, added: true });
     return json({ changed: true });
@@ -100,8 +94,6 @@ function open(path: string) {
           ErrorBoundary: GroupViewError },
         { path: 'people', Component: routeComponent(People as never), loader: peopleLoader as never,
           action: peopleAction as never, ErrorBoundary: GroupViewError },
-        { path: 'prefixes', Component: routeComponent(Prefixes as never), loader: prefixesLoader as never,
-          action: prefixesAction as never, ErrorBoundary: GroupViewError },
       ] },
     { path: '/groups', element: createElement('h1', null, 'Groups list') },
     { path: '/users/:key', element: createElement('h1', null, 'Profile') },
@@ -142,7 +134,7 @@ const base: World = { role: 'manager', members: roster, matching: 23 };
 
 test('somebody outside a Group and an unknown Group get the same single answer, on every view', async (t) => {
   t.after(() => { globalThis.fetch = originalFetch; });
-  for (const path of ['/groups/g1', '/groups/g1/assets', '/groups/g1/people', '/groups/g1/prefixes']) {
+  for (const path of ['/groups/g1', '/groups/g1/assets', '/groups/g1/people']) {
     serve({ ...base, role: null });
     const page = open(path);
     try {
@@ -163,7 +155,7 @@ test('every member gets the same addressable views, and the header names their o
     try {
       await loaded();
       assert.equal(heading(), 'Demo Workshop');
-      assert.deepEqual(navLabels(), ['Overview', 'Assets', 'People', 'GS1 prefixes']);
+      assert.deepEqual(navLabels(), ['Overview', 'Assets', 'People']);
       const current = document.querySelector('nav[aria-label="Group"] [aria-current="page"]');
       assert.equal(current?.getAttribute('href'), '/groups/g1/people');
       const header = document.querySelector('h1')!.parentElement!.parentElement!.textContent!;
@@ -185,7 +177,6 @@ test('Overview says who manages the Group, how many are in it, and leaving warns
     assert.equal(dd('Managed by'), 'Rin Aoki · 3 people');
     assert.equal(dt('Managed by')!.nextElementSibling!.querySelector('a')?.getAttribute('href'), '/groups/g1/people');
     assert.match(dd('Assets')!, /You can read 23 Assets through this Group/);
-    assert.match(dd('GS1 Company Prefixes')!, /4512345/);
     assert.ok(document.querySelector('dt:last-of-type')?.textContent === 'Group key', 'the key comes last');
     page.view.click(page.view.button('Leave Group'));
     await settle();
@@ -417,18 +408,4 @@ test('Add people, where the directory is shared Groups only: the member key, and
     assert.equal(document.querySelector('[role="alert"]')?.textContent,
       'You no longer manage this Group, so this change was not made.');
   } finally { page.stop(); }
-});
-
-test('GS1 prefixes: every member reads them, and only a Group Manager is offered a change', async (t) => {
-  t.after(() => { globalThis.fetch = originalFetch; });
-  for (const role of ['member', 'manager'] as const) {
-    serve({ ...base, role });
-    const page = open('/groups/g1/prefixes');
-    try {
-      await loaded();
-      assert.match(document.body.textContent!, /4512345/);
-      assert.equal(Boolean(page.view.button('Configure prefix')), role === 'manager', role);
-      assert.equal(Boolean(page.view.button('Deactivate')), role === 'manager', role);
-    } finally { page.stop(); }
-  }
 });

@@ -4,16 +4,11 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createMcpServer, serverInfo } from './mcp-tools.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 import { ValidationError } from './identity.js';
 import type { Asset, AssetLookup, AssetPage, IdentityStore } from './identity-store.js';
-import type { Gs1LedgerPage, Gs1Store } from '../plugins/gs1/adapter/store.js';
-import { gs1Mcp } from '../plugins/gs1/adapter/mcp.js';
-import { issuedSection } from '../plugins/gs1/adapter/section.js';
-import { gs1Plugin } from '../plugins/gs1/index.js';
 import { noPlugins, type Plugins } from './plugin.js';
 import type { AudienceInput } from './asset-audience.js';
-import { composition } from './composition.js';
+import { composition, model, shelfMcp, shelfPlugin, tag } from './test-fixture.js';
 const { schemes } = composition;
 
 /** These tests exercise the agent-facing contract — tool discovery, schemas,
@@ -23,8 +18,6 @@ const { schemes } = composition;
 const workshop = { key: 'group-workshop', name: 'Demo Workshop' };
 const studio = { key: 'group-studio', name: 'Shared Studio' };
 const reporter = { key: 'user-1', name: 'Alex Demo', status: 'active' as const };
-const gcp = '0614141';
-
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
     id, name, identifiers: [], reportedBy: reporter,
@@ -33,10 +26,10 @@ function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset 
   });
 }
 
-const cameraGtin = canonicalIdentifier({ scheme: 'gtin', gtin: '04901234567894' });
-const issuedGiai = canonicalIdentifier({ scheme: 'giai', assetReference: gcp + '5' });
-/** Textually under the managed prefix, but never issued by Kannabi. */
-const lookalikeGiai = canonicalIdentifier({ scheme: 'giai', assetReference: gcp + 'DEMO-004' });
+/** A class-level identifier two Assets share, and an individual one each. */
+const cameraModel = model('camera');
+const cameraTag = tag('T-5');
+const microscopeTag = tag('T-4');
 
 /** What a pre-existing record says about itself. The quoted instant is years
  * before `reportedAt`, and the quoted name matches no User, so a projection
@@ -48,8 +41,8 @@ const quoted = {
   description: 'Bench camera\r\nS/N 0042',
 };
 
-/** How the GTIN came to be attached, as the store projects it. */
-const cameraGtinAttachment = {
+/** How the model came to be attached, as the store projects it. */
+const cameraModelAttachment = {
   acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:01.000Z',
   assertedBy: { id: 'token-1', label: 'Depot importer' }, basis: 'depot:assetcats:42',
 };
@@ -59,36 +52,14 @@ const changeProvenance = {
 
 const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera · Bench 001', {
   sourceRecord: quoted, provenance: changeProvenance,
-  identifiers: [{ key: 'i1', ...cameraGtin, attachment: cameraGtinAttachment },
-    { key: 'i2', ...issuedGiai, attachment: null }],
+  identifiers: [{ key: 'i1', ...cameraModel, attachment: cameraModelAttachment },
+    { key: 'i2', ...cameraTag, attachment: null }],
   photos: [{ key: 'p1', contentType: 'image/png', size: 1024, createdAt: '2026-06-22T00:00:00.000Z' }],
 });
-/** What the GS1 plugin's ledger holds for the camera. Not part of the Asset:
- * core issues nothing, so the plugin states it in its own section. */
-const cameraIssuance = {
-  key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
-  classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
-  allocatedForAssetId: '0198c2a0-0000-7000-8000-000000000001', allocatedBy: reporter,
-};
 const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection microscope · Studio 011', {
-  identifiers: [{ key: 'i3', ...cameraGtin, attachment: null }, { key: 'i4', ...lookalikeGiai, attachment: null }],
+  identifiers: [{ key: 'i3', ...cameraModel, attachment: null }, { key: 'i4', ...microscopeTag, attachment: null }],
   groups: [studio], isPublic: true,
 });
-/** An issuance whose value has since been detached from its Asset. */
-const detached = asset('0198c2a0-0000-7000-8000-000000000003', 'Signal generator · Field 007');
-
-const namespace = Object.freeze({
-  key: 'namespace-1', gcp, active: true,
-  counters: {
-    giai: { nextSequence: 7, exclusions: [{ from: 1, to: 4 }] },
-    graiType: { nextSequence: 1, exclusions: [] },
-    gtinItem: { nextSequence: 1, exclusions: [] },
-  },
-  classKeyIssuable: true, unissuableReason: null, gtinFormat: 'GTIN-12' as const,
-  group: workshop, configuredAt: '2026-06-20T00:00:00.000Z',
-  configuredBy: reporter.key,
-});
-
 type Call = { method: string; audience: AudienceInput; request?: unknown };
 
 function recordingStore(calls: Call[]) {
@@ -102,8 +73,8 @@ function recordingStore(calls: Call[]) {
     async lookupAssets(audience: AudienceInput, request: unknown): Promise<AssetLookup> {
       calls.push({ method: 'lookupAssets', audience, request });
       return Object.freeze({
-        identity: Object.freeze({ kind: 'identifier' as const, canonical: cameraGtin.canonical,
-          scheme: cameraGtin.scheme, level: cameraGtin.level }),
+        identity: Object.freeze({ kind: 'identifier' as const, canonical: cameraModel.canonical,
+          scheme: cameraModel.scheme, level: cameraModel.level }),
         assets: [camera, microscope], matching: 2, nextCursor: null,
       });
     },
@@ -118,44 +89,22 @@ function recordingStore(calls: Call[]) {
       calls.push({ method: 'listGroups', audience });
       return [workshop, studio];
     },
-    async listGs1Namespaces(audience: AudienceInput) {
-      calls.push({ method: 'listGs1Namespaces', audience });
-      return [namespace];
-    },
-    async gs1Issuances(audience: AudienceInput, request: unknown): Promise<Gs1LedgerPage> {
-      calls.push({ method: 'gs1Issuances', audience, request });
-      return Object.freeze({
-        namespace,
-        matching: 2,
-        entries: [
-          Object.freeze({ issuance: cameraIssuance, asset: camera }),
-          Object.freeze({
-            issuance: { key: 'issuance-2', scheme: 'giai' as const,
-              canonical: '(8004)' + gcp + '6', gcp, sequence: 6, classKeyCanonical: null,
-              allocatedAt: '2026-06-24T00:00:00.000Z',
-              allocatedForAssetId: detached.id, allocatedBy: reporter },
-            asset: detached,
-          }),
-        ],
-        nextCursor: null,
-      });
-    },
   };
   return store as unknown as IdentityStore;
 }
 
-/** The GS1 plugin as composed, over the same recorded store: its tools, its
- * instructions and its section of the Asset record. */
-function gs1Installed(store: IdentityStore): Plugins {
-  return { ...noPlugins, manifests: [gs1Plugin.manifest], mcp: [gs1Mcp(store as unknown as Gs1Store)],
-    sections: async (asset) => ({ gs1: issuedSection(asset.id === camera.id ? [cameraIssuance] : []) }) };
+/** The fixture plugin as composed: its tool, its instructions and its section
+ * of the Asset record. */
+function shelfInstalled(seen: (audience: unknown) => void = () => {}): Plugins {
+  return { ...noPlugins, manifests: [shelfPlugin.manifest], mcp: [shelfMcp(seen)],
+    sections: async (asset) => ({ shelf: { tagged: asset.identifiers.some((identifier) => identifier.scheme === 'tag') } }) };
 }
 
 async function connect(store: IdentityStore) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
   await Promise.all([
-    createMcpServer(store, systemAudienceResolver(), gs1Installed(store)).connect(serverTransport),
+    createMcpServer(store, systemAudienceResolver(), shelfInstalled()).connect(serverTransport),
     client.connect(clientTransport),
   ]);
   return client;
@@ -176,8 +125,7 @@ test('the MCP tool surface is discoverable and read-only', async (t) => {
 
   await t.test('exposes exactly the Kannabi domain tools', () => {
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
-      'get_asset', 'list_groups', 'list_gs1_issuances', 'list_gs1_namespaces',
-      'list_managed_class_keys',
+      'get_asset', 'list_groups', 'list_shelf_models',
       'resolve_external_identifier', 'search_assets',
     ]);
   });
@@ -241,9 +189,9 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
 
   await t.test('a class identifier resolves to several Assets and says so', async () => {
     const lookup = structured(await client.callTool({ name: 'resolve_external_identifier',
-      arguments: { scheme: 'gtin', gtin: '04901234567894' } }));
+      arguments: { scheme: 'model', series: 'camera' } }));
     const identity = lookup.identity as Record<string, unknown>;
-    assert.equal(identity.canonical, cameraGtin.canonical);
+    assert.equal(identity.canonical, cameraModel.canonical);
     assert.equal(identity.level, 'class');
     assert.match(String(identity.levelMeaning), /may address several/);
     assert.equal(lookup.matching, 2);
@@ -251,7 +199,7 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
 
   await t.test('an unusable identifier is a tool error, not an empty result', async () => {
     const rejected = await client.callTool({ name: 'resolve_external_identifier',
-      arguments: { scheme: 'gtin', gtin: 'not-a-gtin' } }) as { isError?: boolean };
+      arguments: { scheme: 'model', series: 'Not A Model' } }) as { isError?: boolean };
     assert.equal(rejected.isError, true);
     assert.equal(calls.filter((call) => call.method === 'lookupAssets').length, 1,
       'an invalid identifier must not reach the store');
@@ -264,7 +212,7 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     const record = found.asset as Record<string, any>;
     assert.deepEqual(record.kannabi.reported, { at: camera.reportedAt, by: reporter });
     assert.equal(record.kannabi.photos.length, 1);
-    assert.equal(record.identifiers[0].accepted.policy, cameraGtin.policyVersion);
+    assert.equal(record.identifiers[0].accepted.policy, cameraModel.policyVersion);
     assert.ok(record.identifiers.every((identifier: { components: unknown }) => identifier.components));
 
     const missing = structured(await client.callTool({ name: 'get_asset',
@@ -298,16 +246,16 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     const found = structured(await client.callTool({ name: 'get_asset',
       arguments: { assetId: camera.id } }));
     const record = found.asset as Record<string, any>;
-    const gtin = record.identifiers.find((identifier: { value: string }) => identifier.value === cameraGtin.canonical);
-    const giai = record.identifiers.find((identifier: { value: string }) => identifier.value === issuedGiai.canonical);
-    assert.deepEqual(gtin.accepted, { at: cameraGtinAttachment.acceptedAt, by: reporter,
-      via: cameraGtinAttachment.assertedBy, basis: cameraGtinAttachment.basis, policy: cameraGtin.policyVersion });
+    const described = record.identifiers.find((identifier: { value: string }) => identifier.value === cameraModel.canonical);
+    const tagged = record.identifiers.find((identifier: { value: string }) => identifier.value === cameraTag.canonical);
+    assert.deepEqual(described.accepted, { at: cameraModelAttachment.acceptedAt, by: reporter,
+      via: cameraModelAttachment.assertedBy, basis: cameraModelAttachment.basis, policy: cameraModel.policyVersion });
     // An association recorded before Kannabi kept this says so, not "nobody".
-    assert.equal(giai.accepted, null);
+    assert.equal(tagged.accepted, null);
     assert.deepEqual(record.kannabi.lastChange, { at: changeProvenance.acceptedAt, by: reporter,
       via: null, basis: null });
-    // Issued is Kannabi's ledger, apart from the identifiers it merely holds.
-    assert.deepEqual(record.extensions.gs1.issued.map((issued: { value: string }) => issued.value), [issuedGiai.canonical]);
+    // What a plugin states sits in its own section, apart from what Kannabi holds.
+    assert.deepEqual(record.extensions, { shelf: { tagged: true } });
   });
 
   await t.test('a malformed Asset ID never reaches the store', async () => {
@@ -319,83 +267,19 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
   });
 });
 
-test('allocation provenance is reported from the issuance ledger', async (t) => {
-  const calls: Call[] = [];
-  const client = await connect(recordingStore(calls));
-  t.after(() => client.close());
-
-  await t.test('namespaces describe the authority Kannabi claims', async () => {
-    const listed = structured(await client.callTool({ name: 'list_gs1_namespaces', arguments: {} }));
-    const namespaces = listed.namespaces as Record<string, unknown>[];
-    assert.equal(namespaces[0].namespaceKey, namespace.key);
-    assert.equal(namespaces[0].gcp, gcp);
-    assert.deepEqual(namespaces[0].group, workshop);
-    const counters = namespaces[0].counters as Record<string, Record<string, unknown>>;
-    assert.deepEqual(counters.giai.excludedReferences, [{ from: 1, to: 4 }]);
-    // Three counters, never one: a GTIN and a GRAI asset type made of the same
-    // digits are different keys and must not share a sequence.
-    assert.deepEqual(Object.keys(counters).sort(), ['giai', 'graiType', 'gtinItem']);
-    assert.deepEqual(Object.keys(namespaces[0]).sort(), ['active', 'classKeyIssuable',
-      'configuredAt', 'counters', 'gcp', 'group', 'gtinFormat', 'namespaceKey',
-      'unissuableReason'].sort());
-  });
-
-  await t.test('the allocation counter is never presented as a count of issuances', async () => {
-    // The counter advances past excluded references too, so 7 here means two
-    // issuances and four skipped numbers. Only the ledger may be counted.
-    const listed = structured(await client.callTool({ name: 'list_gs1_namespaces', arguments: {} }));
-    assert.equal(((listed.namespaces as Record<string, unknown>[])[0]
-      .counters as Record<string, Record<string, unknown>>).giai.nextSequence, 7);
-    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
-      arguments: { namespaceKey: namespace.key } }));
-    assert.equal(ledger.matching, 2);
-  });
-
-  await t.test('issuances bind a value to an Asset and report attachment separately', async () => {
-    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
-      arguments: { namespaceKey: namespace.key } }));
-    const issuances = ledger.entries as Record<string, unknown>[];
-    assert.equal(issuances.length, 2);
-    assert.equal(issuances[0].assetId, camera.id);
-    assert.equal(issuances[0].stillAttached, true);
-    // Issued for this Asset, since detached: the ledger still names it.
-    assert.equal(issuances[1].assetId, detached.id);
-    assert.equal(issuances[1].stillAttached, false);
-  });
-
-  await t.test('an Asset whose GIAI only shares the prefix is not an issuance', async () => {
-    const ledger = structured(await client.callTool({ name: 'list_gs1_issuances',
-      arguments: { namespaceKey: namespace.key } }));
-    const issuances = ledger.entries as { assetId: string }[];
-    assert.ok(microscope.identifiers.some((identifier) =>
-      identifier.canonical.includes(gcp)), 'the fixture must share the prefix textually');
-    assert.ok(!issuances.some((issuance) => issuance.assetId === microscope.id));
-  });
-
-  await t.test('an unusable namespace key never reaches the store', async () => {
-    const before = calls.filter((call) => call.method === 'gs1Issuances').length;
-    const rejected = await client.callTool({ name: 'list_gs1_issuances',
-      arguments: { namespaceKey: '   ' } }) as { isError?: boolean };
-    assert.equal(rejected.isError, true);
-    assert.equal(calls.filter((call) => call.method === 'gs1Issuances').length, before);
-  });
-});
-
 test('every tool reads under the accepted system-wide audience', async (t) => {
   const calls: Call[] = [];
   const client = await connect(recordingStore(calls));
   t.after(() => client.close());
   for (const [name, args] of [
     ['search_assets', {}],
-    ['resolve_external_identifier', { scheme: 'gtin', gtin: '04901234567894' }],
+    ['resolve_external_identifier', { scheme: 'model', series: 'camera' }],
     ['get_asset', { assetId: camera.id }],
     ['list_groups', {}],
-    ['list_gs1_namespaces', {}],
-    ['list_gs1_issuances', { namespaceKey: namespace.key }],
   ] as const) {
     await client.callTool({ name, arguments: args });
   }
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 4);
   for (const call of calls) {
     assert.deepEqual(call.audience, { kind: 'system' },
       `${call.method} did not read under the system audience`);
@@ -447,9 +331,6 @@ const compositions = [
   { from: 'get_asset', field: 'asset.id', to: 'get_asset', argument: 'assetId' },
   { from: 'resolve_external_identifier', field: 'nextCursor', to: 'resolve_external_identifier', argument: 'cursor' },
   { from: 'list_groups', field: 'groups[].key', to: 'search_assets', argument: 'groupKeys' },
-  { from: 'list_gs1_namespaces', field: 'namespaces[].namespaceKey', to: 'list_gs1_issuances', argument: 'namespaceKey' },
-  { from: 'list_gs1_issuances', field: 'entries[].assetId', to: 'get_asset', argument: 'assetId' },
-  { from: 'list_gs1_issuances', field: 'nextCursor', to: 'list_gs1_issuances', argument: 'cursor' },
 ] as const;
 
 /** Fields an agent cannot use correctly by guessing at the name alone. */
@@ -460,9 +341,7 @@ const mustBeDocumented = [
   ['resolve_external_identifier', 'identity.levelMeaning'], ['resolve_external_identifier', 'assets'],
   ['get_asset', 'found'], ['get_asset', 'asset.id'], ['get_asset', 'asset.identifiers[].accepted'],
   ['get_asset', 'asset.kannabi.lastChange'],
-  ['list_gs1_namespaces', 'namespaces[].counters'],
-  ['list_gs1_issuances', 'entries[].stillAttached'], ['list_gs1_issuances', 'matching'],
-  ['list_gs1_issuances', 'entries[].issuance.canonical'],
+  ['list_shelf_models', 'models'],
 ] as const;
 
 test('the interface stays composable and self-describing', async (t) => {
@@ -501,7 +380,7 @@ test('the interface stays composable and self-describing', async (t) => {
     const components = schemaAt(tool('search_assets').outputSchema, 'assets[].identifiers[].components');
     assert.ok(components, 'search results no longer carry identifier components');
     const accepted = Object.keys(tool('resolve_external_identifier').inputSchema?.properties ?? {});
-    for (const field of ['gtin', 'serial', 'assetType', 'assetReference']) {
+    for (const field of ['code', 'series']) {
       assert.ok(accepted.includes(field), `resolve_external_identifier no longer accepts ${field}`);
     }
   });
@@ -526,7 +405,7 @@ test('the interface stays composable and self-describing', async (t) => {
     for (const section of ['kannabi.reported.at', 'source.says', 'notRecorded']) {
       assert.ok(stated.includes(section), `the instructions never name ${section}`);
     }
-    assert.match(stated, /storing an identifier is not issuing it/i);
+    assert.match(stated, /records identifiers and issues none/i);
     assert.match(stated, /not filtered by any Kannabi User's permissions/i);
     for (const forbidden of ['claude', 'chatgpt', 'levitate', 'openai', 'cypher']) {
       assert.ok(!stated.toLowerCase().includes(forbidden),
