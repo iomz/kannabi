@@ -1,5 +1,5 @@
 import { index, route, type RouteConfig } from '@react-router/dev/routes';
-import { gs1GroupRoutes, gs1Routes } from '../plugins/gs1/web/routes';
+import { pluginGroupRoutes, pluginRoutes } from './routes.generated';
 
 export default [
   index('routes/home.tsx'),
@@ -9,9 +9,8 @@ export default [
   route('reset-password', 'routes/reset-password.tsx'),
   route('assets/report', 'routes/report.tsx'),
   route('asset/:id', 'routes/asset.tsx'),
-  // The installed plugins' own routes. Beside `web/plugins.ts`, this file is
-  // the only place the web client names a plugin.
-  ...gs1Routes,
+  // The installed plugins' own routes, taken from the generated list.
+  ...pluginRoutes,
   route('lookup', 'routes/lookup.tsx'),
   route('help', 'routes/help.tsx'),
   route('groups', 'routes/groups.tsx'),
@@ -22,7 +21,7 @@ export default [
     index('routes/group-overview.tsx'),
     route('assets', 'routes/group-assets.tsx'),
     route('people', 'routes/group-people.tsx'),
-    ...gs1GroupRoutes,
+    ...pluginGroupRoutes,
   ]),
   route('profile', 'routes/profile.tsx'),
   route('people', 'routes/people.tsx'),

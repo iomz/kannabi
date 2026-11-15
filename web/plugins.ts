@@ -1,11 +1,11 @@
 import { installed } from './plugin';
-import { gs1Web } from '../plugins/gs1/web/index';
+import { plugins } from './plugins.generated';
 
-/** The one file that says which plugins the web client is built with.
+/** The plugins the web client is built with.
  *
- * It mirrors `server/composition.ts`: a Kannabi with a different set of
- * plugins is this file and that one with different lines, plus the plugin
- * routes named in `web/routes.ts`, and one with none is `installed([])`.
- * Everything else in the web client asks this value and imports no plugin.
+ * It mirrors `server/composition.ts`: `plugins.generated.ts` and
+ * `routes.generated.ts` are the list `pnpm plugins:compose` reads, written out
+ * as ordinary imports, and they are the only files in the web client that
+ * name a plugin. Everything else asks this value and imports no plugin.
  */
-export const web = installed([gs1Web]);
+export const web = installed(plugins);

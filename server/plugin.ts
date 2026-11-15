@@ -9,9 +9,10 @@ import type { Asset, IdentityStore } from './identity-store.js';
 /** The contract between Kannabi core and a plugin.
  *
  * A plugin is a capability that one deployment has and another wholly lacks.
- * Composition is static: `composition.ts` names the installed plugins, and a
- * deployment without one is that file without it. There is no discovery, no
- * runtime loading and no enable flag.
+ * Composition is static: the plugin list is written out as
+ * `plugins.generated.ts`, which `composition.ts` composes, and a deployment
+ * without a plugin is that list without it. There is no discovery, no runtime
+ * loading and no enable flag.
  *
  * A plugin adds and never overrides. Nothing here lets one replace or skip
  * authorization, provenance, the Asset access predicate or the Origin guard:

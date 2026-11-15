@@ -5,9 +5,9 @@ import { assetPath } from '../shared/asset-uri';
  *
  * The server's contract is `server/plugin.ts`; this is its counterpart for a
  * single-page build, whose routes and modules are fixed when it is built.
- * Composition is static here too: `web/plugins.ts` names the installed
- * plugins, `web/routes.ts` takes their routes, and no other file in the web
- * client imports a plugin.
+ * Composition is static here too: the generated `web/plugins.generated.ts`
+ * names the installed plugins, `web/routes.generated.ts` takes their routes,
+ * and no other file in the web client imports a plugin.
  *
  * A slot with no contributor renders nothing. A plugin's screens use the same
  * theme tokens, vendored primitives and shared compositions as core's, and
@@ -91,7 +91,7 @@ export type AssetPageSlot<Data = unknown> = Readonly<{
 }>;
 
 /** A line in a Group's overview and, optionally, a view of its own. The view's
- * route is contributed through `web/routes.ts`. */
+ * route is contributed through the plugin's own `web/routes.ts`. */
 export type GroupSlot<Data = unknown> = Readonly<{
   view?: Readonly<{ path: string; label: string }>;
   overview?: Readonly<{

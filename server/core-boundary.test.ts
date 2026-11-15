@@ -6,12 +6,14 @@ import { test } from 'node:test';
 /** Which way imports may run between Kannabi core and its plugins.
  *
  * Core is everything under `server/`. A plugin lives under `plugins/<id>/`
- * and may import core; core imports no plugin. The one exception is the
- * composition file, whose whole job is to name the installed plugins, and
+ * and may import core; core imports no plugin. The installed plugins are
+ * named in files `pnpm plugins:compose` generates from the plugin list, and
+ * nowhere else: the composition file imports the server's generated list, and
  * the entry points that start a process import that file and nothing else of
  * a plugin's.
  */
 const composition = 'server/composition.ts';
+const generated = 'server/plugins.generated.ts';
 const entryPoints = ['server/index.ts', 'server/mcp.ts', 'server/link-identity.ts'];
 
 function sources(directory: string): string[] {
@@ -35,7 +37,7 @@ test('core imports no plugin', () => {
   const found: Record<string, string[]> = {};
   for (const path of sources('server')) {
     const reached = imports(path);
-    if (path === composition) continue;
+    if (path === composition || path === generated) continue;
     assert.ok(entryPoints.includes(path) || !reached.includes('server/composition'),
       `${path} imports the composition file; core takes what was composed as a value`);
     const plugins = reached.filter(inPlugin);
@@ -44,8 +46,13 @@ test('core imports no plugin', () => {
   assert.deepEqual(found, {});
 });
 
-test('the composition file is the only place a plugin is named', () => {
-  assert.deepEqual(imports(composition).filter(inPlugin), ['plugins/gs1/index']);
+test('the generated list is the only place the server names a plugin', () => {
+  // Which plugins are listed is a deployment's choice, so this holds the
+  // shape and not the names: the composition file reaches plugins only
+  // through the generated list, and that list imports a plugin's definition
+  // and nothing deeper.
+  assert.deepEqual(imports(composition), ['server/plugin', 'server/plugins.generated']);
+  for (const target of imports(generated).filter(inPlugin)) assert.match(target, /^plugins\/[a-z][a-z0-9-]*\/index$/);
 });
 
 test('the GS1 toolkit imports nothing of Kannabi', () => {
@@ -61,16 +68,17 @@ test('the GS1 toolkit imports nothing of Kannabi', () => {
 });
 
 test('the web client names a plugin only where it is composed', () => {
-  // `web/plugins.ts` says which plugins the client is built with, and
-  // `web/routes.ts` takes their routes. Every other module asks the composed
-  // value, so a build without a plugin is those two files with fewer lines.
+  // The two generated files say which plugins the client is built with and
+  // take their routes. Every other module asks the composed value, so a build
+  // without a plugin is the same source with a shorter list.
+  const entries: Record<string, RegExp> = {
+    'web/plugins.generated.ts': /^plugins\/[a-z][a-z0-9-]*\/web\/index$/,
+    'web/routes.generated.ts': /^plugins\/[a-z][a-z0-9-]*\/web\/routes$/,
+  };
   const found: Record<string, string[]> = {};
   for (const path of sources('web')) {
-    const plugins = imports(path).filter(inPlugin);
+    const plugins = imports(path).filter(inPlugin).filter((target) => !entries[path]?.test(target));
     if (plugins.length) found[path] = plugins;
   }
-  assert.deepEqual(found, {
-    'web/plugins.ts': ['plugins/gs1/web/index'],
-    'web/routes.ts': ['plugins/gs1/web/routes'],
-  });
+  assert.deepEqual(found, {});
 });
