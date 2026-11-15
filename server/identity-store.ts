@@ -743,7 +743,7 @@ export class IdentityStore {
     const unroled = Number(result.records[0].get('unroled'));
     if (control || unroled) {
       throw new Error(`Group data predates Group roles (${control} control grants, ${unroled} memberships without a role); `
-        + 'reseed this development database with `pnpm demo:reset`');
+        + 'it is not migrated, so recreate this development database');
     }
   }
 

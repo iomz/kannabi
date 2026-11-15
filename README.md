@@ -254,7 +254,7 @@ New Assets are private, and there are no direct User-to-Asset ACLs.
 
 Everybody in a Group is a member, and each has one role in it: **Member**, or **Group Manager** — a member who also looks after the Group itself, its people and its GS1 Company Prefixes.
 There is no managing a Group without belonging to it, and no role outlives its membership.
-The store keeps the role on the membership (`MEMBER_OF {role: 'member' | 'manager'}`), and startup refuses Group data recorded any other way: a development database from before roles is reseeded with `pnpm demo:reset`.
+The store keeps the role on the membership (`MEMBER_OF {role: 'member' | 'manager'}`), and startup refuses Group data recorded any other way: a development database from before roles is not migrated and has to be recreated.
 
 | In a Group, you can | As a Member | As a Group Manager |
 | --- | --- | --- |

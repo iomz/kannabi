@@ -163,6 +163,27 @@ test('sync refuses a directory that is not a clone, a clone of another repositor
   assert.throws(() => sync(root), /"v9" names no commit/);
 });
 
+test('a fresh sync replaces a copy of a fetched plugin, and leaves a kept one alone', (t) => {
+  const source = repository(t);
+  const root = checkout(t, { plugins: [{ id: 'kept' }, { id: 'fetched', repository: source, ref: 'v0.1.0' }] });
+  plugin(root, 'kept');
+  // A fetched plugin copied without its git data, as an image build sees it.
+  plugin(root, 'fetched');
+  writeFileSync(join(root, 'plugins/fetched/index.ts'), 'export default { stale: true };\n');
+  assert.throws(() => sync(root), /exists and is not a clone/);
+  assert.deepEqual(sync(root, () => {}, { fresh: true }).plugins, ['kept', 'fetched']);
+  assert.match(read(root, 'plugins/fetched/index.ts'), /version: 1/);
+  assert.equal(existsSync(join(root, 'plugins/kept/.git')), false);
+  assert.match(read(root, 'plugins/kept/index.ts'), /export default \{\}/);
+});
+
+test('sync refuses an option it does not know', (t) => {
+  const root = checkout(t, { plugins: [] });
+  const result = spawnSync(process.execPath, [script, 'sync', '--force'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown option --force/);
+});
+
 test('sync leaves a plugin kept in the checkout alone', (t) => {
   const root = checkout(t, { plugins: [{ id: 'kept' }] });
   plugin(root, 'kept');

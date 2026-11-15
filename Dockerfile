@@ -6,10 +6,12 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 # A deployment's plugin list names the plugins to build in. Fetching them
 # needs git, which the build stage has no other use for; a build with no list
-# is Kannabi core and fetches nothing.
+# is Kannabi core and fetches nothing. The context may hold copies of fetched
+# plugins from a local sync, without their git data, so each is fetched
+# afresh at its pinned ref; a plugin kept in the checkout is used as copied.
 RUN if [ -f kannabi.plugins.json ]; then \
       apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
-      && rm -rf /var/lib/apt/lists/* && pnpm plugins:sync; \
+      && rm -rf /var/lib/apt/lists/* && node scripts/plugins.mjs sync --fresh; \
     fi
 RUN pnpm build && pnpm prune --prod
 

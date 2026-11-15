@@ -7,7 +7,7 @@
 # service name, so start the main stack first:
 #
 #   docker compose up -d --wait neo4j alarik
-#   pnpm demo:seed                       # first run only
+#   # first run only: load some Assets, such as the GS1 plugin's demo dataset
 #   docker compose --env-file .env --env-file docker/.env \
 #     -f docker/levitate.compose.yml up -d --build --wait
 #

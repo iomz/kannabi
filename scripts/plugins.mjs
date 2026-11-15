@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Which plugins this Kannabi is built with, and where each comes from.
@@ -20,6 +20,10 @@ import { join } from 'node:path';
  *
  *   node scripts/plugins.mjs compose   write the three generated composition files
  *   node scripts/plugins.mjs sync      fetch every listed repository, then compose and verify
+ *   node scripts/plugins.mjs sync --fresh
+ *                                      the same, discarding each fetched plugin's directory
+ *                                      first: for an image build, whose context carries
+ *                                      copies of those directories without their git data
  *
  * Composition stays static. Nothing is discovered: a directory under
  * `plugins/` that the list does not name is not built in.
@@ -135,12 +139,18 @@ function commitOf(directory, ref) {
 }
 
 /** Bring every fetched plugin to its pinned ref. A clone with local changes is
- * refused and never overwritten: it may be somebody's work in progress. */
-export function sync(root, log = () => {}) {
+ * refused and never overwritten: it may be somebody's work in progress.
+ *
+ * `fresh` discards each fetched plugin's directory and clones it again. It is
+ * for an image build, where the context holds a copy of a fetched plugin
+ * without its git data; a plugin the list keeps in the checkout, with no
+ * repository, is never touched. */
+export function sync(root, log = () => {}, { fresh = false } = {}) {
   const { file, plugins } = readList(root);
   for (const { id, repository, ref } of plugins) {
     if (repository === undefined) continue;
     const directory = join(root, 'plugins', id);
+    if (fresh) rmSync(directory, { recursive: true, force: true });
     if (!existsSync(directory)) {
       git(root, 'clone', '--quiet', '--no-checkout', '--', repository, directory);
     } else {
@@ -180,11 +190,14 @@ if (process.argv[1] && import.meta.filename === process.argv[1]) {
     if (command === 'compose') {
       compose(process.cwd());
     } else if (command === 'sync') {
-      const { file, plugins } = sync(process.cwd(), (line) => console.log(line));
+      const options = process.argv.slice(3);
+      const unknown = options.find((option) => option !== '--fresh');
+      if (unknown !== undefined) throw new PluginsError(`Unknown option ${unknown}`);
+      const { file, plugins } = sync(process.cwd(), (line) => console.log(line), { fresh: options.includes('--fresh') });
       verify(process.cwd());
       console.log(`Composed from ${file}: ${plugins.join(', ') || 'no plugins'}`);
     } else {
-      throw new PluginsError('Usage: node scripts/plugins.mjs compose | sync');
+      throw new PluginsError('Usage: node scripts/plugins.mjs compose | sync [--fresh]');
     }
   } catch (error) {
     if (!(error instanceof PluginsError)) throw error;
