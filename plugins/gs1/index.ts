@@ -50,3 +50,6 @@ export const gs1Plugin: PluginDefinition<Gs1Store> = Object.freeze({
     });
   },
 });
+
+/** What Kannabi composes: a plugin's `index.ts` default-exports its definition. */
+export default gs1Plugin;

@@ -8,13 +8,13 @@ const here = '../plugins/gs1/web/';
  * reads the raw path rather than these parameters, so the shapes below only
  * have to reserve the right corner of the numeric path space. Adding a
  * qualifier combination later adds a line here and nothing else. */
-export const gs1Routes: RouteConfigEntry[] = [
+export const routes: RouteConfigEntry[] = [
   route('01/:gtin/21/:serial', here + 'digital-link.tsx', { id: 'digital-link-sgtin' }),
   route('8003/:grai', here + 'digital-link.tsx', { id: 'digital-link-grai' }),
   route('8004/:giai', here + 'digital-link.tsx', { id: 'digital-link-giai' }),
 ];
 
 /** A view of a Group's page: the prefixes it manages. */
-export const gs1GroupRoutes: RouteConfigEntry[] = [
+export const groupRoutes: RouteConfigEntry[] = [
   route('prefixes', here + 'group-prefixes.tsx'),
 ];

@@ -632,11 +632,41 @@ A plugin lives under `plugins/<id>/` and contributes to the server through one c
 
 The web client has the counterpart, `web/plugin.ts`: how a plugin's schemes are named and filled in, which addresses an Asset has, a part of the Asset page, a Group view and overview line, a settings section, and routes of its own. A slot with no contributor renders nothing.
 
-Composition is static. `server/composition.ts` names the installed plugins for the server, and `web/plugins.ts` and `web/routes.ts` name them for the web client; a Kannabi with a different set is those three files with different lines, built again. With `plugins/` absent altogether, core's server and web client still typecheck and build; only the demo seed script, which seeds GS1 data, and the tests that exercise GS1 need it. Nothing is discovered, loaded at run time or switched on, and nothing is installed from the web interface: a plugin runs inside Kannabi with the whole database, so whoever can install one can read every Asset, and system administration grants no Asset access. Administration → Plugins lists what an instance was built with and changes nothing.
+Composition is static. The installed plugins are one list, and `pnpm plugins:compose` writes that list out as ordinary imports in three generated files, the only places a plugin is named: `server/plugins.generated.ts` for the server, and `web/plugins.generated.ts` and `web/routes.generated.ts` for the web client. A Kannabi with a different set is a different list, built again. With an empty list, core's server and web client still build; only the demo seed script, which seeds GS1 data, and the tests that exercise GS1 need a plugin. Nothing is discovered, loaded at run time or switched on, and nothing is installed from the web interface: a plugin runs inside Kannabi with the whole database, so whoever can install one can read every Asset, and system administration grants no Asset access. Administration → Plugins lists what an instance was built with and changes nothing.
 
 A plugin adds and never overrides. Its routes sit behind core's authentication and Origin guard, an address it claims is served only to a reader core says may see the Asset, and inside an Asset write it may refuse while core does the writing and stamps the provenance.
 
-The shipped composition installs one plugin, GS1 (`plugins/gs1/`). Its `toolkit/` is GS1 itself as Kannabi needs it; its `adapter/` is what makes that a Kannabi capability. The sections above on GS1 issuance, policy version and Digital Link describe that plugin.
+### Choosing the plugins
+
+The list is `kannabi.plugins.json` at the repository root when that file exists, and `kannabi.plugins.default.json` otherwise.
+The first is a deployment's own, like `.env`, and is never committed; the second is what a plain checkout builds.
+
+```json
+{
+  "plugins": [
+    { "id": "gs1" },
+    { "id": "example", "repository": "https://example.org/kannabi-plugin-example.git", "ref": "v0.1.0" }
+  ]
+}
+```
+
+An entry with no `repository` names a plugin already at `plugins/<id>/`.
+An entry with one is a plugin kept in its own repository, named `kannabi-plugin-<id>` by convention, and is always pinned to a `ref`: a tag, a branch or a commit.
+
+```bash
+pnpm plugins:sync
+```
+
+`plugins:sync` clones each listed repository into `plugins/<id>/` at its ref, writes the generated files, and checks that the set can be composed, so a plugin whose requirement is missing or listed after it is refused before a build.
+It never overwrites a clone that has local changes.
+`pnpm dev`, `typecheck`, `build`, `test` and `test:integration` write the generated files themselves from whatever is in `plugins/`, and fetch nothing.
+
+Order in the list is composition order: a plugin comes after every plugin it requires.
+A directory under `plugins/` that the list does not name is not built in.
+A plugin is source built with Kannabi, not a package: its `index.ts` default-exports its definition, `web/index.tsx` its screens, and `web/routes.ts` exports `routes` and `groupRoutes`.
+It imports Kannabi's modules by relative path, so it is typechecked and tested inside a Kannabi checkout and may use no dependency Kannabi lacks.
+
+The default list installs one plugin, GS1 (`plugins/gs1/`), which is still kept in this repository. Its `toolkit/` is GS1 itself as Kannabi needs it; its `adapter/` is what makes that a Kannabi capability. The sections above on GS1 issuance, policy version and Digital Link describe that plugin.
 
 ## Capability surfaces
 

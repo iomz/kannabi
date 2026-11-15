@@ -55,3 +55,6 @@ export const gs1Web: WebPlugin = {
     Section: Gs1AdminSettings,
   },
 };
+
+/** What the web client composes: `web/index` default-exports the plugin's screens. */
+export default gs1Web;
