@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { connectPlugins } from './plugin.js';
+import { connectPlugins } from '../../../server/plugin.js';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
@@ -9,16 +9,16 @@ import { promisify } from 'node:util';
 import neo4j from 'neo4j-driver';
 import { S3Client, ListObjectsV2Command, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Hono } from 'hono';
-import { IdentityStore } from './identity-store.js';
-import { createAuth } from './auth.js';
-import { createInventoryApi } from './inventory-api.js';
-import { MediaService } from './media.js';
-import { S3Storage } from './storage.js';
-import { assetPageRequest } from './asset-page.js';
-import { runDemo } from '../scripts/demo/run.js';
+import { IdentityStore } from '../../../server/identity-store.js';
+import { createAuth } from '../../../server/auth.js';
+import { createInventoryApi } from '../../../server/inventory-api.js';
+import { MediaService } from '../../../server/media.js';
+import { S3Storage } from '../../../server/storage.js';
+import { assetPageRequest } from '../../../server/asset-page.js';
+import { runDemo } from '../demo/run.js';
 import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoMembers, demoPassword,
-  demoScopes } from '../scripts/demo/fixtures.js';
-import { composition } from './composition.js';
+  demoScopes } from '../demo/fixtures.js';
+import { composition } from '../testing.js';
 const { schemes } = composition;
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -139,7 +139,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     assert.equal(asset.identifiers.length, hidden.identifiers.length);
     await assert.rejects(media.read(hiddenId, asset.photos[0].key, users[0]));
     assert.deepEqual(Buffer.from((await media.read(hiddenId, asset.photos[0].key, users[2])).bytes),
-      await readFile(new URL('../scripts/demo/photos/' + hidden.photo, import.meta.url)));
+      await readFile(new URL('../demo/photos/' + hidden.photo, import.meta.url)));
     for (const key of mediaKeys) {
       const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
       assert.ok((await object.Body!.transformToByteArray()).length > 100);

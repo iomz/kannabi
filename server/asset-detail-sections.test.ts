@@ -1,7 +1,4 @@
 import './dom.js';
-
-/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
-const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -38,7 +35,7 @@ function loaderData(asset: Record<string, unknown> = {}, rest: Record<string, un
     },
     canEdit: true, canViewReporterProfile: false, authenticated: true,
     settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
-    plugins: { gs1: gs1Data }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
+    plugins: { shelf: {} }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
     surfacedUri: `http://127.0.0.1/asset/${id}`,
     controlled: [], canGrant: false, ...rest,
   };
@@ -294,7 +291,7 @@ test('a refused rename keeps the field open, says why, and does not pretend it s
 });
 
 test('adding an identifier is folded away, and is two tabs before it is a form', async () => {
-  const view = render({}, { plugins: { gs1: { ...gs1Data, namespaces: [{ key: 'n', gcp: '0614141' }] } } });
+  const view = render({});
   try {
     const add = [...document.querySelectorAll('summary')]
       .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;
@@ -304,7 +301,7 @@ test('adding an identifier is folded away, and is two tabs before it is a form',
     // Tabs rather than radios beside their own help buttons, which read as
     // four similar round controls.
     const tabs = [...add.querySelectorAll('[role="tab"]')] as HTMLElement[];
-    assert.deepEqual(tabs.map((tab) => tab.textContent?.trim()), ['Issue new', 'Record existing']);
+    assert.deepEqual(tabs.map((tab) => tab.textContent?.trim()), ['Print new', 'Record existing']);
     assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
     assert.equal(add.querySelectorAll('input[type="radio"]').length, 0);
 
@@ -312,28 +309,28 @@ test('adding an identifier is folded away, and is two tabs before it is a form',
     // rather than the whole section: the inactive mode's name is still on its
     // own tab, so a search across the section would find it either way.
     const panel = () => add.querySelector('[role="tabpanel"]')!;
-    assert.match(panel().textContent ?? '', /Issue an identifier under a GS1 Company Prefix namespace/);
-    assert.ok(panel().querySelector('button[type="submit"]'), 'issuing is offered');
+    assert.match(panel().textContent ?? '', /Print a shelf tag for this Asset/);
+    assert.ok(panel().querySelector('button[type="submit"]'), 'the plugin\u2019s way of adding is offered');
     assert.ok(panel().querySelector('select[name="scheme"]') === null,
       'recording is not also open');
 
     await settle(() => tabs[1].click());
     assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
     assert.match(panel().textContent ?? '', /already been assigned outside Kannabi/);
-    assert.ok(!/Issue an identifier under a GS1 Company Prefix/.test(panel().textContent ?? ''),
+    assert.ok(!/Print a shelf tag/.test(panel().textContent ?? ''),
       'the other mode\u2019s explanation went with its panel');
     assert.ok(panel().querySelector('select[name="scheme"]'), 'recording is offered once chosen');
   } finally { view.stop(); }
 });
 
 test('an identifier is not detached until the consequence has been accepted', async () => {
-  const gtin = { key: 'i1', scheme: 'gtin' as const, canonical: '(01)00614141123452',
-    level: 'class' as const, components: { gtin: '00614141123452' }, policyVersion: 'x' };
-  const view = render({ identifiers: [gtin] });
+  const described = { key: 'i1', scheme: 'model' as const, canonical: 'model:drill',
+    level: 'class' as const, components: { series: 'drill' }, policyVersion: 'x' };
+  const view = render({ identifiers: [described] });
   try {
     assert.match(document.body.textContent ?? '', /Recorded IDs/,
       'identifiers are headed once there are some');
-    await settle(() => view.button(/^Detach GTIN/)!.click());
+    await settle(() => view.button(/^Detach Model/)!.click());
     const dialog = document.querySelector('[role="alertdialog"], [role="dialog"]');
     assert.ok(dialog, 'removing an identity asks first');
     assert.match(dialog!.textContent ?? '', /will no longer identify this Asset/);
@@ -376,29 +373,26 @@ test('contextual help opens on a click and stays, and is reachable by keyboard',
   } finally { view.stop(); }
 });
 
-test('a scheme name points at GS1 rather than at a Kannabi explanation', async () => {
-  const sgtin = { key: 'i1', scheme: 'sgtin' as const, canonical: '(01)00614141123452(21)1',
-    level: 'individual' as const,
-    components: { gtin: '00614141123452', serial: '1' }, policyVersion: 'x' };
-  const view = render({ identifiers: [sgtin] });
+test('a scheme name points at whoever defines the scheme rather than at a Kannabi explanation', async () => {
+  const tag = { key: 'i1', scheme: 'tag' as const, canonical: 'tag:T-1',
+    level: 'individual' as const, components: { code: 'T-1' }, policyVersion: 'x' };
+  const view = render({ identifiers: [tag] });
   try {
-    // What an SGTIN is belongs to GS1, so it is a link out, not Kannabi's own
-    // help affordance.
-    assert.equal(view.button('About SGTIN'), null,
-      'a GS1 key definition is not a Kannabi concept');
+    // What a scheme means belongs to whoever defines it, so its name is a
+    // link out, not Kannabi's own help affordance.
+    assert.equal(view.button('About Shelf tag'), null,
+      'a scheme\u2019s definition is not a Kannabi concept');
     const link = [...document.querySelectorAll('a')]
-      .find((anchor) => anchor.textContent?.trim() === 'SGTIN')!;
+      .find((anchor) => anchor.textContent?.trim() === 'Shelf tag')!;
     assert.ok(link, 'the scheme name is the reference');
-    // AI 21 is the association that makes a GTIN serialised; AI 01 alone is a
-    // GTIN, so this is the AI that distinguishes the scheme.
-    assert.equal(link.getAttribute('href'), 'https://ref.gs1.org/ai/21');
+    assert.equal(link.getAttribute('href'), 'https://shelf.example/tag');
     assert.equal(link.getAttribute('target'), '_blank');
     assert.match(link.getAttribute('rel') ?? '', /noopener/);
-    assert.match(link.getAttribute('aria-label') ?? '', /GS1 reference/);
+    assert.match(link.getAttribute('aria-label') ?? '', /Shelf reference/);
     // The one-line orientation stays, stated once.
     const card = link.closest('li')!;
-    assert.match(card.textContent ?? '', /Serialised trade item/);
-    assert.equal(card.textContent?.match(/identifies this Asset/gi)?.length, 1);
+    assert.match(card.textContent ?? '', /A label stuck to one thing/);
+    assert.equal(card.textContent?.match(/A label stuck to one thing/g)?.length, 1);
   } finally { view.stop(); }
 });
 

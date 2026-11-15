@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
-import { connectPlugins } from './plugin.js';
+import { connectPlugins } from '../../../server/plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
 import { Hono } from 'hono';
-import { createAuth } from './auth.js';
-import { IdentityStore } from './identity-store.js';
-import { admitSignups } from './test-admission.js';
-import { createInventoryApi } from './inventory-api.js';
-import { MediaService } from './media.js';
-import { ApiTokenService } from './api-token.js';
-import { storageFromEnv } from './storage.js';
-import { checkDigit } from '../plugins/gs1/toolkit/syntax.js';
-import { composition } from './composition.js';
+import { createAuth } from '../../../server/auth.js';
+import { IdentityStore } from '../../../server/identity-store.js';
+import { admitSignups } from '../../../server/test-admission.js';
+import { createInventoryApi } from '../../../server/inventory-api.js';
+import { MediaService } from '../../../server/media.js';
+import { ApiTokenService } from '../../../server/api-token.js';
+import { storageFromEnv } from '../../../server/storage.js';
+import { checkDigit } from '../toolkit/syntax.js';
+import { composition } from '../testing.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;

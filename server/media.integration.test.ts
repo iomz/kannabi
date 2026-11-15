@@ -12,7 +12,7 @@ import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
 import { createAuth } from './auth.js';
 import { createInventoryApi } from './inventory-api.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -47,7 +47,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   const group = await store.createReportingGroup('Team', user.key);
   await store.addGroupMember(user.key, group.key, member.key);
   const context = { actorKey: user.key, groupKey: group.key };
-  const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'media' };
+  const identifier = { scheme: 'tag' as const, code: 'T-1' };
   const input = { name: 'Camera', identifiers: [identifier] };
   // The native Asset id, assigned by the first successful report below.
   let assetId = '';
@@ -132,7 +132,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     assert.equal(inventory.matching, 1);
     assert.deepEqual(inventory.assets[0].photos, asset.photos);
     assert.deepEqual(inventory.assets[0].identifiers.map((i: { canonical: string }) => i.canonical),
-      ['(01)00614141123452(21)media']);
+      ['tag:T-1']);
     assert.equal(inventory.assets[0].id, assetId);
     const path = `/assets/${assetId}/photos/${key}`;
     assert.equal((await request(path)).status, 200);
@@ -188,7 +188,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
 
   await t.test('optional policy accepts photo-free reports and does not affect existing Assets', async () => {
     await store.updateSettings(user.key, { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default' });
-    const asset = await media.report({ name: 'Optional', identifiers: [{ ...identifier, serial: 'optional' }] }, context);
+    const asset = await media.report({ name: 'Optional', identifiers: [{ ...identifier, code: 'T-2' }] }, context);
     assert.deepEqual(asset.photos, []);
     assert.notEqual(asset.id, assetId);
     await store.updateSettings(user.key, { requirePhoto: true, displayTimezone: 'UTC', themeId: 'default' });
@@ -201,9 +201,9 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
       put: async (key, bytes, mime) => { failedKey = key; await storage.put(key, bytes, mime); throw new Error('Write acknowledgement lost'); },
       get: (key) => storage.get(key), delete: (key) => storage.delete(key),
     };
-    const failedId = { ...identifier, serial: 'failed' };
+    const failedId = { ...identifier, code: 'T-3' };
     await assert.rejects(new MediaService(store, failing).report({ name: 'Failed', identifiers: [failedId] }, context, photo()), /acknowledgement/);
-    assert.equal((await query('MATCH (i:Identifier {serial: $serial}) RETURN i', { serial: 'failed' })).records.length, 0);
+    assert.equal((await query('MATCH (i {canonical: $canonical}) RETURN i', { canonical: 'tag:T-3' })).records.length, 0);
     await assert.rejects(storage.get(failedKey));
     const before = (await store.getAsset(assetId, user.key))!.photos.length;
     await assert.rejects(media.report(input, context, photo()), /already claimed/);

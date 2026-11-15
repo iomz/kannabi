@@ -1,12 +1,12 @@
-import './dom.js';
+import '../../../server/dom.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { IdentifierList } from '../web/asset-identifiers.js';
-import { issuedStanding, IssueIdentifier } from '../plugins/gs1/web/asset-page.js';
-import { mount, settle } from './dom-render.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
+import { IdentifierList } from '../../../web/asset-identifiers.js';
+import { issuedStanding, IssueIdentifier } from '../web/asset-page.js';
+import { mount, settle } from '../../../server/dom-render.js';
+import { canonicalIdentifier } from '../toolkit/gs1.js';
 
 /** What the identifier cards and the issuance controls put in front of a
  * person, read back from a real document. */

@@ -4,8 +4,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp-tools.js';
 import { noPlugins } from './plugin.js';
-import { gs1Mcp } from '../plugins/gs1/adapter/mcp.js';
-import type { Gs1Store } from '../plugins/gs1/adapter/store.js';
+import { shelfMcp } from './test-fixture.js';
 import {
   PrincipalError, principalAudienceResolver, principalFromMeta, principalMetaKey,
   systemAudienceResolver,
@@ -13,7 +12,7 @@ import {
 import { externalIdentityKey, externalPrincipal } from './external-principal.js';
 import type { Asset, AssetPage, IdentityStore, ResolvedUser } from './identity-store.js';
 import type { NamedAudienceInput } from './asset-audience.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 /** The gateway contract, exercised without a database: what Kannabi accepts as
@@ -219,7 +218,7 @@ async function connect(store: IdentityStore, resolver = systemAudienceResolver()
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'principal-test-client', version: '0.0.0' });
   await Promise.all([
-    createMcpServer(store, resolver, { ...noPlugins, mcp: [gs1Mcp(store as unknown as Gs1Store)] })
+    createMcpServer(store, resolver, { ...noPlugins, mcp: [shelfMcp()] })
       .connect(serverTransport),
     client.connect(clientTransport),
   ]);
@@ -244,11 +243,10 @@ test('the audience a tool runs under follows the request', async (t) => {
     for (const [name, args] of [
       ['search_assets', {}],
       ['get_asset', { assetId: '0198c2a0-0000-7000-8000-000000000001' }],
-      ['resolve_external_identifier', { scheme: 'gtin', gtin: '04901234567894' }],
+      ['resolve_external_identifier', { scheme: 'model', series: 'drill' }],
       ['list_groups', {}],
-      ['list_gs1_namespaces', {}],
-      ['list_managed_class_keys', { namespaceKey: 'n1' }],
-      ['list_gs1_issuances', { namespaceKey: 'n1' }],
+      // A plugin's tool is behind the same refusal as core's.
+      ['list_shelf_models', {}],
     ] as const) {
       const response = await client.callTool({ name, arguments: args }) as
         { isError?: boolean; content?: { text?: string }[] };
@@ -265,7 +263,7 @@ test('the audience a tool runs under follows the request', async (t) => {
     const client = await connect(storeWithLink(linked), principalAudienceResolver(storeWithLink(linked)));
     t.after(() => client.close());
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 5);
     // What it is told matches how it is read: a server answering for one User
     // must not claim the whole instance, or an empty scoped result would be
     // reported as instance-wide absence.

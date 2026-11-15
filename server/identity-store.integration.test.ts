@@ -1,14 +1,12 @@
 import assert from 'node:assert/strict';
-import { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import { test } from 'node:test';
 import neo4j, { int } from 'neo4j-driver';
 import { IdentityStore, DuplicateIdentityError, ReferenceError, type ReportAsset } from './identity-store.js';
 import { ValidationError } from './identity.js';
-import { gs1Policy } from '../plugins/gs1/toolkit/gs1.js';
 import { emptyAssetFilters } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { isAssetId, newAssetId } from './asset-id.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
@@ -25,14 +23,8 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   try {
     await seed.run("CREATE (:Asset {name: 'Legacy migrated', id: $id})", { id: alreadyMigrated });
     await seed.run("UNWIND range(1, $n) AS n CREATE (:Asset {name: 'Legacy ' + n})", { n: int(legacyCount) });
-    // Pre-Phase-2 Assets carry exactly one SGTIN or GRAI on the retired schema.
-    await seed.run(`CREATE (:Asset {name: 'Legacy sgtin'})-[:IDENTIFIED_BY]->
-        (:Identifier {scheme: 'sgtin', value: '00614141123452', serial: 'LEGACY-1'})`);
-    await seed.run(`CREATE (:Asset {name: 'Legacy grai'})-[:IDENTIFIED_BY]->
-        (:Identifier {scheme: 'grai', value: '00614141234561LEGACY-2', serial: ''})`);
   } finally { await seed.close(); }
   const store = await IdentityStore.open(driver, composition);
-  const gs1 = new Gs1Store(store);
   const legacyIds = async (): Promise<Record<string, unknown>> => {
     const session = driver.session();
     try {
@@ -46,7 +38,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     const assigned = await legacyIds();
     // The counted legacy population: the pre-migrated Asset, the id-less run,
     // and the two Assets seeded with pre-Phase-2 identifiers.
-    assert.equal(Object.keys(assigned).length, legacyCount + 3);
+    assert.equal(Object.keys(assigned).length, legacyCount + 1);
     // An Asset that already had an identity keeps exactly that value.
     assert.equal(assigned['Legacy migrated'], alreadyMigrated);
     const values = Object.values(assigned) as string[];
@@ -78,56 +70,6 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   });
 
   const otherStore = await IdentityStore.open(driver, composition);
-
-  await t.test('pre-Phase-2 identifiers migrate into the external identifier model', async () => {
-    const migrated = await query(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:IndividualIdentifier)
-      WHERE a.name STARTS WITH 'Legacy '
-      RETURN a.name AS name, i.canonical AS canonical, i.scheme AS scheme,
-        i.policyVersion AS policyVersion, i.key AS key ORDER BY a.name`);
-    const rows = migrated.records.map((row) => row.toObject());
-    assert.equal(rows.length, 2);
-    // SGTIN components were already separate; GRAI decomposes without ambiguity.
-    assert.deepEqual(rows.map((row) => row.canonical),
-      ['(8003)00614141234561LEGACY-2', '(01)00614141123452(21)LEGACY-1']);
-    assert.deepEqual(rows.map((row) => row.scheme), ['grai', 'sgtin']);
-    for (const row of rows) {
-      assert.equal(row.policyVersion, gs1Policy.version);
-      assert.ok(row.key);
-    }
-    // Every legacy node and its retired constraint are gone, and no class-level
-    // GTIN was materialised from the SGTIN: derived data stays derived.
-    assert.equal((await query('MATCH (i:Identifier) RETURN count(i) AS n')).records[0].get('n').toNumber(), 0);
-    assert.equal((await query('MATCH (c:ClassIdentifier) RETURN count(c) AS n')).records[0].get('n').toNumber(), 0);
-    assert.equal((await query("SHOW CONSTRAINTS YIELD name WHERE name = 'identifier_claim' RETURN name")).records.length, 0);
-    // Reopening is idempotent: attachment keys and values are untouched.
-    await IdentityStore.open(driver, composition);
-    const again = await query(`MATCH (a:Asset)-[:IDENTIFIED_BY]->(i:IndividualIdentifier)
-      WHERE a.name STARTS WITH 'Legacy ' RETURN i.key AS key ORDER BY a.name`);
-    assert.deepEqual(again.records.map((r) => r.get('key')), rows.map((row) => row.key));
-  });
-
-  await t.test('corrupt pre-Phase-2 identifier data fails startup closed', async () => {
-    for (const legacy of [
-      { scheme: 'sgtin', value: '00614141123452', serial: '' },
-      { scheme: 'sgtin', value: 'not-a-gtin', serial: 'X' },
-      // GRAI without the zero filler, without a serial, and with a bad check digit.
-      { scheme: 'grai', value: '10614141234561X', serial: '' },
-      { scheme: 'grai', value: '00614141234561', serial: '' },
-      { scheme: 'grai', value: '00614141234562X', serial: '' },
-      { scheme: 'giai', value: '0614141ASSET', serial: '' },
-      { scheme: 'unknown', value: 'x', serial: '' },
-    ]) {
-      await query(`CREATE (:Asset {name: 'Corrupt legacy', id: $id})-[:IDENTIFIED_BY]->(:Identifier $legacy)`,
-        { id: newAssetId(), legacy });
-      await assert.rejects(IdentityStore.open(driver, composition), (error: Error) =>
-        /cannot be migrated|not a zero-filled|GTIN|check digit|Serial|GRAI/.test(error.message), JSON.stringify(legacy));
-      // Nothing was repaired or discarded on the way out.
-      const survived = await query('MATCH (i:Identifier) RETURN i.scheme AS scheme, i.value AS value, i.serial AS serial');
-      assert.deepEqual(survived.records.map((r) => r.toObject()), [legacy]);
-      await query("MATCH (a:Asset {name: 'Corrupt legacy'})-[:IDENTIFIED_BY]->(i:Identifier) DETACH DELETE a, i");
-    }
-    await IdentityStore.open(driver, composition);
-  });
 
   await t.test('concurrent startup never replaces or double-assigns a native Asset ID', async () => {
     // Constraints already exist, so this exercises the migration itself rather
@@ -194,10 +136,11 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   await store.addMember(user.key, group.key);
   await store.addMember(user.key, group.key);
   const context = { actorKey: user.key, groupKey: group.key };
-  const sgtin = (serial: string) => ({ scheme: 'sgtin' as const, gtin: '0614141123452', serial });
-  const grai = { scheme: 'grai' as const, assetType: '0614141234561', serial: '789' };
-  const gtin = { scheme: 'gtin' as const, gtin: '0614141123452' };
-  const giai = (reference: string) => ({ scheme: 'giai' as const, assetReference: reference });
+  // Individual-level identifiers, and one class-level identifier several
+  // Assets share.
+  const tag = (code: string) => ({ scheme: 'tag' as const, code: 'T-' + code });
+  const container = tag('container-789');
+  const model = { scheme: 'model' as const, series: 'laptop' };
   const canonicals = (asset: { identifiers: readonly { canonical: string }[] }) =>
     asset.identifiers.map((identifier) => identifier.canonical).sort();
   async function query(cypher: string, params = {}) {
@@ -214,14 +157,14 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   let oscilloscope = '';
   await t.test('reporting persists identity, independent Owner, explicit Group and automatic provenance', async () => {
     const start = Date.now();
-    const asset = await store.reportAsset({ name: '  Oscilloscope  ', identifiers: [sgtin('001')], ownerKey: owner.key }, context);
+    const asset = await store.reportAsset({ name: '  Oscilloscope  ', identifiers: [tag('001')], ownerKey: owner.key }, context);
     oscilloscope = asset.id;
     assert.equal(asset.name, 'Oscilloscope');
-    assert.deepEqual(canonicals(asset), ['(01)00614141123452(21)001']);
-    assert.deepEqual(asset.identifiers[0].components, { gtin: '00614141123452', serial: '001' });
+    assert.deepEqual(canonicals(asset), ['tag:T-001']);
+    assert.deepEqual(asset.identifiers[0].components, { code: 'T-001' });
     assert.equal(asset.identifiers[0].level, 'individual');
     // The accepting policy version is recorded and cannot be reconstructed later.
-    assert.equal(asset.identifiers[0].policyVersion, gs1Policy.version);
+    assert.equal(asset.identifiers[0].policyVersion, 'shelf-1');
     assert.deepEqual(asset.reportedBy, { ...user, status: 'active' });
     assert.deepEqual(asset.owner, owner);
     assert.deepEqual(asset.groups, [group]);
@@ -240,119 +183,97 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
   await t.test('missing fields, conflicting claims and invalid references leave no partial records', async () => {
     const before = await counts();
     for (const input of [
-      { name: '', identifiers: [sgtin('bad')] },
-      { name: 'Asset', identifiers: [sgtin('bad'), sgtin('bad')] },
-      { name: 'Asset', identifiers: [sgtin('bad'), { scheme: 'gtin', gtin: '4901234567894' }] },
-      { name: 'Asset', identifiers: [sgtin('bad')], reportedBy: outsider.key },
-      { name: 'Asset', identifiers: [sgtin('bad')], reportedAt: '2000-01-01T00:00:00Z' },
+      { name: '', identifiers: [tag('bad')] },
+      { name: 'Asset', identifiers: [tag('bad'), tag('bad')] },
+      { name: 'Asset', identifiers: [tag('bad')], reportedBy: outsider.key },
+      { name: 'Asset', identifiers: [tag('bad')], reportedAt: '2000-01-01T00:00:00Z' },
     ]) await assert.rejects(store.reportAsset(input as ReportAsset, context), ValidationError);
-    await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [sgtin('bad')] },
+    await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [tag('bad')] },
       { actorKey: user.key, groupKey: '' }), ValidationError);
     for (const actorKey of [outsider.key, 'missing-user']) {
-      await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [sgtin('bad')] },
+      await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [tag('bad')] },
         { actorKey, groupKey: group.key }), ReferenceError);
     }
-    await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [sgtin('bad')], ownerKey: 'missing' }, context), ReferenceError);
+    await assert.rejects(store.reportAsset({ name: 'Asset', identifiers: [tag('bad')], ownerKey: 'missing' }, context), ReferenceError);
     await assert.rejects(store.addMember(user.key, 'missing'), ReferenceError);
     assert.deepEqual(await counts(), before);
   });
 
   await t.test('an individual identifier may identify only one Asset', async () => {
     const before = await counts();
-    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate', identifiers: [
-      { scheme: 'sgtin', gtin: '00614141123452', serial: '001' },
-    ] }, context), DuplicateIdentityError);
+    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate', identifiers: [tag('001')] }, context),
+      DuplicateIdentityError);
     assert.deepEqual(await counts(), before);
     assert.equal((await store.getAsset(oscilloscope, user.key))?.name, 'Oscilloscope');
-    const asset = await store.reportAsset({ name: 'Reusable container', identifiers: [grai] }, context);
+    const asset = await store.reportAsset({ name: 'Reusable container', identifiers: [container] }, context);
     assert.equal(asset.owner, null);
     assert.notEqual(asset.id, oscilloscope);
     assert.deepEqual(await store.getAsset(asset.id, user.key), asset);
-    // Serialised GRAI and GIAI are exclusive in exactly the same way as SGTIN.
-    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate GRAI', identifiers: [grai] }, context), DuplicateIdentityError);
-    const tagged = await store.reportAsset({ name: 'Tagged laptop', identifiers: [giai('0614141LAPTOP-1')] }, context);
+    // Every individual-level identifier is exclusive in exactly the same way.
+    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate container', identifiers: [container] }, context), DuplicateIdentityError);
+    const tagged = await store.reportAsset({ name: 'Tagged laptop', identifiers: [tag('LAPTOP-1')] }, context);
     assert.equal(tagged.identifiers[0].level, 'individual');
-    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate GIAI',
-      identifiers: [giai('0614141LAPTOP-1')] }, context), DuplicateIdentityError);
+    await assert.rejects(otherStore.reportAsset({ name: 'Duplicate tag',
+      identifiers: [tag('LAPTOP-1')] }, context), DuplicateIdentityError);
   });
 
   await t.test('an Asset exists with no external identifier and gains or loses them later', async () => {
     const prototype = await store.reportAsset({ name: 'Bench prototype' }, context);
     assert.deepEqual(prototype.identifiers, []);
     assert.deepEqual(await store.getAsset(prototype.id, user.key), prototype);
-    // Registration requires no GS1 knowledge; identification is layered on after.
-    const withGiai = await store.attachIdentifier(prototype.id, user.key, giai('0614141PROTO-001'));
-    assert.deepEqual(canonicals(withGiai), ['(8004)0614141PROTO-001']);
-    assert.equal(withGiai.id, prototype.id);
-    const withBoth = await store.attachIdentifier(prototype.id, user.key, sgtin('proto'));
-    assert.deepEqual(canonicals(withBoth), ['(01)00614141123452(21)proto', '(8004)0614141PROTO-001']);
+    // Registration requires no scheme's knowledge; identification is layered on after.
+    const withFirst = await store.attachIdentifier(prototype.id, user.key, tag('PROTO-001'));
+    assert.deepEqual(canonicals(withFirst), ['tag:T-PROTO-001']);
+    assert.equal(withFirst.id, prototype.id);
+    const withBoth = await store.attachIdentifier(prototype.id, user.key, tag('proto'));
+    assert.deepEqual(canonicals(withBoth), ['tag:T-PROTO-001', 'tag:T-proto']);
     // Detaching leaves the Asset and its native identity untouched.
-    const giaiKey = withBoth.identifiers.find((i) => i.scheme === 'giai')!.key;
-    const detached = await store.detachIdentifier(prototype.id, user.key, giaiKey);
-    assert.deepEqual(canonicals(detached), ['(01)00614141123452(21)proto']);
+    const firstKey = withBoth.identifiers.find((i) => i.canonical === 'tag:T-PROTO-001')!.key;
+    const detached = await store.detachIdentifier(prototype.id, user.key, firstKey);
+    assert.deepEqual(canonicals(detached), ['tag:T-proto']);
     assert.equal(detached.id, prototype.id);
     assert.equal((await query('MATCH (n:IndividualIdentifier {canonical: $c}) RETURN n',
-      { c: '(8004)0614141PROTO-001' })).records.length, 0);
+      { c: 'tag:T-PROTO-001' })).records.length, 0);
     // A detached individual identifier is not an allocation, so it can be reused.
-    const reused = await store.attachIdentifier(withGiai.id, user.key, giai('0614141PROTO-001'));
-    assert.deepEqual(canonicals(reused), ['(01)00614141123452(21)proto', '(8004)0614141PROTO-001']);
-    await assert.rejects(store.attachIdentifier(prototype.id, user.key, sgtin('proto')), ValidationError);
-    await assert.rejects(store.attachIdentifier(prototype.id, outsider.key, giai('0614141DENIED')), ReferenceError);
-    await assert.rejects(store.detachIdentifier(prototype.id, outsider.key, giaiKey), ReferenceError);
+    const reused = await store.attachIdentifier(withFirst.id, user.key, tag('PROTO-001'));
+    assert.deepEqual(canonicals(reused), ['tag:T-PROTO-001', 'tag:T-proto']);
+    await assert.rejects(store.attachIdentifier(prototype.id, user.key, tag('proto')), ValidationError);
+    await assert.rejects(store.attachIdentifier(prototype.id, outsider.key, tag('DENIED')), ReferenceError);
+    await assert.rejects(store.detachIdentifier(prototype.id, outsider.key, firstKey), ReferenceError);
     await assert.rejects(store.detachIdentifier(prototype.id, user.key, 'missing-key'), ReferenceError);
   });
 
-  await t.test('external GIAI attachment is not issuance and does not require Kannabi namespace authority', async () => {
-    const externalAsset = await store.reportAsset({ name: 'External GIAI with no managed namespace' }, context);
-    // The three-character value is within AI 8004's accepted syntax. Kannabi
-    // lacks the GCP Length Table and must neither invent a prefix-boundary
-    // heuristic nor treat storing this assertion as its own issuance.
-    const attached = await store.attachIdentifier(externalAsset.id, user.key,
-      { scheme: 'giai', assetReference: '024' });
-    assert.deepEqual(canonicals(attached), ['(8004)024']);
-    assert.deepEqual(await gs1.issuancesFor(externalAsset.id), []);
-    assert.equal((await query('MATCH (l:Gs1KeyIssuance {allocatedForAssetId: $id}) RETURN count(l) AS count',
-      { id: externalAsset.id })).records[0].get('count').toNumber(), 0);
-
-    // Issuance remains a different operation requiring a real namespace plus
-    // membership in that namespace's Group and collaboration on the referent.
-    await assert.rejects(gs1.issueKey(externalAsset.id, user.key, 'giai', { namespaceKey: 'missing-namespace' }), ReferenceError);
-    assert.deepEqual((await gs1.issuedAsset(externalAsset.id, user.key))?.issuances, []);
-  });
-
   await t.test('class identifiers are shared while individual identifiers stay exclusive', async () => {
-    const first = await store.reportAsset({ name: 'Laptop A', identifiers: [gtin, sgtin('lap-a')] }, context);
-    const second = await store.reportAsset({ name: 'Laptop B', identifiers: [gtin, sgtin('lap-b')] }, context);
-    const third = await store.reportAsset({ name: 'Laptop C', identifiers: [gtin] }, context);
+    const first = await store.reportAsset({ name: 'Laptop A', identifiers: [model, tag('lap-a')] }, context);
+    const second = await store.reportAsset({ name: 'Laptop B', identifiers: [model, tag('lap-b')] }, context);
+    const third = await store.reportAsset({ name: 'Laptop C', identifiers: [model] }, context);
     for (const asset of [first, second, third]) {
-      assert.ok(asset.identifiers.some((i) => i.canonical === '(01)00614141123452' && i.level === 'class'));
+      assert.ok(asset.identifiers.some((i) => i.canonical === 'model:laptop' && i.level === 'class'));
     }
     // One shared node, three Assets: a class identifier describes, never identifies.
-    const shared = await query(`MATCH (c:ClassIdentifier {canonical: '(01)00614141123452'})
+    const shared = await query(`MATCH (c:ClassIdentifier {canonical: 'model:laptop'})
       RETURN count { (c)<-[:CLASSIFIED_AS]-(:Asset) } AS assets, count(c) AS nodes`);
     assert.equal(shared.records[0].get('nodes').toNumber(), 1);
     assert.equal(shared.records[0].get('assets').toNumber(), 3);
-    // A type-level GRAI is equally shareable across returnable assets.
-    const type = { scheme: 'grai' as const, assetType: '0614141234561' };
+    // Any class-level identifier is equally shareable.
+    const type = { scheme: 'model' as const, series: 'pallet' };
     const pallets = await Promise.all(['Pallet A', 'Pallet B'].map((name) =>
       store.reportAsset({ name, identifiers: [type] }, context)));
     for (const pallet of pallets) assert.equal(pallet.identifiers[0].level, 'class');
-    assert.equal((await query(`MATCH (c:ClassIdentifier {canonical: '(8003)00614141234561'})
+    assert.equal((await query(`MATCH (c:ClassIdentifier {canonical: 'model:pallet'})
       RETURN count { (c)<-[:CLASSIFIED_AS]-(:Asset) } AS assets`)).records[0].get('assets').toNumber(), 2);
     // Detaching a shared class identifier leaves it for the remaining Assets.
     const classKey = third.identifiers[0].key;
     assert.deepEqual((await store.detachIdentifier(third.id, user.key, classKey)).identifiers, []);
-    assert.equal((await query(`MATCH (c:ClassIdentifier {canonical: '(01)00614141123452'})
+    assert.equal((await query(`MATCH (c:ClassIdentifier {canonical: 'model:laptop'})
       RETURN count { (c)<-[:CLASSIFIED_AS]-(:Asset) } AS assets`)).records[0].get('assets').toNumber(), 2);
   });
 
   await t.test('concurrent writers yield exactly one claim and no orphan Assets or identifiers', async () => {
-    for (const identity of [sgtin('race'), { ...grai, serial: 'race' }, giai('0614141RACE')]) {
+    for (const identity of [tag('race'), tag('RACE')]) {
       const before = await counts();
       const writes = await Promise.allSettled(Array.from({ length: 8 }, (_, n) => {
-        const claim = n % 2 && identity.scheme === 'sgtin'
-          ? { ...identity, gtin: '00614141123452' } : identity;
-        return (n % 2 ? store : otherStore).reportAsset({ name: `Writer ${n}`, identifiers: [claim] }, context);
+        return (n % 2 ? store : otherStore).reportAsset({ name: `Writer ${n}`, identifiers: [identity] }, context);
       }));
       assert.equal(writes.filter((r) => r.status === 'fulfilled').length, 1);
       for (const result of writes) {
@@ -362,9 +283,9 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
       assert.equal(after.assets.toNumber(), before.assets.toNumber() + 1);
       assert.equal(after.identifiers.toNumber(), before.identifiers.toNumber() + 1);
     }
-    // Distinct serial values remain distinct, even with the same GTIN.
-    const zero = await store.reportAsset({ name: 'Zero', identifiers: [sgtin('0')] }, context);
-    const doubleZero = await store.reportAsset({ name: 'Double zero', identifiers: [sgtin('00')] }, context);
+    // Distinct values remain distinct, however alike they look.
+    const zero = await store.reportAsset({ name: 'Zero', identifiers: [tag('0')] }, context);
+    const doubleZero = await store.reportAsset({ name: 'Double zero', identifiers: [tag('00')] }, context);
     assert.equal(new Set([zero.id, doubleZero.id, oscilloscope]).size, 3);
     const persisted = await query('MATCH (a:Asset) RETURN count(DISTINCT a.id) AS ids, count(a) AS assets');
     assert.equal(persisted.records[0].get('ids').toNumber(), persisted.records[0].get('assets').toNumber());
@@ -384,7 +305,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     assert.equal((await store.updateAsset(oscilloscope, { ownerKey: null }, user.key)).owner, null);
     for (const changes of [
       { reportedAt: '2000-01-01T00:00:00Z' }, { reportedBy: outsider.key }, { id: newAssetId() },
-      { identifier: grai }, { identifiers: [grai] }, { name: '' }, { name: undefined },
+      { identifier: container }, { identifiers: [container] }, { name: '' }, { name: undefined },
       // Identifiers are never edited through the Asset update path.
       { identifierKey: 'x' },
     ]) await assert.rejects(store.updateAsset(oscilloscope, changes as never, user.key), ValidationError);
@@ -406,7 +327,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
 
     // Reporting is itself the first canonical change, so provenance is present
     // from the start rather than appearing only once something is edited.
-    const asset = await store.reportAsset({ name: 'Provenance bench', identifiers: [sgtin('900')] }, context);
+    const asset = await store.reportAsset({ name: 'Provenance bench', identifiers: [tag('900')] }, context);
     assert.deepEqual(Object.keys(asset.provenance!).sort(),
       ['acceptedAt', 'acceptedBy', 'assertedBy', 'basis']);
     assert.deepEqual(asset.provenance!.acceptedBy, { ...user, status: 'active' });
@@ -419,10 +340,10 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     const paths: [string, () => Promise<unknown>][] = [
       ['update', () => store.updateAsset(asset.id, { name: 'Provenance bench 2' }, user.key,
         { assertedBy: credential(1), basis: 'depot:assets:42' })],
-      ['attach', () => store.attachIdentifier(asset.id, user.key, gtin, { assertedBy: credential(2) })],
+      ['attach', () => store.attachIdentifier(asset.id, user.key, model, { assertedBy: credential(2) })],
       ['detach', async () => {
         const current = (await store.getAsset(asset.id, user.key))!;
-        const attached = current.identifiers.find((i) => i.canonical === '(01)00614141123452')!;
+        const attached = current.identifiers.find((i) => i.canonical === 'model:laptop')!;
         return store.detachIdentifier(asset.id, user.key, attached.key, { assertedBy: credential(3) });
       }],
       ['photo attach', async () => {
@@ -452,16 +373,6 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
       assert.equal(row.assertedByLabel, credential(index + 1).label, label);
       previous = now.acceptedAt;
     }
-
-    // Allocation runs the shared attachment path, so it is stamped too, while
-    // the issuance ledger keeps its own independent allocation provenance.
-    const allocGroup = await store.createReportingGroup('Provenance allocation', user.key);
-    const namespace = await gs1.configureGs1Namespace(user.key, allocGroup.key, { gcp: '0778899' });
-    const allocatable = await store.reportAsset({ name: 'Allocated under provenance' },
-      { actorKey: user.key, groupKey: allocGroup.key });
-    const allocated = await gs1.issueKey(allocatable.id, user.key, 'giai', { namespaceKey: namespace.key }, { assertedBy: credential(6) });
-    assert.deepEqual(allocated.provenance!.assertedBy, credential(6));
-    assert.deepEqual(allocated.issuances[0].allocatedBy, { ...user, status: 'active' });
 
     // The asserting credential never nominates the accepting authority.
     const claimed = await store.updateAsset(asset.id, { name: 'Provenance bench 3' }, user.key,
@@ -504,7 +415,7 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     // Appearing in provenance grants neither readability nor editability.
     assert.equal(await store.getAsset(subject.id, outsider.key), null);
     await assert.rejects(store.updateAsset(subject.id, { name: 'Taken over' }, outsider.key), ReferenceError);
-    await assert.rejects(store.attachIdentifier(subject.id, outsider.key, gtin), ReferenceError);
+    await assert.rejects(store.attachIdentifier(subject.id, outsider.key, model), ReferenceError);
     await assert.rejects(store.assertCanEdit(subject.id, outsider.key), ReferenceError);
     // Nor does it widen what the outsider can browse or resolve.
     const page = await store.findAssets(outsider.key,
@@ -542,221 +453,19 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     assert.equal((await store.getAsset(legacyId, user.key))!.provenance, null);
   });
 
-  await t.test('a GIAI namespace belongs to one Group and its prefix is immutable', async () => {
-    const owner = await store.createUser('Namespace owner');
-    const otherOwner = await store.createUser('Other namespace owner');
-    const nsGroup = await store.createReportingGroup('Allocating team', owner.key);
-    const rival = await store.createReportingGroup('Rival team', otherOwner.key);
-    const plain = await gs1.configureGs1Namespace(owner.key, nsGroup.key, { gcp: '0614141' });
-    assert.equal(plain.gcp, '0614141');
-    assert.equal(plain.active, true);
-    assert.equal(plain.counters.giai.nextSequence, 1);
-    assert.deepEqual(plain.counters.giai.exclusions, []);
-    assert.equal(plain.configuredBy, owner.key);
-    assert.deepEqual(plain.group, nsGroup);
-    // Overlapping and adjacent input normalises on the way in.
-    const excluded = await gs1.configureGs1Namespace(owner.key, nsGroup.key, {
-      gcp: '9521234', giaiExclusions: [{ from: 9, to: 11 }, { from: 1, to: 4 }, { from: 3, to: 4 }, { from: 200, to: 300 }],
-    });
-    assert.deepEqual(excluded.counters.giai.exclusions, [{ from: 1, to: 4 }, { from: 9, to: 11 }, { from: 200, to: 300 }]);
-    for (const invalid of [
-      { gcp: '06141A1' }, { gcp: '' }, { gcp: '9'.repeat(30) },
-      { gcp: '1112223', giaiExclusions: [{ from: 0 }] },
-      { gcp: '1112223', giaiExclusions: [{ from: 9, to: 4 }] },
-      { gcp: '1112223', giaiExclusions: 'ranges' },
-      { gcp: '1112223', prefix: 'extra' },
-    ]) await assert.rejects(gs1.configureGs1Namespace(owner.key, nsGroup.key, invalid), ValidationError, JSON.stringify(invalid));
-    // One managed GCP, one counter, one Group.
-    await assert.rejects(gs1.configureGs1Namespace(owner.key, nsGroup.key, { gcp: '0614141' }),
-      (error: Error) => error instanceof DuplicateIdentityError && /already configured for this Group/.test(error.message));
-    await assert.rejects(gs1.configureGs1Namespace(otherOwner.key, rival.key, { gcp: '0614141' }),
-      (error: Error) => error instanceof DuplicateIdentityError && /managed by another Group/.test(error.message));
-    // The prefix is not an editable field at all: there is no path to change it.
-    assert.equal((await gs1.listGs1Namespaces(owner.key)).map((n) => n.gcp).join(), '0614141,9521234');
-    assert.deepEqual(await gs1.listGs1Namespaces(otherOwner.key), []);
-    // Namespace keys are not authority; a non-member sees and changes nothing.
-    await assert.rejects(gs1.setGs1NamespaceActive(otherOwner.key, plain.key, false), ReferenceError);
-    await assert.rejects(gs1.configureGs1Namespace(otherOwner.key, nsGroup.key, { gcp: '7778889' }), ReferenceError);
-  });
-
-  await t.test('allocation issues monotonic references, skipping existing use', async () => {
-    const owner = (await gs1.listGs1Namespaces((await store.createUser('unused')).key), await store.createUser('Allocator'));
-    const group = await store.createReportingGroup('Allocation group', owner.key);
-    const namespace = await gs1.configureGs1Namespace(owner.key, group.key,
-      { gcp: '9520123', giaiExclusions: [{ from: 1, to: 4 }, { from: 9, to: 11 }] });
-    const context = { actorKey: owner.key, groupKey: group.key };
-    const assets = [];
-    for (let n = 0; n < 5; n++) assets.push(await store.reportAsset({ name: `Allocated ${n}` }, context));
-    const issued = [];
-    for (const asset of assets) issued.push(await gs1.issueKey(asset.id, owner.key, 'giai', { namespaceKey: namespace.key }));
-    // Excluded references are skipped by range, never issued.
-    assert.deepEqual(issued.map((asset) => asset.issuances[0].sequence), [5, 6, 7, 8, 12]);
-    assert.deepEqual(issued.map((asset) => asset.issuances[0].canonical),
-      ['(8004)95201235', '(8004)95201236', '(8004)95201237', '(8004)95201238', '(8004)952012312']);
-    for (const asset of issued) {
-      assert.equal(asset.issuances[0].gcp, '9520123');
-      // Allocation provenance follows the same public shape as reportedBy:
-      // attribution, never the bare actor key the ledger stores internally.
-      assert.deepEqual(asset.issuances[0].allocatedBy, { ...owner, status: 'active' });
-      assert.equal(asset.issuances[0].allocatedForAssetId, asset.id);
-      // The issued GIAI is attached through ordinary Phase 2 semantics.
-      assert.ok(asset.identifiers.some((identifier) =>
-        identifier.canonical === asset.issuances[0].canonical));
-    }
-    // Repeating returns the existing issuance and consumes no sequence.
-    const before = (await gs1.listGs1Namespaces(owner.key)).find((n) => n.key === namespace.key)!.counters.giai.nextSequence;
-    const repeated = await gs1.issueKey(assets[0].id, owner.key, 'giai', { namespaceKey: namespace.key });
-    assert.deepEqual(repeated.issuances, issued[0].issuances);
-    assert.equal((await gs1.listGs1Namespaces(owner.key)).find((n) => n.key === namespace.key)!.counters.giai.nextSequence, before);
-  });
-
-  await t.test('an issued GIAI is bound to its Asset for good', async () => {
-    const owner = await store.createUser('Ledger owner');
-    const group = await store.createReportingGroup('Ledger group', owner.key);
-    const namespace = await gs1.configureGs1Namespace(owner.key, group.key, { gcp: '0771234' });
-    const context = { actorKey: owner.key, groupKey: group.key };
-    const first = await store.reportAsset({ name: 'Issued Asset' }, context);
-    const second = await store.reportAsset({ name: 'Other Asset' }, context);
-    const allocated = await gs1.issueKey(first.id, owner.key, 'giai', { namespaceKey: namespace.key });
-    const issued = allocated.identifiers.find((identifier) => identifier.scheme === 'giai')!;
-    const canonical = allocated.issuances[0].canonical;
-    // The bare AI 8004 reference, as the attached identifier reports it: the
-    // ledger now stores the canonical element string rather than the value.
-    const value = issued.components.assetReference;
-    const attachment = issued.key;
-
-    // Detaching removes the identifier and leaves the issuance untouched.
-    const detached = await store.detachIdentifier(first.id, owner.key, attachment);
-    assert.deepEqual(detached.identifiers, []);
-    assert.equal((await gs1.issuancesFor(first.id))[0].canonical, canonical);
-    // Allocating again returns the same issuance rather than a second one.
-    const again = await gs1.issueKey(first.id, owner.key, 'giai', { namespaceKey: namespace.key });
-    assert.deepEqual(again.issuances, allocated.issuances);
-    // It may return to the Asset it was issued for, and only to that Asset.
-    await assert.rejects(store.attachIdentifier(second.id, owner.key,
-      { scheme: 'giai', assetReference: value }), (error: Error) =>
-      error instanceof ValidationError && /issued that identifier for another Asset/.test(error.message));
-    // Reporting a new Asset with it is refused for the same reason, but only
-    // to somebody the report would otherwise accept: a caller who may not
-    // report into the Group named is told that, and learns nothing about
-    // what the ledger holds.
-    const reported = { name: 'Reuses an issued value', identifiers: [{ scheme: 'giai', assetReference: value }] };
-    await assert.rejects(store.reportAsset(reported, context), (error: Error) =>
-      error instanceof ValidationError && /issued that identifier for another Asset/.test(error.message));
-    await assert.rejects(store.reportAsset(reported, { ...context, groupKey: 'no-such-group' }),
-      (error: Error) => error instanceof ReferenceError);
-    const restored = await store.attachIdentifier(first.id, owner.key, { scheme: 'giai', assetReference: value });
-    assert.ok(restored.identifiers.some((identifier) => identifier.components.assetReference === value));
-    // An externally assigned GIAI keeps Phase 2 correction semantics.
-    const external = { scheme: 'giai' as const, assetReference: 'EXTERNAL-0001' };
-    const wrong = await store.attachIdentifier(second.id, owner.key, external);
-    const wrongKey = wrong.identifiers.find((identifier) => identifier.scheme === 'giai')!.key;
-    await store.detachIdentifier(second.id, owner.key, wrongKey);
-    const third = await store.reportAsset({ name: 'Correct Asset' }, context);
-    assert.ok((await store.attachIdentifier(third.id, owner.key, external)).identifiers.length);
-    // The ledger survives the Asset itself.
-    await query('MATCH (a:Asset {id: $id}) DETACH DELETE a', { id: first.id });
-    const orphaned = await query(`MATCH (l:Gs1KeyIssuance {canonical: $canonical})
-      RETURN l.allocatedForAssetId AS assetId`, { canonical });
-    assert.equal(orphaned.records[0].get('assetId'), first.id);
-  });
-
-  await t.test('allocation provenance degrades to a tombstone like reportedBy', async () => {
-    const leaving = await store.createUser('Departing allocator');
-    const group = await store.createReportingGroup('Tombstone group', leaving.key);
-    const namespace = await gs1.configureGs1Namespace(leaving.key, group.key, { gcp: '0334455' });
-    const asset = await store.reportAsset({ name: 'Outliving its allocator' },
-      { actorKey: leaving.key, groupKey: group.key });
-    const allocated = await gs1.issueKey(asset.id, leaving.key, 'giai', { namespaceKey: namespace.key });
-    assert.deepEqual(allocated.issuances[0].allocatedBy, { ...leaving, status: 'active' });
-    // Tombstone the allocator exactly as member deactivation does.
-    await query(`MATCH (u:User {key: $key})
-      SET u.provenanceName = u.name, u.accountDeletedAt = datetime() REMOVE u.name`, { key: leaving.key });
-    const after = (await query(`MATCH (a:Asset {id: $id}) RETURN a`, { id: asset.id })).records.length;
-    assert.equal(after, 1);
-    const reread = await gs1.issuedAsset(asset.id, leaving.key);
-    assert.deepEqual(reread!.issuances[0].allocatedBy,
-      { key: leaving.key, name: 'Departing allocator', status: 'deleted' });
-    // No email, role or credential material reaches the public representation.
-    for (const field of ['email', 'role', 'password', 'id', 'accountDeletedAt', 'provenanceName']) {
-      assert.equal(field in reread!.issuances[0].allocatedBy, false, field);
-    }
-    assert.deepEqual(Object.keys(reread!.issuances[0].allocatedBy).sort(), ['key', 'name', 'status']);
-    assert.deepEqual(Object.keys(reread!.issuances[0]).sort(),
-      ['allocatedAt', 'allocatedBy', 'allocatedForAssetId', 'canonical', 'classKeyCanonical',
-        'gcp', 'key', 'scheme', 'sequence']);
-  });
-
-  await t.test('deactivation stops issuance and preserves the counter', async () => {
-    const owner = await store.createUser('Lifecycle owner');
-    const group = await store.createReportingGroup('Lifecycle group', owner.key);
-    const namespace = await gs1.configureGs1Namespace(owner.key, group.key,
-      { gcp: '0881234', giaiExclusions: [{ from: 1, to: 2 }] });
-    const context = { actorKey: owner.key, groupKey: group.key };
-    const first = await store.reportAsset({ name: 'Before deactivation' }, context);
-    assert.equal((await gs1.issueKey(first.id, owner.key, 'giai', { namespaceKey: namespace.key })).issuances[0].sequence, 3);
-
-    const inactive = await gs1.setGs1NamespaceActive(owner.key, namespace.key, false);
-    assert.equal(inactive.active, false);
-    assert.equal(inactive.counters.giai.nextSequence, 4);
-    assert.deepEqual(inactive.counters.giai.exclusions, [{ from: 1, to: 2 }]);
-    const blocked = await store.reportAsset({ name: 'During deactivation' }, context);
-    await assert.rejects(gs1.issueKey(blocked.id, owner.key, 'giai', { namespaceKey: namespace.key }),
-      (error: Error) => error instanceof ValidationError && /deactivated/.test(error.message));
-    // An existing issuance is still returned while the namespace is inactive.
-    assert.equal((await gs1.issueKey(first.id, owner.key, 'giai', { namespaceKey: namespace.key })).issuances[0].sequence, 3);
-
-    const active = await gs1.setGs1NamespaceActive(owner.key, namespace.key, true);
-    assert.equal(active.active, true);
-    // The same namespace resumes; no new counter was created for this prefix.
-    assert.equal((await gs1.issueKey(blocked.id, owner.key, 'giai', { namespaceKey: namespace.key })).issuances[0].sequence, 4);
-    assert.equal((await query('MATCH (n:Gs1Namespace {gcp: $gcp}) RETURN count(n) AS n',
-      { gcp: '0881234' })).records[0].get('n').toNumber(), 1);
-  });
-
-  await t.test('allocation authority comes from the namespace Group, not from the Asset alone', async () => {
-    const owner = await store.createUser('Authority owner');
-    const collaborator = await store.createUser('Authority collaborator');
-    const stranger = await store.createUser('Authority stranger');
-    const group = await store.createReportingGroup('Authority group', owner.key);
-    const detached = await store.createReportingGroup('Namespace only group', collaborator.key);
-    await store.addGroupMember(owner.key, group.key, collaborator.key);
-    const namespace = await gs1.configureGs1Namespace(owner.key, group.key, { gcp: '0991234' });
-    const foreign = await gs1.configureGs1Namespace(collaborator.key, detached.key, { gcp: '0991235' });
-    const asset = await store.reportAsset({ name: 'Authority Asset' }, { actorKey: owner.key, groupKey: group.key });
-    // A stranger, and a member of a Group that manages a namespace but does not
-    // collaborate on the Asset, are both refused.
-    await assert.rejects(gs1.issueKey(asset.id, stranger.key, 'giai', { namespaceKey: namespace.key }), ReferenceError);
-    await assert.rejects(gs1.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: foreign.key }), ReferenceError);
-    await assert.rejects(gs1.issueKey(asset.id, owner.key, 'giai', { namespaceKey: 'not-a-namespace' }), ReferenceError);
-    // Nor is membership of the collaborating, namespace-managing Group enough
-    // on its own: issuing is authority over what that Group manages, which
-    // since #20 is membership and control of it.
-    await assert.rejects(gs1.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: namespace.key }), ReferenceError);
-    // As a Group Manager of the namespace-owning Group that collaborates, it
-    // succeeds — and need not be the Asset's reporter. Promoted in Cypher to
-    // keep this suite about allocation; promotion itself is proved in
-    // group-roles.integration.test.ts.
-    await query(`MATCH (:User {key: $userKey})-[m:MEMBER_OF]->(:Group {key: $groupKey})
-      SET m.role = 'manager'`, { userKey: collaborator.key, groupKey: group.key });
-    assert.ok((await gs1.issueKey(asset.id, collaborator.key, 'giai', { namespaceKey: namespace.key })).issuances.length);
-  });
-
   await t.test('deterministic lookup resolves complete identities over the readable set', async () => {
     const seeker = await store.createUser('Lookup seeker');
     const outsiderGroup = await store.createReportingGroup('Sealed group', outsider.key);
     const seekerGroup = await store.createReportingGroup('Seeker group', seeker.key);
     const readable = await store.reportAsset({ name: 'Readable instrument',
-      identifiers: [{ scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP-1' },
-        { scheme: 'gtin', gtin: '0614141123452' }] },
+      identifiers: [tag('LOOKUP-1'), { scheme: 'model', series: 'instrument' }] },
     { actorKey: seeker.key, groupKey: seekerGroup.key });
     const sibling = await store.reportAsset({ name: 'Readable sibling',
-      identifiers: [{ scheme: 'gtin', gtin: '0614141123452' }] },
+      identifiers: [{ scheme: 'model', series: 'instrument' }] },
     { actorKey: seeker.key, groupKey: seekerGroup.key });
     // An Asset the seeker cannot read, carrying identities the seeker will probe.
     const hidden = await store.reportAsset({ name: 'Sealed instrument',
-      identifiers: [{ scheme: 'giai', assetReference: '0614141SEALED' },
-        { scheme: 'gtin', gtin: '4901234567894' }] },
+      identifiers: [tag('SEALED'), { scheme: 'model', series: 'sealed' }] },
     { actorKey: outsider.key, groupKey: outsiderGroup.key });
 
     const lookup = (query: Record<string, unknown>) =>
@@ -776,49 +485,30 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     assert.equal(unreadableById.matching, absentId.matching);
 
     // An individual identifier resolves to at most one Asset.
-    const bySgtin = await lookup({ scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP-1' });
-    assert.deepEqual(bySgtin.identity,
-      { kind: 'identifier', canonical: '(01)00614141123452(21)LOOKUP-1', scheme: 'sgtin', level: 'individual' });
-    assert.deepEqual(bySgtin.assets.map((asset) => asset.id), [readable.id]);
-    // The same trade item written as GTIN-13 resolves identically.
-    const padded = await lookup({ scheme: 'sgtin', gtin: '00614141123452', serial: 'LOOKUP-1' });
-    assert.deepEqual(padded, bySgtin);
+    const byTag = await lookup(tag('LOOKUP-1'));
+    assert.deepEqual(byTag.identity,
+      { kind: 'identifier', canonical: 'tag:T-LOOKUP-1', scheme: 'tag', level: 'individual' });
+    assert.deepEqual(byTag.assets.map((asset) => asset.id), [readable.id]);
 
     // A class identifier honestly describes several Assets, ordered by name.
-    const byGtin = await lookup({ scheme: 'gtin', gtin: '0614141123452' });
-    assert.equal(byGtin.identity.kind === 'identifier' && byGtin.identity.level, 'class');
-    assert.deepEqual(byGtin.assets.map((asset) => asset.name), ['Readable instrument', 'Readable sibling']);
-    assert.equal(byGtin.matching, 2);
+    const byModel = await lookup({ scheme: 'model', series: 'instrument' });
+    assert.equal(byModel.identity.kind === 'identifier' && byModel.identity.level, 'class');
+    assert.deepEqual(byModel.assets.map((asset) => asset.name), ['Readable instrument', 'Readable sibling']);
+    assert.equal(byModel.matching, 2);
 
     // An identifier that exists only on an unreadable Asset is silent.
-    const sealedGiai = await lookup({ scheme: 'giai', assetReference: '0614141SEALED' });
-    assert.deepEqual(sealedGiai.assets, []);
-    assert.equal(sealedGiai.matching, 0);
-    const sealedGtin = await lookup({ scheme: 'gtin', gtin: '4901234567894' });
+    const sealedTag = await lookup(tag('SEALED'));
+    assert.deepEqual(sealedTag.assets, []);
+    assert.equal(sealedTag.matching, 0);
+    const sealedModel = await lookup({ scheme: 'model', series: 'sealed' });
     // Byte-identical to an identifier nobody has ever used.
-    const neverUsed = await lookup({ scheme: 'gtin', gtin: '4006381333931' });
-    assert.deepEqual({ ...sealedGtin, identity: null }, { ...neverUsed, identity: null });
+    const neverUsed = await lookup({ scheme: 'model', series: 'unseen' });
+    assert.deepEqual({ ...sealedModel, identity: null }, { ...neverUsed, identity: null });
 
     // Substrings and prefixes are not identities.
     for (const query of [
-      { scheme: 'giai', assetReference: '0614141SEALE' },
-      { scheme: 'giai', assetReference: 'SEALED' },
-      { scheme: 'sgtin', gtin: '0614141123452', serial: 'LOOKUP' },
+      tag('SEALE'), tag('LOOKUP'), { scheme: 'model', series: 'instr' },
     ]) assert.deepEqual((await lookup(query)).assets, [], JSON.stringify(query));
-
-    // A managed prefix is not allocation provenance, and lookup never treats it
-    // as one: an externally supplied GIAI sharing a configured GCP resolves to
-    // itself alone and confers nothing.
-    const namespaceGroup = await store.createReportingGroup('Prefix group', seeker.key);
-    await gs1.configureGs1Namespace(seeker.key, namespaceGroup.key, { gcp: '0662211' });
-    const lookalike = await store.reportAsset({ name: 'Externally tagged',
-      identifiers: [{ scheme: 'giai', assetReference: '0662211EXTERNAL' }] },
-    { actorKey: seeker.key, groupKey: namespaceGroup.key });
-    assert.deepEqual((await lookup({ scheme: 'giai', assetReference: '0662211EXTERNAL' }))
-      .assets.map((asset) => asset.id), [lookalike.id]);
-    assert.deepEqual((await gs1.issuedAsset(lookalike.id, seeker.key))!.issuances, []);
-    // The configured prefix itself is not a lookup key.
-    assert.deepEqual((await lookup({ scheme: 'giai', assetReference: '0662211' })).assets, []);
 
     // Ordinary name browsing is untouched by any of this.
     const browsed = await store.findAssets(seeker.key,

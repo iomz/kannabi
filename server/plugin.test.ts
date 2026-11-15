@@ -7,7 +7,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { IdentityStore } from './identity-store.js';
 import { ValidationError } from './identity.js';
 import { compose, connectPlugins, noPlugins, pluginContract, type PluginDefinition } from './plugin.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const manifest = (id: string, extra: Partial<PluginDefinition['manifest']> = {}) => ({
   id, name: id, version: '1.0.0', contract: [pluginContract], requires: [], contributes: [], ...extra });
@@ -103,7 +103,7 @@ test('the Plugins inventory is an administrator\'s, and only lists', async () =>
   assert.equal((await as(false).request(origin + '/admin/plugins')).status, 403);
   const listed = await (await as(true).request(origin + '/admin/plugins')).json();
   assert.equal(listed.contract, pluginContract);
-  assert.deepEqual(listed.plugins.map((entry: { id: string }) => entry.id), ['gs1']);
+  assert.deepEqual(listed.plugins.map((entry: { id: string }) => entry.id), ['shelf']);
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
     assert.equal((await as(true).request(origin + '/admin/plugins', { method, headers: { Origin: origin } })).status, 404, method);
   }

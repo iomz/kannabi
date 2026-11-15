@@ -5,7 +5,7 @@ import { IdentityStore } from './identity-store.js';
 import { assetPageRequest, assetSorts, type AssetDirection, type AssetSort } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { ValidationError } from './identity.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
@@ -114,15 +114,15 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     const context2 = { actorKey: actor.key, groupKey: filterGroup.key };
     // A different trade item from the class-lookup subtest, so neither
     // subtest's counts depend on the other's fixtures.
-    const gtin = { scheme: 'gtin' as const, gtin: '4901234567894' };
-    const giai = (reference: string) => ({ scheme: 'giai' as const, assetReference: reference });
+    const described = { scheme: 'model' as const, series: 'camera' };
+    const tagged = (code: string) => ({ scheme: 'tag' as const, code });
     const made: Record<string, string> = {};
     made.plain = (await store.reportAsset({ name: 'Filter plain' }, context2)).id;
-    made.classed = (await store.reportAsset({ name: 'Filter classed', identifiers: [gtin] }, context2)).id;
+    made.classed = (await store.reportAsset({ name: 'Filter classed', identifiers: [described] }, context2)).id;
     made.individual = (await store.reportAsset({ name: 'Filter individual',
-      identifiers: [giai('0614141FILTER-1')] }, context2)).id;
+      identifiers: [tagged('T-1')] }, context2)).id;
     made.published = (await store.reportAsset({ name: 'Filter published',
-      identifiers: [giai('0614141FILTER-2')] }, context2)).id;
+      identifiers: [tagged('T-2')] }, context2)).id;
     await store.updateAsset(made.published, { isPublic: true }, actor.key);
     // Dated apart so a range filter has something to cut.
     // Mid-day deliberately: a date-only upper bound of 2025-03-01 must include
@@ -140,7 +140,7 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     // it never moves as filters, search or scope change.
     const unfiltered = await store.findAssets(actor.key, assetPageRequest({}, schemes.ids));
     for (const extra of [{}, { scope: 'public' }, { identified: 'none' },
-      { scheme: 'gtin' }, { q: 'Filter' }, { scope: 'mine' }] as Record<string, string>[]) {
+      { scheme: 'model' }, { q: 'Filter' }, { scope: 'mine' }] as Record<string, string>[]) {
       const page = await find(extra);
       assert.equal(page.total, unfiltered.total, JSON.stringify(extra));
     }
@@ -152,10 +152,10 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.deepEqual(await ids({ identified: 'none' }), [made.plain]);
     assert.deepEqual(await ids({ identified: 'any' }),
       [made.classed, made.individual, made.published].sort());
-    assert.deepEqual(await ids({ scheme: 'gtin' }), [made.classed]);
-    assert.deepEqual(await ids({ scheme: 'giai' }), [made.individual, made.published].sort());
+    assert.deepEqual(await ids({ scheme: 'model' }), [made.classed]);
+    assert.deepEqual(await ids({ scheme: 'tag' }), [made.individual, made.published].sort());
     // Multi-value is OR within one filter.
-    assert.deepEqual(await ids({ scheme: ['gtin', 'giai'] }),
+    assert.deepEqual(await ids({ scheme: ['model', 'tag'] }),
       [made.classed, made.individual, made.published].sort());
     assert.deepEqual(await ids({ reportedFrom: '2026-01-01' }),
       [made.classed, made.individual, made.published].sort());
@@ -170,12 +170,12 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     // the narrower question the scope tabs cannot ask: `scope=group` means
     // non-public Assets readable through any Group, `group=<key>` means this
     // one Group.
-    assert.deepEqual(await ids({ scheme: 'gtin', reportedFrom: '2026-01-01' }), [made.classed]);
+    assert.deepEqual(await ids({ scheme: 'model', reportedFrom: '2026-01-01' }), [made.classed]);
     assert.deepEqual(await ids({ q: 'published' }), [made.published]);
     assert.deepEqual(await ids({ q: 'filter', identified: 'none' }), [made.plain]);
     assert.deepEqual(await ids({ scope: 'public' }), [made.published]);
     assert.deepEqual(await ids({ scope: 'public', q: 'filter' }), [made.published]);
-    assert.deepEqual(await ids({ scheme: 'giai', q: 'individual' }), [made.individual]);
+    assert.deepEqual(await ids({ scheme: 'tag', q: 'individual' }), [made.individual]);
     // The Group scope is specifically what depends on Group membership, so a
     // public Asset remains under All and Public even when this Group carries it.
     const anyGroup = await store.findAssets(actor.key, assetPageRequest({ scope: 'group', q: 'Filter' }, schemes.ids));
@@ -186,10 +186,10 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     assert.deepEqual(oneGroup.assets.map((asset) => asset.id).sort(),
       [made.classed, made.individual, made.plain].sort());
     // A contradiction simply yields nothing rather than a special case.
-    assert.deepEqual(await ids({ identified: 'none', scheme: 'gtin' }), []);
+    assert.deepEqual(await ids({ identified: 'none', scheme: 'model' }), []);
 
     // `matching` reflects the complete active predicate, and equals scopes[scope].
-    const narrowed = await find({ scheme: 'giai' });
+    const narrowed = await find({ scheme: 'tag' });
     assert.equal(narrowed.matching, 2);
     assert.equal(narrowed.matching, narrowed.scopes.all);
     assert.equal(narrowed.scopes.public, 1);
@@ -233,14 +233,14 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
   });
 
   await t.test('a class identifier pages through its Assets without duplicates or omissions', async () => {
-    const gtin = { scheme: 'gtin' as const, gtin: '0614141123452' };
+    const described = { scheme: 'model' as const, series: 'laptop' };
     const carriers: string[] = [];
     for (let n = 0; n < 12; n++) {
-      const asset = await store.reportAsset({ name: `Class member ${11 - n}`, identifiers: [gtin] }, context);
+      const asset = await store.reportAsset({ name: `Class member ${11 - n}`, identifiers: [described] }, context);
       carriers.push(asset.id);
     }
     // One carrier the explorer cannot read: absent from every page and the count.
-    const sealedCarrier = await store.reportAsset({ name: 'Class member sealed', identifiers: [gtin] },
+    const sealedCarrier = await store.reportAsset({ name: 'Class member sealed', identifiers: [described] },
       { actorKey: stranger.key, groupKey: sealed.key });
 
     const seen: string[] = [];
@@ -248,7 +248,7 @@ test('Asset exploration orders and pages deterministically', { skip: !uri || !pa
     let matching = 0;
     do {
       const result = await store.lookupAssets(actor.key,
-        assetLookupQuery({ ...gtin, limit: '5', ...(cursor ? { cursor } : {}) }, schemes));
+        assetLookupQuery({ ...described, limit: '5', ...(cursor ? { cursor } : {}) }, schemes));
       matching = result.matching;
       seen.push(...result.assets.map((asset) => asset.id));
       assert.ok(result.assets.length <= 5);

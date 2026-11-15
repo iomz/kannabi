@@ -6,7 +6,7 @@ import { cursorVersion, encodeCursor } from './cursor.js';
 import { newAssetId } from './asset-id.js';
 import { inventoryPath, noFilters } from '../web/inventory-controls.js';
 import { ValidationError } from './identity.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 const { schemes } = composition;
 
 const asset = { name: '測定器 — A', reportedAt: '2026-09-20T08:01:49.123000000Z', id: newAssetId() };
@@ -24,19 +24,19 @@ test('browse defaults preserve the pre-filter contract', () => {
 });
 
 test('filters parse, validate and canonicalise into a stable key', () => {
-  const parsed = assetPageRequest({ group: ['b', 'a'], scheme: 'sgtin,gtin',
+  const parsed = assetPageRequest({ group: ['b', 'a'], scheme: 'tag,model',
     identified: 'any', reportedFrom: '2026-01-01', reportedTo: '2026-02-01T00:00:00Z' }, schemes.ids);
   assert.deepEqual(parsed.filters.groups, ['a', 'b']);
-  assert.deepEqual(parsed.filters.schemes, ['gtin', 'sgtin']);
+  assert.deepEqual(parsed.filters.schemes, ['model', 'tag']);
   assert.equal(parsed.filters.identified, 'any');
   assert.equal(parsed.filters.reportedFrom, '2026-01-01T00:00:00.000Z');
   // Repeated entries, comma lists, duplicates and ordering all canonicalise the same.
-  const other = assetPageRequest({ group: 'a,b,a', scheme: ['gtin', 'sgtin', 'gtin'],
+  const other = assetPageRequest({ group: 'a,b,a', scheme: ['model', 'tag', 'model'],
     identified: 'any', reportedFrom: '2026-01-01T00:00:00.000Z',
     reportedTo: '2026-02-01T00:00:00Z' }, schemes.ids);
   assert.equal(canonicalFilters(parsed.filters), canonicalFilters(other.filters));
   assert.equal(canonicalFilters(parsed.filters),
-    'groups=a,b|schemes=gtin,sgtin|identified=any'
+    'groups=a,b|schemes=model,tag|identified=any'
     + '|from=2026-01-01T00:00:00.000Z|to=2026-02-01T00:00:00.000Z');
   // A date names a whole day and an instant names a point in time, so the two
   // are different predicates and must not share a cursor key.
@@ -78,7 +78,7 @@ test('a cursor is bound to the whole query shape and fails closed otherwise', ()
     { q: 'other' }, { scope: 'mine' }, { sort: 'reportedAt' }, { dir: 'desc' },
     // The complete canonical filter state is bound too, so adding, removing or
     // altering any filter invalidates a cursor taken under another predicate.
-    { scheme: 'gtin' }, { identified: 'none' },
+    { scheme: 'model' }, { identified: 'none' },
     { group: 'a' }, { reportedFrom: '2026-01-01' }, { reportedTo: '2026-01-01' },
   ]) assert.throws(() => assetPageRequest({ ...base, ...change, cursor }, schemes.ids),
     ValidationError, JSON.stringify(change));
@@ -132,10 +132,10 @@ test('every query-string shape parses identically, and empty means unset', () =>
   }
   // The second failing URL: filters set, with one bound left empty.
   for (const shape of shapes('/?sort=name&dir=asc&group=7818b2d4-7ad9-4fa1-8f0c-fa3061584091'
-    + '&identified=none&scheme=gtin&reportedFrom=2026-09-19&reportedTo=')) {
+    + '&identified=none&scheme=model&reportedFrom=2026-09-19&reportedTo=')) {
     const parsed = assetPageRequest(shape, schemes.ids);
     assert.equal(canonicalFilters(parsed.filters),
-      'groups=7818b2d4-7ad9-4fa1-8f0c-fa3061584091|schemes=gtin'
+      'groups=7818b2d4-7ad9-4fa1-8f0c-fa3061584091|schemes=model'
       + '|identified=none|from=2026-09-19T00:00:00.000Z');
     assert.equal(parsed.filters.reportedTo, null);
   }
@@ -163,7 +163,7 @@ test('the URLs the inventory generates round-trip through the parser', () => {
   // One filter set with the rest unset, and several set with a bound unset.
   for (const filters of [
     { ...emptyAssetFilters, identified: 'none' as const },
-    { ...emptyAssetFilters, groups: ['g1'], schemes: ['gtin' as const],
+    { ...emptyAssetFilters, groups: ['g1'], schemes: ['model' as const],
       reportedFrom: '2026-09-19T00:00:00.000Z' },
   ]) {
     const path = inventoryPath({ ...view, filters });

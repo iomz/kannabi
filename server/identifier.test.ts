@@ -5,7 +5,7 @@ import { assetFilters } from './asset-page.js';
 import { assetRecord } from './asset-representation.js';
 import type { Auth } from './auth.js';
 import { createInventoryApi } from './inventory-api.js';
-import { gs1Rule, gs1Schemes } from '../plugins/gs1/adapter/schemes.js';
+import { modelScheme, tagScheme as addressedTag } from './test-fixture.js';
 import { ValidationError } from './identity.js';
 import type { Asset, IdentityStore } from './identity-store.js';
 import {
@@ -97,30 +97,6 @@ test('core refuses only an exact repeat; every other rule belongs to its owner',
   assert.throws(() => schemes.acceptAll('T-1'), /Identifiers must be a list/);
 });
 
-test('GS1 rules judge GS1 identifiers and no others', () => {
-  const schemes = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
-  assert.deepEqual(schemes.ids, ['gtin', 'sgtin', 'grai', 'giai', 'tag']);
-  assert.deepEqual(schemes.inputFields, ['scheme', 'gtin', 'serial', 'assetType', 'assetReference', 'code']);
-  const product = schemes.accept({ scheme: 'gtin', gtin: '04901234567894' });
-  const shelf = schemes.accept({ scheme: 'tag', code: 'T-7' });
-  // The tag's component is named `gtin` and holds a different value. It is not
-  // a trade item, so it conflicts with nothing, in the rule or in the
-  // plugin's part of the write, which is where GTIN consistency is enforced.
-  schemes.assertSet([product, shelf]);
-  schemes.assertAddition([product], shelf);
-  schemes.assertAddition([shelf], product);
-  // The GS1 rule that needs no setting is unchanged: one asset-type series.
-  const crate = schemes.accept({ scheme: 'grai', assetType: '0614141234561' });
-  const pallet = schemes.accept({ scheme: 'grai', assetType: '0614141234578' });
-  assert.throws(() => schemes.assertSet([crate, pallet, shelf]), /conflicting GRAI asset types/);
-  assert.throws(() => schemes.assertAddition([crate, shelf], pallet), /conflicting GRAI asset types/);
-  // GS1 supplies an address for an individual identity and none for a class.
-  const other = schemes.accept({ scheme: 'sgtin', gtin: '04912345678904', serial: 'A1' });
-  assert.equal(schemes.address(product), null);
-  assert.equal(schemes.address(other), '/01/04912345678904/21/A1');
-  assert.equal(schemes.address(shelf), null);
-});
-
 test('a registry refuses a scheme it could not tell apart', () => {
   assert.throws(() => identifierSchemes([tag, tag]), /installed twice/);
   assert.throws(() => identifierSchemes([{ ...tag, id: 'Tag' }]), /not a lowercase token/);
@@ -134,23 +110,23 @@ test('a registry refuses a scheme it could not tell apart', () => {
 
 test('a field belongs to the scheme that declares it, whatever else is installed', () => {
   const alone = identifierSchemes([tag]);
-  const beside = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
-  // `serial` is a GS1 field. Installing GS1 must not make a tag accept it.
-  const input = { scheme: 'tag', code: 'T-7', serial: '1' };
-  assert.throws(() => alone.accept(input), /Unsupported field: serial/);
-  assert.throws(() => beside.accept(input), /Unsupported field: serial/);
-  assert.throws(() => beside.accept({ scheme: 'gtin', gtin: '04901234567894', code: 'T-7' }), /Unsupported field: code/);
-  assert.throws(() => assetLookupQuery(input, beside), /Unsupported field: serial/);
+  const beside = identifierSchemes([modelScheme, tag]);
+  // `series` is the model scheme's field. Installing it must not make a tag
+  // accept it.
+  const input = { scheme: 'tag', code: 'T-7', series: 'drill' };
+  assert.throws(() => alone.accept(input), /Unsupported field: series/);
+  assert.throws(() => beside.accept(input), /Unsupported field: series/);
+  assert.throws(() => beside.accept({ scheme: 'model', series: 'drill', code: 'T-7' }), /Unsupported field: code/);
+  assert.throws(() => assetLookupQuery(input, beside), /Unsupported field: series/);
 });
 
 test('an Asset carrying an identifier with no address is still served', async () => {
   // The detail response lists an address only where a scheme supplies one. An
   // identifier of a scheme with none must not fail the whole response.
-  const schemes = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
+  const schemes = identifierSchemes([addressedTag, modelScheme]);
   const carried = [
-    { key: 'i1', ...schemes.accept({ scheme: 'sgtin', gtin: '04912345678904', serial: 'A1' }), attachment: null },
-    { key: 'i2', ...schemes.accept({ scheme: 'tag', code: 'T-7' }), attachment: null },
-    { key: 'i3', ...schemes.accept({ scheme: 'gtin', gtin: '04912345678904' }), attachment: null },
+    { key: 'i1', ...schemes.accept({ scheme: 'tag', code: 'T-7' }), attachment: null },
+    { key: 'i2', ...schemes.accept({ scheme: 'model', series: 'drill' }), attachment: null },
   ];
   const rig = { ...bare, isPublic: true, identifiers: carried } as unknown as Asset;
   const store = { schemes, async getAsset() { return rig; } } as unknown as IdentityStore;
@@ -159,8 +135,7 @@ test('an Asset carrying an identifier with no address is still served', async ()
   const response = await createInventoryApi(store, anonymous, origin).request(`${origin}/assets/${rig.id}`);
   assert.equal(response.status, 200, await response.clone().text());
   const body = await response.json();
-  assert.deepEqual(body.addresses, [{ identifierKey: 'i1', canonical: '(01)04912345678904(21)A1',
-    uri: origin + '/01/04912345678904/21/A1' }]);
+  assert.deepEqual(body.addresses, [{ identifierKey: 'i1', canonical: 'tag:T-7', uri: origin + '/tag/T-7' }]);
   // Which address is surfaced is an installed plugin's presentation choice;
   // with none installed it is the native Asset URI.
   assert.equal(body.surfacedUri, origin + '/asset/' + rig.id);

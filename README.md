@@ -632,7 +632,7 @@ A plugin lives under `plugins/<id>/` and contributes to the server through one c
 
 The web client has the counterpart, `web/plugin.ts`: how a plugin's schemes are named and filled in, which addresses an Asset has, a part of the Asset page, a Group view and overview line, a settings section, and routes of its own. A slot with no contributor renders nothing.
 
-Composition is static. The installed plugins are one list, and `pnpm plugins:compose` writes that list out as ordinary imports in three generated files, the only places a plugin is named: `server/plugins.generated.ts` for the server, and `web/plugins.generated.ts` and `web/routes.generated.ts` for the web client. A Kannabi with a different set is a different list, built again. With an empty list, core's server and web client still build; only the demo seed script, which seeds GS1 data, and the tests that exercise GS1 need a plugin. Nothing is discovered, loaded at run time or switched on, and nothing is installed from the web interface: a plugin runs inside Kannabi with the whole database, so whoever can install one can read every Asset, and system administration grants no Asset access. Administration → Plugins lists what an instance was built with and changes nothing.
+Composition is static. The installed plugins are one list, and `pnpm plugins:compose` writes that list out as ordinary imports in three generated files, the only places a plugin is named: `server/plugins.generated.ts` for the server, and `web/plugins.generated.ts` and `web/routes.generated.ts` for the web client. A Kannabi with a different set is a different list, built again. With an empty list, and with `plugins/` empty altogether, core typechecks, builds and passes its own tests. The demo dataset seeds GS1 data, so it belongs to the GS1 plugin (`plugins/gs1/demo/`) and `pnpm demo:seed` needs that plugin. Nothing is discovered, loaded at run time or switched on, and nothing is installed from the web interface: a plugin runs inside Kannabi with the whole database, so whoever can install one can read every Asset, and system administration grants no Asset access. Administration → Plugins lists what an instance was built with and changes nothing.
 
 A plugin adds and never overrides. Its routes sit behind core's authentication and Origin guard, an address it claims is served only to a reader core says may see the Asset, and inside an Asset write it may refuse while core does the writing and stamps the provenance.
 
@@ -777,6 +777,11 @@ Suites run up to four at a time (`KANNABI_TEST_CONCURRENCY` overrides it), and e
 To run a focused suite, pass its path, for example `pnpm test:integration server/asset-collaboration.integration.test.ts`.
 Tests cover canonicalization, conflicting claims, transactional and concurrent duplicate rejection, persisted authentication, password-stepped credential changes and recovery, explicit Group reporting, private/public authorization, immutable provenance after membership removal, encrypted mail configuration and recovery, live local SMTP delivery, signed S3 operations, photo authorization, policy enforcement, timezone presentation, theme persistence, and upload-failure cleanup.
 It never uses the application `.env` or an existing database.
+
+Core's tests, under `server/`, run against a fixture plugin (`server/test-fixture.ts` and `server/test-web-fixture.tsx`: two identifier schemes, one address form, one tool) and never against a real one, so they say what Kannabi does with a plugin installed and still pass in a checkout that has none.
+`server/test-composition.mjs` gives a core screen under test, and a server process a test starts, that fixture in place of the generated plugin list.
+A plugin keeps its own tests beside its code, where they run against the plugin itself: the GS1 plugin's are under `plugins/gs1/tests/`, and hold everything about Kannabi with GS1 installed.
+`pnpm test` runs both; with no plugin installed there are none of the second kind to run.
 `NEO4J_TEST_IMAGE` may select a locally cached Neo4j 5 image; the default matches Compose's `neo4j:5-community`.
 
 ## Name

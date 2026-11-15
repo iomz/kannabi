@@ -9,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import type { Mailer, MailMessage } from './mail.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -132,7 +132,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
       const selfKey = (await (await selfDeleting('/me')).json()).user.key;
       const account = await store.managedUserAccount(keys[0], selfKey);
       const group = await store.createReportingGroup('Self deletion group', selfKey);
-      const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'SELF-DELETED' };
+      const identifier = { scheme: 'tag' as const, code: 'T-1' };
       const asset = await store.reportAsset({ name: 'Self-deleted provenance', identifiers: [identifier] },
         { actorKey: selfKey, groupKey: group.key });
       assert.deepEqual(asset.reportedBy, { key: selfKey, name: 'Self deleting member', status: 'active' });
@@ -230,7 +230,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
         email: 'edited@example.com', password: 'test-password-12345',
       })).status, 200);
       const group = await store.createReportingGroup('Former member group', keys[1]);
-      const identifier = { scheme: 'sgtin' as const, gtin: '00614141123452', serial: 'DELETED-REPORTER' };
+      const identifier = { scheme: 'tag' as const, code: 'T-2' };
       const asset = await store.reportAsset({ name: 'Retained provenance', identifiers: [identifier] },
         { actorKey: keys[1], groupKey: group.key });
       assert.deepEqual(asset.reportedBy, { key: keys[1], name: 'Edited member', status: 'active' });
@@ -282,7 +282,7 @@ test('administrator-controlled user lifecycle preserves auth and domain invarian
     await t.test('final administrator role protection remains atomic', async () => {
       const privateGroup = await store.createReportingGroup('Admin-only asset group', keys[0]);
       const privateAsset = await store.reportAsset({ name: 'Role-independent access',
-        identifiers: [{ scheme: 'grai' as const, assetType: '0614141234561', serial: '789' }] },
+        identifiers: [{ scheme: 'tag' as const, code: 'T-3' }] },
       { actorKey: keys[0], groupKey: privateGroup.key });
       assert.equal((await admin(`/admin/users/${keys[0]}/role`, 'PATCH', { isAdmin: false })).status, 409);
       assert.equal((await admin(`/admin/users/${pendingKey}/role`, 'PATCH', { isAdmin: true })).status, 200);

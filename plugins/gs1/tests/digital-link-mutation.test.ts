@@ -1,4 +1,4 @@
-import './dom.js';
+import '../../../server/dom.js';
 
 /** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
 const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
@@ -6,11 +6,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import DigitalLinkPage, { clientAction } from '../plugins/gs1/web/digital-link.js';
-import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
-import { digitalLinkPath } from '../plugins/gs1/toolkit/digital-link.js';
-import { newAssetId } from './asset-id.js';
-import { mount, settle } from './dom-render.js';
+import DigitalLinkPage, { clientAction } from '../web/digital-link.js';
+import { canonicalIdentifier } from '../toolkit/gs1.js';
+import { digitalLinkPath } from '../toolkit/digital-link.js';
+import { newAssetId } from '../../../server/asset-id.js';
+import { mount, settle } from '../../../server/dom-render.js';
 
 /** Mutating an Asset entered through a GS1 Digital Link.
  *

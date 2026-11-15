@@ -9,7 +9,7 @@ import { IdentityStore } from './identity-store.js';
 import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import type { Mailer, MailMessage } from './mail.js';
-import { composition } from './composition.js';
+import { composition } from './test-fixture.js';
 
 /** Admin-created accounts send a setup link, so something has to accept it. */
 class DiscardMailer implements Mailer {
