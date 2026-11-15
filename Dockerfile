@@ -4,6 +4,13 @@ RUN npm install --global pnpm@10.32.0
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# A deployment's plugin list names the plugins to build in. Fetching them
+# needs git, which the build stage has no other use for; a build with no list
+# is Kannabi core and fetches nothing.
+RUN if [ -f kannabi.plugins.json ]; then \
+      apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+      && rm -rf /var/lib/apt/lists/* && pnpm plugins:sync; \
+    fi
 RUN pnpm build && pnpm prune --prod
 
 FROM node:24-bookworm-slim

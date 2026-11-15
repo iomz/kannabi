@@ -10,8 +10,8 @@ import { join } from 'node:path';
  * checkout builds.
  *
  *   { "plugins": [
- *       { "id": "gs1" },
- *       { "id": "example", "repository": "https://example.org/kannabi-plugin-example.git", "ref": "v0.1.0" }
+ *       { "id": "example", "repository": "https://example.org/kannabi-plugin-example.git", "ref": "v0.1.0" },
+ *       { "id": "local" }
  *   ] }
  *
  * An entry with no `repository` names a plugin already in `plugins/<id>/`. One
