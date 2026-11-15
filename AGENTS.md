@@ -42,51 +42,18 @@ Preserve the README naming story at the bottom of README.
 - Migration assigns a native identity only where one is missing, under a lock that makes concurrent startup safe; an unrecognized identity is never repaired or replaced.
 - The UUIDv7 timestamp has no domain meaning; Asset chronology uses explicit fields such as `reportedAt`.
 - Internal database keys, including Neo4j node identity, remain implementation details.
-- A Kannabi Asset exists independently of GS1. Registering and managing one must never require GS1 knowledge or a GS1 identifier.
+- A Kannabi Asset exists independently of every identifier scheme. Registering and managing one must never require a scheme's knowledge or an identifier, and Kannabi with no scheme installed is complete.
+- Kannabi core records identifiers and issues none; `Asset.id` is its only native identity. Whether a value was issued, by whom, and whether it may ever be reused are facts and policy of the plugin that issued it.
 - External identifiers are optional and multiple: zero is a normal Asset state, and identifiers are attached and detached after creation without touching `Asset.id`.
 - Domain identifiers retain their scheme and semantics whether Kannabi issues them or records an externally assigned value; neither possession nor issuance makes them authorization grants. Asset access stays Group-derived.
-- GS1 syntax rules are enforced strictly at one boundary, and the internal domain model must not become the GS1 ontology.
-- GS1 `req=`/`ex=` association rules belong to a single AI element string; never apply them across the independent identifiers of one Asset. Asset-level cardinality is permissive, GS1 validity within an identifier is strict.
-- Persistence labels that carry a derived GS1 level are persistence vocabulary; never promote them into domain concepts or expose them as identifier schemes.
-- GS1 rules are versioned policy data, not application conditionals, and the policy version is independent of the Kannabi software version.
-- Kannabi must never present its own Syntax Dictionary to General Specifications mapping as a GS1 assertion.
-- A GS1 policy bump governs future acceptance only; stored identifiers are never revalidated or rewritten, and a scheme's canonical layout may not change without a data migration.
+- Persistence labels that carry an identifier's derived level are persistence vocabulary; never promote them into domain concepts or expose them as identifier schemes.
 - Each stored external identifier records the policy version that accepted it as historical provenance; a missing stamp is rejected, never replaced with the active version.
 - Each Asset–identifier association records, on the association and in the same statement that creates it, who accepted it, when, and the basis the request named — the Tier 1 fields scoped to that association. It describes acceptance, never issuance or verification; it is fixed for the life of the association and removed with it, and a shared identifier node never carries it. An association recorded before Kannabi kept this reads as unknown, never as accepted by nobody.
-- That an Asset is an instance of at most one trade item — every AI 01 it carries naming the same GTIN — is enforced by default and is an instance acceptance policy an administrator may relax. Relaxing it records what a source asserted and keeps the conflict visible; it never declares the conflict correct. The instance keeps the set of Assets that currently hold a conflict, derived from their identifiers in the same transaction as every identifier write and rebuilt from them at startup; re-enabling the policy is refused while that set is non-empty, and nothing is ever removed or rewritten to make it succeed. Syntax, check digits, uniqueness and the same-identifier-twice rule are not part of that policy.
-- Conformance rules apply to the semantic object the standard governs. Enforcing a rule strictly at the wrong boundary is itself incorrect, not merely over-strict.
-- Allocation authority comes from a configured namespace plus an immutable allocation record; possessing or storing an identifier never implies Kannabi issued it.
-- Kannabi can guarantee the configured prefix boundary for values it issues, and makes no equivalent authority claim about values it merely stores. Never promote a plausible-looking heuristic into a standards rule.
-- Four operations stay permanently distinct: recording an existing identifier, adopting a managed class key, allocating a class key, and issuing an individual key. Kannabi may issue only where it can establish the relevant allocation authority. The UI keeps them distinct too: each has its own control, and a form whose meaning turns on whether a field was left blank hides the distinction rather than expressing it.
-- A recorded identifier can never become issuance authority. A serial is issuable only under a class-key record in a namespace the acting Group manages, and recording an identifier creates no such record, so serialising another party's key is unexpressible rather than merely forbidden.
-- A class key is brought into a namespace either by allocation or by adoption, and the record says which explicitly. Neither is inferred from the other, and a row missing that discriminator is rejected rather than defaulted.
-- Adoption verifies containment in the prefix the Group asserted, with exactly the standing of that assertion. It is never a licensing check.
-- A class-key allocation record carries no name, description, product attribute, dimension or image. Allocation bookkeeping is not a trade item, a product or an asset class, and a label would answer the trade-item referent question by accretion.
-- Kannabi allocates identifiers and is not a product catalogue. GTIN management and product listing are independent, and communicating a trade item's characteristics to trading partners stays with its allocator in their own systems.
-- A value Kannabi issued is never reused. It may be detached from its Asset, but the ledger permanently binds the issuance to that Asset, so it can only ever return there. This is Kannabi's GS1 issuance policy, one rule across the GS1 schemes it issues, matched on the canonical form. It is not a rule about identifiers in general: Kannabi issues nothing outside a managed GS1 namespace, and whether an issued value may ever be reused is decided by whatever issues it.
-- Kannabi's never-reuse rules are stricter than the GS1 floor for most keys, and must be documented as Kannabi policy rather than as GS1 requirements. Each is justified by a fact Kannabi cannot observe — external publication state, whether a value remained with an asset, sector-specific serial constraints. Overstating a standard is the same class of error as understating it.
-- Issuance is idempotent per scheme per Asset. That is a guarantee about the operation and never cross-scheme exclusivity: one Asset may carry Kannabi-issued keys of several schemes at once, and no constraint, projection, route or schema may prevent it.
-- Existing-use exclusion ranges protect numbers that were already unavailable when a counter was configured; they are configuration, distinct from the issuance ledger, and are never a free list.
-- A reference counter is authoritative because Kannabi is the only allocator inside a managed namespace. A serial counter is not: serial non-duplication for a GTIN belongs to the GTIN allocator as a party, so Kannabi discharges it for the serials it issues and records a commitment it cannot enforce. Keep counters as inline state on the record that owns them so that difference stays visible where each is read.
-- The reference spaces of one prefix are independent. A GTIN and a GRAI asset type made of the same digits are different keys that do not conflict, so they never share a counter.
-- `active` on a namespace or a class key is configuration state, not allocation lifecycle. Deactivation stops new issuance under it and preserves the counters, exclusions and every issued record.
-- A GS1 Company Prefix is four to twelve digits, may not begin with the digits of another configured prefix, and may not fall in Restricted Circulation Number space. These are normative and citable; locating a prefix boundary inside an arbitrary key is not, and stays unenforced.
-- A prefix too long to leave a twelve-digit class reference is capability-limited, never invalid. Express per-scheme issuability; never invalidate a configured namespace.
-- Kannabi allocates and adopts base GTINs only. A GTIN-14 with an indicator digit identifies a trade item grouping or a variable measure trade item, and a GTIN-8 comes from a GS1-8 Prefix rather than a company prefix; both are refused with their reason, and an externally observed value of either stays recordable.
-- One managed GCP belongs to one Group. This is a Kannabi authorization-boundary restriction for the current model, not a claim about GS1 organizational semantics.
-- Configuring a GCP namespace, managing class keys in it and issuing from it require being a Group Manager of the owning Group, and issuance additionally requires that Group's existing collaboration on the Asset. The two are independent: the role never substitutes for collaboration, and collaboration never substitutes for the role. Reading a namespace and its class keys stays with membership, because the prefixes a Group manages are not secret from its members and hiding them would only stop somebody finding out who to ask.
-- Managing a class key touches no Asset and grants no Asset access. Issuing an individual key additionally requires that the namespace-managing Group collaborates on the Asset.
-- Identification level is derived from GS1 semantics and is never user-supplied or independently editable.
+- Identification level is derived by the scheme that owns the value and is never user-supplied or independently editable.
 - A class-level identifier may describe many Assets; an individual-level identifier identifies exactly one, enforced by schema constraints rather than application sequencing.
-- Allocation authority is never inferred from possession of an identifier; a stored identifier is not evidence that Kannabi allocated it.
 - The native Asset URI is stable and always valid; the surfaced URI is presentation policy and never identity.
-- A Digital Link URI is derived from identifier data on read and never stored.
-- Each supported Digital Link form independently resolves to the Asset; Kannabi never redirects one Digital Link form to another.
-- After a mutation, a client may navigate away from an address that no longer serves the Asset. This is navigation, never canonicalization: a viewer at a valid non-preferred Digital Link stays, and resolution of every address is unchanged.
 - A mutation is addressed by the native Asset identity the page carries, never by the presentation address it was submitted from. A presentation address is for reaching a page, and is not a carrier of identity.
-- Kannabi dereferences the Digital Link forms it supports and makes no GS1-Conformant Resolver claim. "Canonical GS1 Digital Link URI" is the standard's term for the `id.gs1.org` form, which Kannabi never emits.
-- Resolving through a Digital Link grants no access; an Asset the reader may not see is indistinguishable from an unknown identifier.
-- Company-prefix inference and GS1-Conformant Resolver behaviour remain deferred.
+- Resolving an address grants no access, whoever claimed the path; an Asset the reader may not see is indistinguishable from an unknown address.
 - Account deletion removes the active personal account but preserves immutable Asset provenance by default.
 - Deleted reporters become non-active tombstones that retain only the deletion-time display name required for human-readable provenance; they must not behave as discoverable Users.
 - Tombstones do not retain email, credentials, sessions, preferences, administrator roles, or Group memberships.
@@ -99,9 +66,22 @@ Preserve the README naming story at the bottom of README.
 - The MCP server states Kannabi's knowledge boundary in its connection instructions, naming the facts other systems own. An empty result must never be presentable as evidence about a fact Kannabi does not hold.
 - Every handle an MCP tool returns must be accepted unchanged by the tool that consumes it, and every field an agent must interpret carries its own description.
 - The MCP process's stdout is protocol; every diagnostic goes to stderr.
-- The structured Asset representation (`server/asset-representation.ts`) encodes whose statement each value is in where it sits: `kannabi` for what Kannabi holds and did, `source.says` for what a source record states, `notRecorded` for kinds of fact Kannabi records none of. MCP returns it and the HTTP API serves it under `/api/v2`; neither builds its own. A new Asset field takes its place in that structure in the same change, rather than an explanation in prose.
+- The structured Asset representation (`server/asset-representation.ts`) encodes whose statement each value is in where it sits: `kannabi` for what Kannabi holds and did, `source.says` for what a source record states, `notRecorded` for kinds of fact Kannabi records none of. MCP returns it and the HTTP API serves it under `/api/v3`; neither builds its own. What an installed plugin states sits under `extensions.<plugin id>`, never under `kannabi`: it is that plugin's statement, follows the Asset's visibility whole, and core never sorts, filters or searches on it. A new Asset field takes its place in that structure in the same change, rather than an explanation in prose.
 - No instant on an Asset is the time of a physical event. Every instant is the `at` of something Kannabi did, or the `recordedAt` a source says; an acquisition, loan, transfer or disposal date is never derived from either, nor from quoted text.
 - A value Kannabi holds none of is an explicit null in the structured representation, never a missing key, and a summary states the paths it omits.
+
+# Plugins
+
+- A capability that one deployment has and another wholly lacks is a plugin under `plugins/<id>/`. Core is everything under `server/` and `web/` and imports no plugin. `server/composition.ts` names the installed plugins for the server; `web/plugins.ts` and `web/routes.ts` name them for the web client; nothing else does, and `server/core-boundary.test.ts` keeps it so.
+- The web client takes a plugin's screens through the named slots of `web/plugin.ts`: scheme presentation, addresses, a part of the Asset page, a Group view and overview line, and its own settings section. A slot with no contributor renders nothing, and a plugin's screens read and save through the plugin's own routes.
+- Composition is static. A different set of plugins is a different build: no discovery, no runtime loading, no enable flag, and no installing from the web interface, because whoever can install a plugin can read every Asset and system administration must not grant Asset access.
+- A plugin adds and never overrides. No contribution lets one replace or skip authorization, provenance, the Asset access predicate or the Origin guard. Its routes mount under `/api/<id>/` behind core's authentication, an address it claims is served only to a reader core says may see the Asset, and inside an Asset write it may refuse while core does the writing.
+- Absence is invisible: an uninstalled plugin leaves no route, tool, setting, navigation entry or empty panel behind.
+- A plugin owns its vocabulary and its data. Its node labels carry its id as a prefix, it never sets a property on a core node, and it never joins two core nodes. What it holds about an Asset is keyed by `Asset.id`.
+- The plugin contract (`server/plugin.ts`) grows only for a need two plugins share, or one a core invariant forces. Taking part in an identifier write is the one point admitted on a core invariant alone. A need only one plugin has stays inside that plugin.
+- The plugin contract version is its own number, independent of the Kannabi software version. Startup refuses a plugin that does not list the running one.
+- Plugins are trusted code in the same process. The contract is enforced by its shape, by review and by startup verification, never by a sandbox.
+- A plugin keeps its own rules beside its code, in `plugins/<id>/AGENTS.md`. A rule about one scheme or one plugin's behaviour belongs there and not in this file.
 
 # Design principles
 
@@ -122,7 +102,7 @@ Prefer the browser's own control where it already does the job; add a scripted o
 UI tests assert roles, accessible names and behaviour rather than class names or markup shape. A surface anchored in a portal — a dialog, a menu, a toast — is opened in a real document and read back, never asserted against static markup.
 Keep one package and ordinary files until a concrete need requires more structure.
 Keep object bytes behind the small S3 storage interface and photo metadata in Neo4j.
-Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, the API token lifetime ceiling, toast lifetime, the two identifier presentation choices, GTIN consistency enforcement, whether new accounts require approval, and the People directory; store timestamps as absolute instants.
+Keep administrative settings limited to photo-on-report policy, display timezone, built-in instance theme, the API token lifetime ceiling, toast lifetime, the two identifier presentation choices, whether new accounts require approval, and the People directory; store timestamps as absolute instants. A plugin's settings are its own, kept in its own data and changed through its own routes.
 System administration must not grant Asset access.
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for application changes.
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
@@ -17,7 +18,8 @@ import { assetPageRequest } from './asset-page.js';
 import { runDemo } from '../scripts/demo/run.js';
 import { demoAccounts, demoAdministrators, demoAssets, demoDiscoverable, demoMembers, demoPassword,
   demoScopes } from '../scripts/demo/fixtures.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -69,10 +71,11 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
     assert.deepEqual(await keys(), mediaKeys);
   });
   await t.test('demo credentials, administration, every scope, pagination, and media authorization work', async () => {
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     const auth = await createAuth(driver, env.APP_URL, env.BETTER_AUTH_SECRET);
     const media = new MediaService(store, new S3Storage(s3, bucket));
-    const app = new Hono().route('/api', createInventoryApi(store, auth, env.APP_URL, media));
+    const app = new Hono().route('/api', createInventoryApi(store, auth, env.APP_URL, media, undefined, undefined, plugins));
     const users: string[] = [];
     for (const [index, account] of demoAccounts.entries()) {
       const response = await app.request(env.APP_URL + '/api/auth/sign-in/email', { method: 'POST',
@@ -168,7 +171,7 @@ test('development demo seed and full reset on disposable Neo4j and Alarik', { sk
 
   await t.test('confirmed reset replaces all local data and objects without bookkeeping', async () => {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: 'unrelated-local-object', Body: 'local development data' }));
-    await (await IdentityStore.open(driver, schemes)).createOwner('Old local Owner');
+    await (await IdentityStore.open(driver, composition)).createOwner('Old local Owner');
     const output = await promisify(execFile)('pnpm', ['demo:reset', '--', '--yes'], { env });
     assert.match(output.stdout, /DESTRUCTIVE RESET/);
     assert.deepEqual(await snapshot(), before);

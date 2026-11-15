@@ -9,8 +9,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* React Router keeps route modules in `web/`; nothing outside it renders UI. */
-@source "../web";
+/* Core's UI is in `web/`, a plugin's in `plugins/<id>/web/`; nothing else renders UI. */
+@source "../web"; @source "../plugins";
 
 /* Kannabi's colour scheme is an attribute, not a class: it is decided by an
    account preference resolved before the first paint, and the same document

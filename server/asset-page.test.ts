@@ -6,7 +6,8 @@ import { cursorVersion, encodeCursor } from './cursor.js';
 import { newAssetId } from './asset-id.js';
 import { inventoryPath, noFilters } from '../web/inventory-controls.js';
 import { ValidationError } from './identity.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 const asset = { name: '測定器 — A', reportedAt: '2026-09-20T08:01:49.123000000Z', id: newAssetId() };
 const request = { q: '測定', scope: 'all' as const, sort: 'name' as const, dir: 'asc' as const,

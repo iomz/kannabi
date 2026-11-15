@@ -1,10 +1,12 @@
-import { identifierSchemes } from './identifier.js';
-import { gs1Rule, gs1Schemes } from './gs1-schemes.js';
+import { compose } from './plugin.js';
+import { gs1Plugin } from '../plugins/gs1/index.js';
 
-/** What this build of Kannabi is composed of.
+/** The one file that says which plugins this Kannabi is built with.
  *
- * The one place that names what is installed beside core. Core modules take
- * what they need as a value and never import from here, so a Kannabi with
- * nothing installed is this file with an empty list.
+ * Core modules never import it: a store, an API and an MCP server are each
+ * handed what was composed here. A Kannabi with a different set of plugins is
+ * this file with different lines, and one with none is `compose([])`. Order
+ * matters only where one plugin calls another: a plugin comes after every
+ * plugin it requires.
  */
-export const schemes = identifierSchemes(gs1Schemes, [gs1Rule]);
+export const composition = compose([gs1Plugin]);

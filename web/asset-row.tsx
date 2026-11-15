@@ -1,8 +1,7 @@
 import { Link, useLocation } from 'react-router';
 import { useState } from 'react';
 import { assetPhotoPath } from '../shared/asset-uri';
-import { surfacedAssetPath } from '../server/surfaced-uri.js';
-import { schemeLabel } from '../server/gs1.js';
+import { web } from './plugins';
 import type { Asset, MatchedField } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
 import { Icon } from './icon';
@@ -23,14 +22,14 @@ export function AssetRow({ asset, detail, matchedFields = [] }: {
         rather than to an address that immediately redirects there.
         Carrying the complete location lets the Asset page return to the view it
         was opened from — the inventory query, or the lookup that resolved it. */}
-    <Link to={surfacedAssetPath(asset.id, asset.identifiers)}
+    <Link to={web.surfacedPath(asset)}
       state={{ from: location.pathname + location.search }}
       className="grid min-h-24 grid-cols-[94px_minmax(0,1fr)_auto] items-center gap-[1.4rem] py-[.6rem] pr-[1.4rem] pl-[.65rem] text-inherit hover:bg-accent focus-visible:[outline-offset:-3px] [&:hover_strong]:underline [&:hover_strong]:[text-underline-offset:.2em] max-sm:grid-cols-[66px_minmax(0,1fr)] max-sm:gap-x-[.8rem] max-sm:gap-y-[.4rem] max-sm:p-[.7rem]">
       <Thumbnail key={asset.photos[0]?.key ?? 'none'} asset={asset} />
       <div className="min-w-0 [overflow-wrap:anywhere]">
         <strong className="text-base font-[650] text-foreground max-sm:text-[.9rem]">{asset.name}</strong>
         <span className="mt-1 block text-[.85rem] text-muted-foreground max-sm:text-[.72rem]">{asset.identifiers.length
-          ? asset.identifiers.map((identifier) => schemeLabel(identifier.scheme) + ' ' + identifier.canonical).join(' · ')
+          ? asset.identifiers.map((identifier) => web.schemeLabel(identifier.scheme) + ' ' + identifier.canonical).join(' · ')
           : 'No external identifier'}</span>
         <span className="mt-[.4rem] flex flex-wrap items-center gap-x-2 gap-y-[.35rem] text-[.8rem] text-muted-foreground max-sm:gap-x-[.35rem] max-sm:gap-y-[.25rem] max-sm:text-[.73rem] [&_.icon]:size-4"><Icon name="groups" />
           <span>{asset.groups.map((group) => group.name).join(', ')}</span>

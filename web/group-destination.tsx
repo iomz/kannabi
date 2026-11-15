@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { web } from './plugins';
 import { isRouteErrorResponse, Link, NavLink, redirect, useNavigation, useRouteError, useSubmit } from 'react-router';
 import { api, unwrap } from './api';
 import { notify, notifyFailure } from './notify';
@@ -109,8 +110,10 @@ export function Relationship({ viewer }: { viewer: GroupRelationship['viewer'] }
  * below the strip used to make the browser offer a vertical scrollbar too.
  */
 export function GroupNavigation() {
+  // Core's three views, then one for each installed plugin that has one.
   const views: [string, string][] = [['.', 'Overview'], ['assets', 'Assets'], ['people', 'People'],
-    ['prefixes', 'GS1 prefixes']];
+    ...web.plugins.flatMap((plugin): [string, string][] =>
+      (plugin.group?.view ? [[plugin.group.view.path, plugin.group.view.label]] : []))];
   return <nav aria-label="Group" className="mb-6 flex gap-1 overflow-x-auto overflow-y-hidden border-b">
     {views.map(([to, label]) => <NavLink key={to} to={to} end={to === '.'} preventScrollReset
       className={({ isActive }) => ['whitespace-nowrap border-b-2 px-4 py-[.7rem] text-[.85rem] no-underline hover:bg-accent',

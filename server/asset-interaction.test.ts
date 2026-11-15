@@ -126,7 +126,7 @@ test('an identifier mutation leaves an address that no longer serves the Asset',
   // produced.
   const respondWith = (identifiers: unknown[], issuances: unknown[] = []) => {
     globalThis.fetch = async () => new Response(
-      JSON.stringify({ asset: { id, identifiers, issuances } }),
+      JSON.stringify({ asset: { id, identifiers }, issuances }),
       { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   const detach = () => {
@@ -178,7 +178,8 @@ test('an identifier mutation leaves an address that no longer serves the Asset',
 
     // Issuance is the same rule, not a special case.
     const allocate = new FormData();
-    allocate.set('intent', 'issue-identifier');
+    allocate.set('intent', 'add-identifier');
+    allocate.set('plugin', 'gs1');
     allocate.set('scheme', 'giai');
     allocate.set('namespaceKey', 'ns');
     respondWith([sgtin, giai]);

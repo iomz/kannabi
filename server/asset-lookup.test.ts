@@ -4,7 +4,8 @@ import { assetLookupCursor, assetLookupQuery } from './asset-lookup.js';
 import { encodeCursor } from './cursor.js';
 import { newAssetId } from './asset-id.js';
 import { ValidationError } from './identity.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 test('lookup accepts exactly one complete identity', () => {
   const id = newAssetId();

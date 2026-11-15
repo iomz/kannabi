@@ -11,10 +11,13 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "server/**/*.ts"
+    "server/**/*.ts",
+    "plugins/**/*.ts"
   ],
   "exclude": [
     "server/**/*.test.ts",
+    "plugins/**/*.test.ts",
+    "plugins/**/web/**",
     "server/dom.ts"
   ]
 }

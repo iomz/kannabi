@@ -139,7 +139,7 @@ Reporting an Asset requires a name and a Group; it never requires GS1 knowledge 
 An Asset carries zero or more external identifiers, attached and detached at any time through `POST` and `DELETE /api/assets/{id}/identifiers`, and none of that changes `Asset.id`.
 Carrying no external identifier is a normal state, not a deficiency.
 
-`server/gs1.ts` is the only place GS1 rules are applied.
+`plugins/gs1/toolkit/gs1.ts` is the only place GS1 rules are applied.
 It accepts GTIN (AI 01), SGTIN (AI 01 with AI 21), GRAI (AI 8003) and GIAI (AI 8004), validates components, and derives everything else:
 
 | Scheme | Input | Canonical form | Identifies |
@@ -196,7 +196,7 @@ GRAI    GCP ──► asset type ──► serial ─────► individual 
 SGTIN   GCP ──► GTIN ──► serial ───────────► individual trade item key
 ```
 
-`server/gs1.ts` is the only place any issued value is built.
+`plugins/gs1/toolkit/gs1.ts` is the only place any issued value is built.
 A GIAI is the configured prefix followed by an unpadded decimal reference.
 A GRAI asset type and a base GTIN share one computation — the prefix, a zero-padded reference filling the remaining digits, and the modulo-10 check digit — because the arithmetic is genuinely identical; they draw on separate counters, because §2.3 states that a GTIN and a GRAI sharing the same digits are different keys that do not conflict.
 Ordering is by the stored sequence, never by comparing identifier strings.
@@ -258,8 +258,8 @@ Company-prefix inference and GS1-Conformant Resolver behaviour remain deferred a
 ### GS1 policy version
 
 GS1 rules are versioned data, not application conditionals.
-`server/gs1-syntax.ts` is derived from a pinned release of the [GS1 Barcode Syntax Dictionary](https://github.com/gs1/gs1-syntax-dictionary) and holds only mechanical content: component structure, character sets, lengths, check-digit requirements, and the `req=`/`ex=` associations.
-`server/gs1.ts` holds the Kannabi overlay: scheme naming such as SGTIN being AI 01 with AI 21, the individual-versus-class derivation, and the policy identity itself.
+`plugins/gs1/toolkit/syntax.ts` is derived from a pinned release of the [GS1 Barcode Syntax Dictionary](https://github.com/gs1/gs1-syntax-dictionary) and holds only mechanical content: component structure, character sets, lengths, check-digit requirements, and the `req=`/`ex=` associations.
+`plugins/gs1/toolkit/gs1.ts` holds the Kannabi overlay: scheme naming such as SGTIN being AI 01 with AI 21, the individual-versus-class derivation, and the policy identity itself.
 
 The policy version is independent of the Kannabi software version:
 
@@ -394,7 +394,7 @@ The status and redirect are decided in the server, which the single-page build c
 
 ## The structured Asset representation
 
-An Asset's facts come from three places, and the structured representation puts each in its own part of the record, so where a value sits says whose statement it is:
+An Asset's facts come from several places, and the structured representation puts each in its own part of the record, so where a value sits says whose statement it is:
 
 ```json
 {
@@ -403,14 +403,15 @@ An Asset's facts come from three places, and the structured representation puts 
     "name": "Spectrum analyser", "owner": null, "groups": [{ "key": "…", "name": "Workshop" }], "public": false,
     "reported": { "at": "2026-10-17T08:00:00Z", "by": { "key": "…", "name": "Migration Operator", "status": "active" } },
     "lastChange": { "at": "…", "by": { … }, "via": { "id": "…", "label": "legacy loader" }, "basis": "depot:assets:100" },
-    "issued": [], "photos": []
+    "photos": []
   },
   "identifiers": [{ "scheme": "gtin", "value": "(01)04901234567894", "level": "class", "components": { "gtin": "04901234567894" },
-    "accepted": { "at": "…", "by": { … }, "via": null, "basis": "depot:assetcats:10", "gs1Policy": "…" }, "digitalLink": null }],
+    "accepted": { "at": "…", "by": { … }, "via": null, "basis": "depot:assetcats:10", "policy": "…" }, "address": null }],
   "source": {
     "reference": "depot:assets:100",
     "says": { "recordedAt": "2015-04-12T00:30:00Z", "recordedBy": "K. Sato", "description": "Purchased 2015-11-02 …" }
   },
+  "extensions": { "gs1": { "issued": [] } },
   "notRecorded": ["acquisition", "location", "custody", "ownership history", "events", "observations", "condition"]
 }
 ```
@@ -418,9 +419,11 @@ An Asset's facts come from three places, and the structured representation puts 
 `kannabi` is what Kannabi holds and did, by its own clock.
 `kannabi.reported.at` is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only chronology.
 `source.says` is what the record named by `source.reference` states about itself, quoted byte for byte; Kannabi asserts only that the source says it.
+`extensions` holds what each installed plugin states about the Asset, keyed by plugin id; it is that plugin's statement, follows the Asset's visibility whole, and is `{}` in a Kannabi built with no plugin.
+`extensions.gs1.issued` lists the values Kannabi issued for the Asset: core records identifiers and issues none, so issuance is the GS1 plugin's statement.
 `notRecorded` names the kinds of fact Kannabi records none of, so their absence is stated rather than left to an empty field.
 
-Every instant is the `at` of something Kannabi did, or the `recordedAt` a source says.
+Every instant is the `at` of something Kannabi or one of its plugins did, or the `recordedAt` a source says.
 There is no field a physical event could occupy, so no instant can be read as an acquisition, a loan or a transfer, and a date written in the source's description stays inside the quotation.
 A value Kannabi holds none of is an explicit `null`, never a missing key.
 
@@ -428,7 +431,8 @@ Search and lookup return summaries: the same paths as the record with some left 
 Each search result says in `matched` where the query matched, as a path into the record, so a match inside `source.says.description` is visibly a match on what a source said.
 
 The representation is computed from the stored Asset on every read and changes nothing that is stored.
-The HTTP API serves it at `GET /api/v2/assets/{id}`, `GET /api/v2/assets` and `GET /api/v2/assets/lookup`, which take the same parameters and the same readability as their `/api/assets` counterparts and answer with `"representation": 2`; those original routes keep their first representation unchanged.
+The HTTP API serves it at `GET /api/v3/assets/{id}`, `GET /api/v3/assets` and `GET /api/v3/assets/lookup`, which take the same parameters and the same readability as their `/api/assets` counterparts and answer with `"representation": 3`; those original routes keep their first representation.
+Representation 3 replaced representation 2 when GS1 became a plugin: `identifiers[].accepted.gs1Policy` and `identifiers[].digitalLink` became the scheme-neutral `policy` and `address`, and `kannabi.issued` moved to `extensions.gs1.issued`. `/api/v2` is no longer served.
 MCP's `get_asset`, `search_assets`, `resolve_external_identifier` and `list_gs1_issuances` return this representation.
 `server/asset-representation.ts` builds it for both.
 
@@ -620,6 +624,20 @@ If storage is unavailable, cleanup waits for recovery and the pending photo is n
 To evaluate an empty deployment, sign up, create a Group or join through a Group Manager, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
+## Plugins
+
+A capability that one deployment has and another wholly lacks is a plugin.
+Kannabi core — Assets, Groups, people, authorization, provenance, photos and the scheme-neutral identifier layer — is everything under `server/` and imports no plugin.
+A plugin lives under `plugins/<id>/` and contributes to the server through one contract, `server/plugin.ts`: identifier schemes and rules, its own persistence, HTTP routes mounted at `/api/<id>/`, root-level addresses, MCP tools and instructions, a part in an identifier write, and a section of the Asset representation under `extensions.<id>`.
+
+The web client has the counterpart, `web/plugin.ts`: how a plugin's schemes are named and filled in, which addresses an Asset has, a part of the Asset page, a Group view and overview line, a settings section, and routes of its own. A slot with no contributor renders nothing.
+
+Composition is static. `server/composition.ts` names the installed plugins for the server, and `web/plugins.ts` and `web/routes.ts` name them for the web client; a Kannabi with a different set is those three files with different lines, built again. With `plugins/` absent altogether, core's server and web client still typecheck and build; only the demo seed script, which seeds GS1 data, and the tests that exercise GS1 need it. Nothing is discovered, loaded at run time or switched on, and nothing is installed from the web interface: a plugin runs inside Kannabi with the whole database, so whoever can install one can read every Asset, and system administration grants no Asset access. Administration → Plugins lists what an instance was built with and changes nothing.
+
+A plugin adds and never overrides. Its routes sit behind core's authentication and Origin guard, an address it claims is served only to a reader core says may see the Asset, and inside an Asset write it may refuse while core does the writing and stamps the provenance.
+
+The shipped composition installs one plugin, GS1 (`plugins/gs1/`). Its `toolkit/` is GS1 itself as Kannabi needs it; its `adapter/` is what makes that a Kannabi capability. The sections above on GS1 issuance, policy version and Digital Link describe that plugin.
+
 ## Capability surfaces
 
 Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP server. They are not the same size, and are not meant to be. Each absence below is a decision, not a gap waiting to be filled, and the ones that carry meaning are explained under the table. The HTTP API is mounted at `/api`, which is why one row names an address outside it.
@@ -630,7 +648,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Browse and search by name or quoted source description | yes | `GET /api/assets` | `search_assets` |
 | Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
 | Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
-| Read the structured Asset representation | no | `GET /api/v2/assets`, `/api/v2/assets/lookup`, `/api/v2/assets/{id}` | every Asset result |
+| Read the structured Asset representation | no | `GET /api/v3/assets`, `/api/v3/assets/lookup`, `/api/v3/assets/{id}` | every Asset result |
 | Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
 | Supply identifiers while reporting | no | yes | no |
 | Rename, change visibility | yes | `PATCH /api/assets/{id}` | no |
@@ -640,17 +658,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | **Identifiers** | | | |
 | Record an identifier assigned elsewhere | yes | `POST /api/assets/{id}/identifiers` | no |
 | Detach one | yes | `DELETE /api/assets/{id}/identifiers/{key}` | no |
-| Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /api/assets/{id}/giai`, `/grai`, `/sgtin` | no |
-| Read an Asset's own issuances | yes | in the Asset representation | `get_asset` |
 | Read who accepted each identifier, when and on what basis | yes | in the Asset representation | `get_asset` |
-| List the issuance ledger | no | no | `list_gs1_issuances` |
-| **GS1 namespaces** | | | |
-| Configure or deactivate a prefix namespace | yes | `POST /api/groups/{key}/gs1-namespaces`, `PATCH /api/gs1-namespaces/{key}` | no |
-| List namespaces | yes | `GET /api/gs1-namespaces` | `list_gs1_namespaces` |
-| Allocate or adopt a class key | yes | `POST /api/gs1-namespaces/{key}/class-keys` | no |
-| List class keys | yes | `GET /api/gs1-namespaces/{key}/class-keys` | `list_managed_class_keys` |
-| **GS1 Digital Link** | | | |
-| Dereference a supported address | yes | document address, not an `/api` route | path returned, never dereferenced |
 | **Groups** | | | |
 | Create, leave | yes | `POST /api/groups`, `DELETE /api/groups/{key}/membership` | no |
 | List your Groups with your role | yes | `GET /api/groups` | `list_groups`, without roles |
@@ -669,15 +677,38 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Profile, appearance, account deletion | yes | `/api/profile*` | no |
 | API tokens | yes | `/api/api-tokens*` | no |
 | Users, settings, mail | yes | `/api/admin/*`, `/api/settings` | no |
+| List the plugins this instance was built with | yes | `GET /api/admin/plugins` | named in the connection instructions |
 | Recover a Group with no Group Manager | no | `GET /api/admin/groups/unmanaged`, `POST /api/admin/groups/{key}/recover` | no |
-| Enforce or relax GTIN consistency | yes | `PATCH /api/settings` | no |
 | Require approval for new accounts, choose the People directory | yes | `PATCH /api/settings` | no |
 | Approve or reject a waiting account | yes | `POST /api/admin/users/{key}/approval`, `DELETE /api/admin/users/{key}` | no |
-| List Assets blocking GTIN consistency | yes, when enabling is refused | `GET /api/admin/gtin-conflicts`, and the `409` refusing `PATCH /api/settings` | no |
+
+### GS1 plugin
+
+These exist only in a Kannabi built with the GS1 plugin (`plugins/gs1/`), which the shipped composition includes. Its HTTP routes live under `/api/gs1/`. Without it none of this is present, and nothing is missing from the table above.
+
+| Capability | Web UI | HTTP API | MCP |
+| --- | --- | --- | --- |
+| **Identifiers** | | | |
+| Record, detach and resolve a `gtin`, `sgtin`, `grai` or `giai` | yes | the core identifier routes | `resolve_external_identifier` |
+| Issue a GIAI, serialised GRAI or SGTIN | yes | `POST /api/gs1/assets/{id}/giai`, `/grai`, `/sgtin` | no |
+| Read an Asset's own issuances | yes | `GET /api/gs1/assets/{id}/issuances`, and `extensions.gs1` in the Asset representation | `get_asset` |
+| List the issuance ledger | no | no | `list_gs1_issuances` |
+| **GS1 namespaces** | | | |
+| Configure or deactivate a prefix namespace | yes | `POST /api/gs1/groups/{key}/namespaces`, `PATCH /api/gs1/namespaces/{key}` | no |
+| List namespaces | yes | `GET /api/gs1/namespaces` | `list_gs1_namespaces` |
+| Allocate or adopt a class key | yes | `POST /api/gs1/namespaces/{key}/class-keys` | no |
+| List class keys | yes | `GET /api/gs1/namespaces/{key}/class-keys` | `list_managed_class_keys` |
+| Deactivate or reactivate a class key | yes | `PATCH /api/gs1/namespaces/{key}/class-keys/{classKeyKey}` | no |
+| **GS1 Digital Link** | | | |
+| Dereference a supported address | yes | document address, not an `/api` route | path returned, never dereferenced |
+| **Settings** | | | |
+| Read the GTIN consistency policy | yes | `GET /api/gs1/settings` | no |
+| Enforce or relax GTIN consistency | yes | `PATCH /api/gs1/settings` | no |
+| List Assets blocking GTIN consistency | yes, when enabling is refused | `GET /api/gs1/admin/gtin-conflicts`, and the `409` refusing `PATCH /api/gs1/settings` | no |
 
 ### What the absences mean
 
-**MCP writes nothing.** All seven tools are read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
+**MCP writes nothing.** Every tool, core's four and the GS1 plugin's three, is read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
 
 **The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
 
@@ -713,7 +744,7 @@ pnpm test:integration
 
 The integration runner creates a disposable Neo4j container per suite and an Alarik container for media tests with a random password and localhost port, then removes it after testing.
 Suites run up to four at a time (`KANNABI_TEST_CONCURRENCY` overrides it), and each suite's output is printed in one piece when it finishes.
-To run a focused suite, pass its filename, for example `pnpm test:integration asset-collaboration.integration.test.ts`.
+To run a focused suite, pass its path, for example `pnpm test:integration server/asset-collaboration.integration.test.ts`.
 Tests cover canonicalization, conflicting claims, transactional and concurrent duplicate rejection, persisted authentication, password-stepped credential changes and recovery, explicit Group reporting, private/public authorization, immutable provenance after membership removal, encrypted mail configuration and recovery, live local SMTP delivery, signed S3 operations, photo authorization, policy enforcement, timezone presentation, theme persistence, and upload-failure cleanup.
 It never uses the application `.env` or an existing database.
 `NEO4J_TEST_IMAGE` may select a locally cached Neo4j 5 image; the default matches Compose's `neo4j:5-community`.

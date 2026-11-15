@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { IdentifierList, IssueIdentifier } from '../web/asset-identifiers.js';
+import { IdentifierList } from '../web/asset-identifiers.js';
+import { issuedStanding, IssueIdentifier } from '../plugins/gs1/web/asset-page.js';
 import { mount, settle } from './dom-render.js';
-import { canonicalIdentifier } from './gs1.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 
 /** What the identifier cards and the issuance controls put in front of a
  * person, read back from a real document. */
@@ -16,7 +17,7 @@ const giai = canonicalIdentifier({ scheme: 'giai', assetReference: '0614141ASSET
 function list(props: Partial<Parameters<typeof IdentifierList>[0]> = {}) {
   return mount(createElement(IdentifierList, {
     identifiers: [{ ...gtin, key: 'class', attachment: null }, { ...giai, key: 'individual', attachment: null }],
-    issuances: [], digitalLinks: {}, showPolicyVersion: false,
+    standing: () => null, digitalLinks: {}, showPolicyVersion: false,
     canEdit: false, busy: false, onDetach: () => {}, ...props,
   }));
 }
@@ -59,7 +60,7 @@ test('an issuance highlights the value it just produced, where the reader was lo
     sequence: 5, classKeyCanonical: null, allocatedAt: '2026-01-01T00:00:00Z',
     allocatedForAssetId: 'asset', allocatedBy: { key: 'u', name: 'U', status: 'active' as const },
   };
-  const view = list({ issuances: [issuance], justIssued: giai.canonical });
+  const view = list({ standing: (identifier) => issuedStanding([issuance], identifier), justIssued: giai.canonical });
   try {
     assert.match(view.text(), /Issued by Kannabi/);
     // The card for the new value is marked; the other one is not. Asserted by
@@ -84,7 +85,7 @@ test('issuance controls point a first-time reader at the thing they are missing'
     issuances: [{ key: 'i', scheme: 'giai', canonical: giai.canonical, gcp: '0614141',
       sequence: 1, classKeyCanonical: null, allocatedAt: '2026-01-01T00:00:00Z',
       allocatedForAssetId: 'a', allocatedBy: { key: 'u', name: 'U', status: 'active' } }],
-    identifiers: [{ ...giai, key: 'individual', attachment: null }], busy: false, error: null,
+    identifiers: [giai], busy: false, error: null,
   });
   try {
     assert.match(view.text(), /issued under a managed class key/);

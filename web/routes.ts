@@ -1,4 +1,5 @@
 import { index, route, type RouteConfig } from '@react-router/dev/routes';
+import { gs1GroupRoutes, gs1Routes } from '../plugins/gs1/web/routes';
 
 export default [
   index('routes/home.tsx'),
@@ -8,13 +9,9 @@ export default [
   route('reset-password', 'routes/reset-password.tsx'),
   route('assets/report', 'routes/report.tsx'),
   route('asset/:id', 'routes/asset.tsx'),
-  // GS1 Digital Link addresses. One module answers every supported form: it
-  // reads the raw path rather than these parameters, so the shapes below only
-  // have to reserve the right corner of the numeric path space. Adding a
-  // qualifier combination later adds a line here and nothing else.
-  route('01/:gtin/21/:serial', 'routes/digital-link.tsx', { id: 'digital-link-sgtin' }),
-  route('8003/:grai', 'routes/digital-link.tsx', { id: 'digital-link-grai' }),
-  route('8004/:giai', 'routes/digital-link.tsx', { id: 'digital-link-giai' }),
+  // The installed plugins' own routes. Beside `web/plugins.ts`, this file is
+  // the only place the web client names a plugin.
+  ...gs1Routes,
   route('lookup', 'routes/lookup.tsx'),
   route('help', 'routes/help.tsx'),
   route('groups', 'routes/groups.tsx'),
@@ -25,7 +22,7 @@ export default [
     index('routes/group-overview.tsx'),
     route('assets', 'routes/group-assets.tsx'),
     route('people', 'routes/group-people.tsx'),
-    route('prefixes', 'routes/group-prefixes.tsx'),
+    ...gs1GroupRoutes,
   ]),
   route('profile', 'routes/profile.tsx'),
   route('people', 'routes/people.tsx'),
@@ -39,4 +36,5 @@ export default [
   route('admin/users', 'routes/admin-users.tsx'),
   route('admin/members', 'routes/legacy-admin-members.tsx'),
   route('admin/settings', 'routes/settings.tsx'),
+  route('admin/plugins', 'routes/admin-plugins.tsx'),
 ] satisfies RouteConfig;

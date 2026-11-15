@@ -24,7 +24,7 @@ test('display timezone changes presentation without changing the absolute instan
   for (const apiTokenMaxLifetimeDays of [0, -1, 1.5, '30', 36501]) {
     assert.throws(() => validateSettingsChange({ apiTokenMaxLifetimeDays }), String(apiTokenMaxLifetimeDays));
   }
-  for (const name of ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion', 'enforceGtinConsistency',
+  for (const name of ['requirePhoto', 'showAssetId', 'showIdentifierPolicyVersion',
     'requireApproval']) {
     assert.deepEqual(validateSettingsChange({ [name]: false }), { [name]: false });
     for (const value of ['false', 0, null, 'yes']) {
@@ -49,7 +49,7 @@ test('display timezone changes presentation without changing the absolute instan
   // One place decides the defaults a new instance starts with.
   assert.deepEqual(defaultSettings, { requirePhoto: false, displayTimezone: 'UTC', themeId: 'default',
     apiTokenMaxLifetimeDays: null, toastSeconds: defaultToastSeconds, showAssetId: false,
-    showIdentifierPolicyVersion: false, enforceGtinConsistency: true, peopleDirectory: 'everyone',
+    showIdentifierPolicyVersion: false, peopleDirectory: 'everyone',
     requireApproval: true });
 });
 

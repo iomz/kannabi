@@ -5,7 +5,8 @@ import { IdentityStore } from './identity-store.js';
 import { assetPageRequest, assetSorts, type AssetDirection, type AssetSort } from './asset-page.js';
 import { assetLookupQuery } from './asset-lookup.js';
 import { ValidationError } from './identity.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -13,7 +14,7 @@ const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
 test('Asset exploration orders and pages deterministically', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
   const actor = await store.createUser('Explorer');
   const stranger = await store.createUser('Stranger');
   const group = await store.createReportingGroup('Exploring team', actor.key);

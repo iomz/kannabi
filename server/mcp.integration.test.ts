@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { IdentityStore } from './identity-store.js';
 import { assetPageRequest } from './asset-page.js';
-import { canonicalIdentifier } from './gs1.js';
-import { schemes } from './composition.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 // Only the isolated Docker runner supplies these variables; no default database.
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
@@ -23,7 +25,8 @@ type ToolResult = { structuredContent?: Json; isError?: boolean; content?: { tex
 test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri || !password }, async (t) => {
   const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
   t.after(() => driver.close());
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
+  const gs1 = new Gs1Store(store);
 
   async function query(cypher: string, params: Record<string, unknown> = {}) {
     const session = driver.session();
@@ -64,13 +67,13 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
   const sealed = await store.reportAsset({ name: 'Inspection camera · Vault 900' },
     { actorKey: robin.key, groupKey: vault.key });
 
-  const namespace = await store.configureGs1Namespace(alex.key, workshop.key,
+  const namespace = await gs1.configureGs1Namespace(alex.key, workshop.key,
     { gcp, giaiExclusions: [{ from: 1, to: 4 }] });
   // Configured but never issued from, so the ledger has an empty page to serve.
-  const unusedNamespace = await store.configureGs1Namespace(alex.key, workshop.key,
+  const unusedNamespace = await gs1.configureGs1Namespace(alex.key, workshop.key,
     { gcp: unusedGcp, giaiExclusions: [] });
-  const allocatedCamera = await store.issueKey(camera.id, alex.key, 'giai', { namespaceKey: namespace.key });
-  const allocatedLaptop = await store.issueKey(laptop.id, alex.key, 'giai', { namespaceKey: namespace.key });
+  const allocatedCamera = await gs1.issueKey(camera.id, alex.key, 'giai', { namespaceKey: namespace.key });
+  const allocatedLaptop = await gs1.issueKey(laptop.id, alex.key, 'giai', { namespaceKey: namespace.key });
   const issuedToCamera = allocatedCamera.issuances[0].canonical;
   const issuedToLaptop = allocatedLaptop.issuances[0].canonical;
   // The bare AI 8004 reference the lookup tool takes, as the attached
@@ -216,7 +219,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.ok(lookalikeReference.startsWith(gcp));
     assert.ok(!issuances.some((issuance) => issuance.assetId === lookalike.id));
     const record = (await call('get_asset', { assetId: lookalike.id })).asset as Json;
-    assert.deepEqual((record.kannabi as Json).issued, []);
+    assert.deepEqual(((record.extensions as Json).gs1 as Json).issued, []);
   });
 
   await t.test('a namespace Kannabi has never issued from reports no issuances', async () => {
@@ -243,10 +246,10 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     assert.equal(((kannabi.reported as Json).by as Json).name, 'Alex Demo');
     const identifiers = record.identifiers as Json[];
     assert.deepEqual(identifiers.map((identifier) => identifier.scheme).sort(), ['gtin', 'sgtin']);
-    assert.ok(identifiers.every((identifier) => typeof (identifier.accepted as Json).gs1Policy === 'string'));
+    assert.ok(identifiers.every((identifier) => typeof (identifier.accepted as Json).policy === 'string'));
     // Detached, so the Asset no longer carries the issued value even though the
     // ledger still binds it.
-    assert.deepEqual((kannabi.issued as Json[]).map((entry) => entry.value), [issuedToLaptop]);
+    assert.deepEqual((((record.extensions as Json).gs1 as Json).issued as Json[]).map((entry) => entry.value), [issuedToLaptop]);
     assert.ok(!identifiers.some((identifier) => identifier.scheme === 'giai'));
   });
 
@@ -332,7 +335,7 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     const resolved = await call('resolve_external_identifier',
       { scheme: 'giai', assetReference: (attached.components as Json).assetReference as string });
     assert.deepEqual(ids(resolved), [issued.assetId]);
-    assert.deepEqual(((record.kannabi as Json).issued as Json[]).map((entry) => entry.value), [canonical]);
+    assert.deepEqual((((record.extensions as Json).gs1 as Json).issued as Json[]).map((entry) => entry.value), [canonical]);
   });
 
   await t.test('a valid identifier Kannabi never stored answers empty, not error', async () => {

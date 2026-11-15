@@ -4,13 +4,17 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createMcpServer, serverInfo } from './mcp-tools.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { canonicalIdentifier } from './gs1.js';
+import { canonicalIdentifier } from '../plugins/gs1/toolkit/gs1.js';
 import { ValidationError } from './identity.js';
-import type {
-  Asset, AssetLookup, AssetPage, Gs1LedgerPage, IdentityStore,
-} from './identity-store.js';
+import type { Asset, AssetLookup, AssetPage, IdentityStore } from './identity-store.js';
+import type { Gs1LedgerPage, Gs1Store } from '../plugins/gs1/adapter/store.js';
+import { gs1Mcp } from '../plugins/gs1/adapter/mcp.js';
+import { issuedSection } from '../plugins/gs1/adapter/section.js';
+import { gs1Plugin } from '../plugins/gs1/index.js';
+import { noPlugins, type Plugins } from './plugin.js';
 import type { AudienceInput } from './asset-audience.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 /** These tests exercise the agent-facing contract — tool discovery, schemas,
  * projections and error shape — against a recorded store, so they run without
@@ -23,7 +27,7 @@ const gcp = '0614141';
 
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
-    id, name, identifiers: [], issuances: [], reportedBy: reporter,
+    id, name, identifiers: [], reportedBy: reporter,
     reportedAt: '2026-06-22T00:00:00.000Z', provenance: null, sourceRecord: null,
     owner: null, groups: [workshop], isPublic: false, photos: [], ...overrides,
   });
@@ -57,13 +61,15 @@ const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera 
   sourceRecord: quoted, provenance: changeProvenance,
   identifiers: [{ key: 'i1', ...cameraGtin, attachment: cameraGtinAttachment },
     { key: 'i2', ...issuedGiai, attachment: null }],
-  issuances: [{
-    key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
-    classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
-    allocatedForAssetId: '0198c2a0-0000-7000-8000-000000000001', allocatedBy: reporter,
-  }],
   photos: [{ key: 'p1', contentType: 'image/png', size: 1024, createdAt: '2026-06-22T00:00:00.000Z' }],
 });
+/** What the GS1 plugin's ledger holds for the camera. Not part of the Asset:
+ * core issues nothing, so the plugin states it in its own section. */
+const cameraIssuance = {
+  key: 'issuance-1', scheme: 'giai' as const, canonical: issuedGiai.canonical, gcp, sequence: 5,
+  classKeyCanonical: null, allocatedAt: '2026-06-23T00:00:00.000Z',
+  allocatedForAssetId: '0198c2a0-0000-7000-8000-000000000001', allocatedBy: reporter,
+};
 const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection microscope · Studio 011', {
   identifiers: [{ key: 'i3', ...cameraGtin, attachment: null }, { key: 'i4', ...lookalikeGiai, attachment: null }],
   groups: [studio], isPublic: true,
@@ -122,7 +128,7 @@ function recordingStore(calls: Call[]) {
         namespace,
         matching: 2,
         entries: [
-          Object.freeze({ issuance: camera.issuances[0], asset: camera }),
+          Object.freeze({ issuance: cameraIssuance, asset: camera }),
           Object.freeze({
             issuance: { key: 'issuance-2', scheme: 'giai' as const,
               canonical: '(8004)' + gcp + '6', gcp, sequence: 6, classKeyCanonical: null,
@@ -138,11 +144,18 @@ function recordingStore(calls: Call[]) {
   return store as unknown as IdentityStore;
 }
 
+/** The GS1 plugin as composed, over the same recorded store: its tools, its
+ * instructions and its section of the Asset record. */
+function gs1Installed(store: IdentityStore): Plugins {
+  return { ...noPlugins, manifests: [gs1Plugin.manifest], mcp: [gs1Mcp(store as unknown as Gs1Store)],
+    sections: async (asset) => ({ gs1: issuedSection(asset.id === camera.id ? [cameraIssuance] : []) }) };
+}
+
 async function connect(store: IdentityStore) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
   await Promise.all([
-    createMcpServer(store, systemAudienceResolver()).connect(serverTransport),
+    createMcpServer(store, systemAudienceResolver(), gs1Installed(store)).connect(serverTransport),
     client.connect(clientTransport),
   ]);
   return client;
@@ -251,7 +264,7 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     const record = found.asset as Record<string, any>;
     assert.deepEqual(record.kannabi.reported, { at: camera.reportedAt, by: reporter });
     assert.equal(record.kannabi.photos.length, 1);
-    assert.equal(record.identifiers[0].accepted.gs1Policy, cameraGtin.policyVersion);
+    assert.equal(record.identifiers[0].accepted.policy, cameraGtin.policyVersion);
     assert.ok(record.identifiers.every((identifier: { components: unknown }) => identifier.components));
 
     const missing = structured(await client.callTool({ name: 'get_asset',
@@ -288,13 +301,13 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     const gtin = record.identifiers.find((identifier: { value: string }) => identifier.value === cameraGtin.canonical);
     const giai = record.identifiers.find((identifier: { value: string }) => identifier.value === issuedGiai.canonical);
     assert.deepEqual(gtin.accepted, { at: cameraGtinAttachment.acceptedAt, by: reporter,
-      via: cameraGtinAttachment.assertedBy, basis: cameraGtinAttachment.basis, gs1Policy: cameraGtin.policyVersion });
+      via: cameraGtinAttachment.assertedBy, basis: cameraGtinAttachment.basis, policy: cameraGtin.policyVersion });
     // An association recorded before Kannabi kept this says so, not "nobody".
     assert.equal(giai.accepted, null);
     assert.deepEqual(record.kannabi.lastChange, { at: changeProvenance.acceptedAt, by: reporter,
       via: null, basis: null });
     // Issued is Kannabi's ledger, apart from the identifiers it merely holds.
-    assert.deepEqual(record.kannabi.issued.map((issued: { value: string }) => issued.value), [issuedGiai.canonical]);
+    assert.deepEqual(record.extensions.gs1.issued.map((issued: { value: string }) => issued.value), [issuedGiai.canonical]);
   });
 
   await t.test('a malformed Asset ID never reaches the store', async () => {

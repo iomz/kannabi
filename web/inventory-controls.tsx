@@ -2,7 +2,7 @@ import { Link, useNavigate } from 'react-router';
 import {
   assetDirections, assetSorts, type AssetDirection, type AssetFilters, type AssetScope, type AssetSort,
 } from '../server/asset-page';
-import { identifierSchemes, schemeLabel, schemeLabels, type IdentifierScheme } from '../server/gs1.js';
+import { web } from './plugins';
 import type { Entity } from '../server/identity-store';
 import { displayDate } from '../server/settings.js';
 import { Icon } from './icon';
@@ -69,7 +69,7 @@ export function filtersFromForm(form: FormData): AssetFilters {
   const reportedTo = value('reportedTo');
   return {
     groups: group ? [group] : [],
-    schemes: scheme ? [scheme as IdentifierScheme] : [],
+    schemes: scheme ? [scheme] : [],
     identified: value('identified') as AssetFilters['identified'],
     reportedFrom: value('reportedFrom'),
     reportedTo,
@@ -88,7 +88,7 @@ function activeChips(filters: AssetFilters, groups: readonly Entity[]): Chip[] {
       remove: { groups: filters.groups.filter((other) => other !== key) } });
   }
   for (const scheme of filters.schemes) {
-    chips.push({ label: schemeLabel(scheme),
+    chips.push({ label: web.schemeLabel(scheme),
       remove: { schemes: filters.schemes.filter((other) => other !== scheme) } });
   }
   if (filters.identified) {
@@ -170,8 +170,8 @@ export function InventoryControls({ view, groups, scopes }: {
               </NativeSelect></Field>
               <Field label="Identifier scheme"><NativeSelect name="scheme" defaultValue={view.filters.schemes[0] ?? ''}>
                 <option value="">Any scheme</option>
-                {identifierSchemes.map((scheme: IdentifierScheme) =>
-                  <option key={scheme} value={scheme}>{schemeLabels[scheme]}</option>)}
+                {web.schemes.map((scheme) =>
+                  <option key={scheme.id} value={scheme.id}>{scheme.label}</option>)}
               </NativeSelect></Field>
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Reported from"><Input type="date" name="reportedFrom"

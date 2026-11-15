@@ -1,45 +1,18 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
 
-/** Which modules are GS1's. Everything else under `server/` is Kannabi core,
- * apart from the composition file and the entry points that start a process. */
-const gs1Modules = [
-  'gs1', 'gs1-syntax', 'gs1-digital-link', 'gs1-prefixes', 'gs1-ledger', 'gs1-schemes',
-  'reference-allocation', 'digital-link-resolution', 'digital-link-routes', 'surfaced-uri',
-] as const;
-const composed = ['composition', 'index', 'mcp', 'link-identity'];
-
-/** The GS1 imports core still makes. This list is a ratchet and only shrinks:
- * each entry is GS1 behaviour that still lives in a core file and leaves with
- * it when GS1 moves behind the plugin contract. A new entry means core has
- * learned something about GS1 it did not know before, which is the thing this
- * test exists to stop. Remove an entry when its import goes; never add one. */
-const remainingInCore: Readonly<Record<string, readonly string[]>> = {
-  // Namespaces, class keys, issuance, the ledger and the GTIN conflict set.
-  'identity-store': ['gs1', 'gs1-ledger', 'reference-allocation'],
-  // The surfaced URI of an Asset response, which prefers a Digital Link.
-  'inventory-api': ['surfaced-uri'],
-  // The GS1 tools and the GS1 wording of the lookup tool's input.
-  'mcp-tools': ['gs1', 'gs1-ledger'],
-};
-
-/** The same ratchet for the web client, whose GS1 screens are not yet split
- * from the ones any deployment has. */
-const remainingInWeb: Readonly<Record<string, readonly string[]>> = {
-  'web/asset-identifiers.tsx': ['gs1'],
-  'web/asset-row.tsx': ['gs1', 'surfaced-uri'],
-  'web/asset-view.tsx': ['surfaced-uri'],
-  'web/inventory-controls.tsx': ['gs1'],
-  'web/routes/digital-link.tsx': ['gs1-digital-link'],
-  'web/routes/group-prefixes.tsx': ['reference-allocation'],
-  'web/routes/home.tsx': ['gs1'],
-  'web/routes/lookup.tsx': ['gs1'],
-  'web/routes/report.tsx': ['surfaced-uri'],
-};
-
-const isGs1 = (name: string) => (gs1Modules as readonly string[]).includes(name);
+/** Which way imports may run between Kannabi core and its plugins.
+ *
+ * Core is everything under `server/`. A plugin lives under `plugins/<id>/`
+ * and may import core; core imports no plugin. The one exception is the
+ * composition file, whose whole job is to name the installed plugins, and
+ * the entry points that start a process import that file and nothing else of
+ * a plugin's.
+ */
+const composition = 'server/composition.ts';
+const entryPoints = ['server/index.ts', 'server/mcp.ts', 'server/link-identity.ts'];
 
 function sources(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {
@@ -49,43 +22,55 @@ function sources(directory: string): string[] {
   });
 }
 
-/** The server modules a file imports, by bare name, wherever it sits. */
-function serverImports(path: string, fromServer: boolean): string[] {
-  const pattern = fromServer
-    ? /from '\.\/([\w-]+)(?:\.js)?'/g
-    : /from '(?:\.\.\/)+server\/([\w-]+)(?:\.js)?'/g;
-  return [...new Set([...readFileSync(path, 'utf8').matchAll(pattern)].map((match) => match[1]))].sort();
+/** Every relative import of a file, as a path from the repository root. */
+function imports(path: string): string[] {
+  const found = [...readFileSync(path, 'utf8').matchAll(/(?:from|import)\s*\(?\s*'(\.{1,2}\/[^']+)'/g)]
+    .map((match) => relative('.', resolve(dirname(path), match[1])).replace(/\.(js|tsx?)$/, ''));
+  return [...new Set(found)].sort();
 }
 
-test('core imports GS1 only where the ratchet still allows it', () => {
+const inPlugin = (path: string) => path.startsWith('plugins/');
+
+test('core imports no plugin', () => {
   const found: Record<string, string[]> = {};
   for (const path of sources('server')) {
-    const name = relative('server', path).replace(/\.ts$/, '');
-    if (isGs1(name) || composed.includes(name)) continue;
-    const imports = serverImports(path, true);
-    assert.ok(!imports.includes('composition'),
-      `${name} imports the composition file; core takes what it needs as a value`);
-    const gs1 = imports.filter(isGs1);
-    if (gs1.length) found[name] = gs1;
+    const reached = imports(path);
+    if (path === composition) continue;
+    assert.ok(entryPoints.includes(path) || !reached.includes('server/composition'),
+      `${path} imports the composition file; core takes what was composed as a value`);
+    const plugins = reached.filter(inPlugin);
+    if (plugins.length) found[path] = plugins;
   }
-  assert.deepEqual(found, remainingInCore);
+  assert.deepEqual(found, {});
 });
 
-test('the web client imports GS1 only where the ratchet still allows it', () => {
+test('the composition file is the only place a plugin is named', () => {
+  assert.deepEqual(imports(composition).filter(inPlugin), ['plugins/gs1/index']);
+});
+
+test('the GS1 toolkit imports nothing of Kannabi', () => {
+  // The toolkit is GS1 as Kannabi needs it, and stands without Kannabi: it
+  // refuses with its own error, and the adapter beside it is where that
+  // becomes a Kannabi validation error.
+  const found: Record<string, string[]> = {};
+  for (const path of sources('plugins/gs1/toolkit')) {
+    const outside = imports(path).filter((target) => !target.startsWith('plugins/gs1/toolkit/'));
+    if (outside.length) found[path] = outside;
+  }
+  assert.deepEqual(found, {});
+});
+
+test('the web client names a plugin only where it is composed', () => {
+  // `web/plugins.ts` says which plugins the client is built with, and
+  // `web/routes.ts` takes their routes. Every other module asks the composed
+  // value, so a build without a plugin is those two files with fewer lines.
   const found: Record<string, string[]> = {};
   for (const path of sources('web')) {
-    const gs1 = serverImports(path, false).filter(isGs1);
-    if (gs1.length) found[path] = gs1;
+    const plugins = imports(path).filter(inPlugin);
+    if (plugins.length) found[path] = plugins;
   }
-  assert.deepEqual(found, remainingInWeb);
-});
-
-test('the modules core is built on name no GS1 module at all', () => {
-  // The identifier model and everything that reads an Asset through it. These
-  // are the modules this boundary was drawn for, so they are named outright
-  // rather than left to be whatever the ratchet does not mention.
-  for (const name of ['identifier', 'asset-lookup', 'asset-page', 'asset-representation', 'asset-audience',
-    'asset-id', 'identity', 'settings', 'source-record', 'change-provenance']) {
-    assert.deepEqual(serverImports(join('server', name + '.ts'), true).filter(isGs1), [], name);
-  }
+  assert.deepEqual(found, {
+    'web/plugins.ts': ['plugins/gs1/web/index'],
+    'web/routes.ts': ['plugins/gs1/web/routes'],
+  });
 });

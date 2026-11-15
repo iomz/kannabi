@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { Hono } from 'hono';
@@ -11,7 +12,7 @@ import { MediaService } from './media.js';
 import { storageFromEnv, type ObjectStorage } from './storage.js';
 import { createAuth } from './auth.js';
 import { createInventoryApi } from './inventory-api.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -23,7 +24,8 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   const legacy = driver.session();
   await legacy.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.displayTimezone = 'UTC', s.revision = 0 REMOVE s.themeId, s.accentColor");
   await legacy.close();
-  const store = await IdentityStore.open(driver, schemes);
+  const store = await IdentityStore.open(driver, composition);
+  const plugins = connectPlugins(composition, store);
   // Every setting is stored once the instance opens: one missing from an
   // older development database takes its default, and nothing stored is
   // replaced.
@@ -34,7 +36,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
   const media = new MediaService(store, storage);
   const origin = 'http://localhost:3000';
   const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
-  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, media));
+  const app = new Hono().route('/api', createInventoryApi(store, auth, origin, media, undefined, undefined, plugins));
   const signup = await app.request(origin + '/api/auth/sign-up/email', { method: 'POST',
     headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Reporter', email: 'reporter@example.com', password: randomUUID() }) });
   assert.equal(signup.status, 200);
@@ -221,7 +223,7 @@ test('S3 media, policy and administration', { skip: !uri || !password || !proces
     const abandoned = await store.reservePhoto('image/png', png.length);
     await storage.put(abandoned, png, 'image/png');
     await query("MATCH (m:Media) WHERE m.state <> 'attached' SET m.expiresAt = datetime() - duration('PT1M')");
-    await new MediaService(await IdentityStore.open(driver, schemes), storage).cleanup();
+    await new MediaService(await IdentityStore.open(driver, composition), storage).cleanup();
     await assert.rejects(storage.get(failedKey)); await assert.rejects(storage.get(abandoned));
     assert.equal((await query("MATCH (m:Media) WHERE m.state <> 'attached' RETURN m")).records.length, 0);
 

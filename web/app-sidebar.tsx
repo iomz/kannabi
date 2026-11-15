@@ -29,6 +29,7 @@ export function activeDestination(pathname: string): string | null {
   if (pathname === '/help') return '/help';
   if (pathname.startsWith('/admin/users')) return '/admin/users';
   if (pathname.startsWith('/admin/settings')) return '/admin/settings';
+  if (pathname.startsWith('/admin/plugins')) return '/admin/plugins';
   return null;
 }
 
@@ -60,6 +61,7 @@ const workspace: readonly Destination[] = [
 const administration: readonly Destination[] = [
   { to: '/admin/users', icon: 'members', label: 'Users' },
   { to: '/admin/settings', icon: 'settings', label: 'Instance settings' },
+  { to: '/admin/plugins', icon: 'settings', label: 'Plugins' },
 ];
 
 /** Selection is a state of the navigation, not a link colour.

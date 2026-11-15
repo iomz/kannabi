@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
@@ -12,7 +13,7 @@ import { createInventoryApi } from './inventory-api.js';
 import { ApiTokenService } from './api-token.js';
 import { createMcpServer } from './mcp-tools.js';
 import { systemAudienceResolver } from './mcp-principal.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -50,12 +51,13 @@ test('legacy records keep what the source said apart from what Kannabi knows',
     const session = driver.session();
     await session.run("MERGE (s:Settings {key: 'instance'}) SET s.requirePhoto = false, s.revision = 0");
     await session.close();
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     await admitSignups(driver);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
     const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, undefined,
-      new ApiTokenService(auth, store)));
+      new ApiTokenService(auth, store), plugins));
 
     const signup = await app.request(origin + '/api/auth/sign-up/email', {
       method: 'POST',
@@ -87,7 +89,7 @@ test('legacy records keep what the source said apart from what Kannabi knows',
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'kannabi-test-client', version: '0.0.0' });
-    await Promise.all([createMcpServer(store, systemAudienceResolver()).connect(serverTransport),
+    await Promise.all([createMcpServer(store, systemAudienceResolver(), plugins).connect(serverTransport),
       client.connect(clientTransport)]);
     t.after(() => client.close());
     const tool = async (name: string, args: Json) =>
@@ -95,10 +97,10 @@ test('legacy records keep what the source said apart from what Kannabi knows',
 
     /** One Asset as each surface answers it. */
     async function read(id: string) {
-      const response = await browser(`/v2/assets/${id}`);
+      const response = await browser(`/v3/assets/${id}`);
       assert.equal(response.status, 200);
       const body = await response.json();
-      assert.equal(body.representation, 2);
+      assert.equal(body.representation, 3);
       const mcp = (await tool('get_asset', { assetId: id })).asset as Json;
       assert.deepEqual(mcp, body.asset, 'HTTP and MCP answer with different records');
       return body.asset as Json;
@@ -185,7 +187,7 @@ test('legacy records keep what the source said apart from what Kannabi knows',
     });
 
     await t.test('search returns summaries that point at the full record', async () => {
-      const response = await browser('/v2/assets?q=Example%20Trading');
+      const response = await browser('/v3/assets?q=Example%20Trading');
       assert.equal(response.status, 200);
       const page = await response.json();
       assert.ok(page.omitted.includes('source.says'));

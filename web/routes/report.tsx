@@ -1,6 +1,6 @@
 import { Form, Link, redirect, useNavigation } from 'react-router';
 import { api, unwrap } from '../api';
-import { surfacedAssetPath } from '../../server/surfaced-uri.js';
+import { web } from '../plugins';
 import { notify } from '../notify';
 import type { Route } from './+types/report';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     notify('Asset reported');
     // The surfaced URI, so reporting lands where the Asset is published
     // rather than on an address that redirects straight there.
-    return redirect(surfacedAssetPath(asset.id, asset.identifiers));
+    return redirect(web.surfacedPath(asset));
   } catch (error) { return { error: error instanceof Error ? error.message : 'Report failed' }; }
 }
 export default function Report({ loaderData: { groups, settings }, actionData }: Route.ComponentProps) {
@@ -47,7 +47,7 @@ export default function Report({ loaderData: { groups, settings }, actionData }:
               {groups.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
             </NativeSelect></Field>
           <Field label="Asset name"
-            hint="New Assets are private to the selected Group. GS1 identifiers are optional and can be added later from the Asset page.">
+            hint="New Assets are private to the selected Group. Identifiers are optional and can be added later from the Asset page.">
             <Input name="name" required /></Field>
           <Field label={'Photo' + (settings.requirePhoto ? ' (required)' : ' (optional)')}
             hint="JPEG, PNG, or WebP, up to 10 MiB.">

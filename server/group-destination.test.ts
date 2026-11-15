@@ -8,7 +8,7 @@ import Overview, { clientAction as overviewAction, clientLoader as overviewLoade
   controllerSummary } from '../web/routes/group-overview.js';
 import Assets, { clientLoader as assetsLoader } from '../web/routes/group-assets.js';
 import People, { clientAction as peopleAction, clientLoader as peopleLoader } from '../web/routes/group-people.js';
-import Prefixes, { clientAction as prefixesAction, clientLoader as prefixesLoader } from '../web/routes/group-prefixes.js';
+import Prefixes, { clientAction as prefixesAction, clientLoader as prefixesLoader } from '../plugins/gs1/web/group-prefixes.js';
 import { GroupViewError } from '../web/group-destination.js';
 import { mount, settle } from './dom-render.js';
 
@@ -73,8 +73,8 @@ function serve(world: World) {
         matching: world.matching, total: world.matching, matchedFields: {},
         scopes: { all: world.matching, mine: 0, group: 0, public: 0 }, nextCursor: null });
     }
-    if (path === '/api/gs1-namespaces') return json({ namespaces: member ? [namespace] : [] });
-    if (path === '/api/gs1-namespaces/ns/class-keys') return json({ classKeys: [] });
+    if (path === '/api/gs1/namespaces') return json({ namespaces: member ? [namespace] : [] });
+    if (path === '/api/gs1/namespaces/ns/class-keys') return json({ classKeys: [] });
     world.after?.(method, path);
     if (method === 'POST' && path === '/api/groups/g1/members') return json({ ok: true, added: true });
     return json({ changed: true });

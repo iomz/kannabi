@@ -1,4 +1,7 @@
 import './dom.js';
+
+/** What the GS1 plugin's loader hands the Asset page when it has nothing to show. */
+const gs1Data = { issuances: [], settings: { enforceGtinConsistency: true }, namespaces: [], classKeys: [] };
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -35,9 +38,9 @@ function loaderData(asset: Record<string, unknown> = {}, rest: Record<string, un
     },
     canEdit: true, canViewReporterProfile: false, authenticated: true,
     settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
-    digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
+    plugins: { gs1: gs1Data }, digitalLinks: {}, nativeUri: `http://127.0.0.1/asset/${id}`,
     surfacedUri: `http://127.0.0.1/asset/${id}`,
-    namespaces: [], classKeys: [], controlled: [], canGrant: false, ...rest,
+    controlled: [], canGrant: false, ...rest,
   };
 }
 
@@ -291,7 +294,7 @@ test('a refused rename keeps the field open, says why, and does not pretend it s
 });
 
 test('adding an identifier is folded away, and is two tabs before it is a form', async () => {
-  const view = render({}, { namespaces: [{ key: 'n', gcp: '0614141' }] });
+  const view = render({}, { plugins: { gs1: { ...gs1Data, namespaces: [{ key: 'n', gcp: '0614141' }] } } });
   try {
     const add = [...document.querySelectorAll('summary')]
       .find((node) => node.textContent?.trim() === 'Add identifier')!.closest('details')!;

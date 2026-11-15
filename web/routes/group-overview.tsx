@@ -1,28 +1,33 @@
+import { Fragment } from 'react';
 import { Link, useOutletContext } from 'react-router';
-import { api, unwrap } from '../api';
+import { api } from '../api';
 import { groupRead, GroupViewError, LeaveGroup, leaveAction, viewerKey, type GroupActionResult,
   type GroupRelationship } from '../group-destination';
-import type { GroupPerson, Gs1Namespace, ReporterAttribution } from '../../server/identity-store.js';
-import { Badge } from '@/components/ui/badge';
-import { Hint, Panel, StatusPill } from '../ui';
+import type { GroupPerson, ReporterAttribution } from '../../server/identity-store.js';
+import { web } from '../plugins';
+import { Panel, StatusPill } from '../ui';
 import type { Route } from './+types/group-overview';
+
+/** The installed plugins with a line of their own in a Group's overview. */
+const overviews = web.plugins.filter((plugin) => plugin.group?.overview);
 
 /** What this Group is to the viewer, in a few lines: who manages it, how many
  * people are in it, what they can read through it, and the prefixes it
  * manages. */
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   const key = params.key;
-  const [{ members }, assets, { namespaces }, self] = await Promise.all([
+  const [{ members }, assets, pluginLines, self] = await Promise.all([
     api.groups[':key'].members.$get({ param: { key } }).then(groupRead),
     // The inventory's own Group filter, so the count is exactly what the
     // viewer can read through this Group and never more.
     api.assets.$get({ query: { group: [key], limit: ['1'] } }).then(groupRead),
-    api['gs1-namespaces'].$get().then(unwrap),
+    // Each installed plugin's own line about this Group, read by the plugin.
+    Promise.all(overviews.map(async (plugin) => [plugin.id, await plugin.group!.overview!.load(key)] as const)),
     viewerKey(),
   ]);
   return { managers: (members as GroupPerson[]).filter((person) => person.role === 'manager'),
     people: members.length, matching: assets.matching, self,
-    namespaces: namespaces.filter((namespace) => namespace.group?.key === key) };
+    pluginLines: Object.fromEntries(pluginLines) as Record<string, unknown> };
 }
 
 export async function clientAction({ request, params }: Route.ClientActionArgs) {
@@ -55,24 +60,7 @@ const metadata = 'grid grid-cols-1 gap-y-1 text-[.9rem] [&_dd]:m-0 [&_dd]:mb-3 [
   + ' [&_dd]:[overflow-wrap:anywhere] [&_dt]:text-muted-foreground'
   + ' @xl:grid-cols-[minmax(8rem,12rem)_minmax(0,1fr)] @xl:gap-x-4 @xl:gap-y-3 @xl:[&_dd]:mb-0';
 
-/** Managed prefixes, folded: what each prefix is and whether it can issue.
- * Counters and class keys are on the GS1 prefixes view. */
-function Prefixes({ namespaces }: { namespaces: Gs1Namespace[] }) {
-  if (!namespaces.length) return <>None · <Link to="prefixes">GS1 prefixes</Link></>;
-  return <details className="[&>summary]:cursor-pointer [&[open]>summary]:mb-2">
-    <summary>{namespaces.length === 1 ? '1 prefix' : `${namespaces.length} prefixes`}</summary>
-    <ul className="grid gap-2">{namespaces.map((namespace) => <li key={namespace.key}
-      className="flex flex-wrap items-center gap-2">
-      <code>{namespace.gcp}</code>
-      <Badge variant={namespace.active ? 'brand' : 'secondary'}>{namespace.active ? 'Active' : 'Inactive'}</Badge>
-      {namespace.unissuableReason ? <Hint>Can no longer issue</Hint>
-        : !namespace.classKeyIssuable && <Hint>GIAI only</Hint>}
-    </li>)}</ul>
-    <Hint className="mt-2">Managed under <Link to="prefixes">GS1 prefixes</Link>.</Hint>
-  </details>;
-}
-
-export default function GroupOverview({ loaderData: { managers, people, matching, namespaces, self }, actionData }: Route.ComponentProps) {
+export default function GroupOverview({ loaderData: { managers, people, matching, pluginLines, self }, actionData }: Route.ComponentProps) {
   const { group, viewer } = useOutletContext<GroupRelationship>();
   const result = actionData as GroupActionResult | null | undefined;
   return <Panel className="@container mt-0">
@@ -82,7 +70,8 @@ export default function GroupOverview({ loaderData: { managers, people, matching
         ? '1 person' : `${new Intl.NumberFormat().format(people)} people`}</Link></dd>
       <dt>Assets</dt>
       <dd>{assetsSentence(matching)}{matching > 0 && <> · <Link to="assets">Assets</Link></>}</dd>
-      <dt>GS1 Company Prefixes</dt><dd><Prefixes namespaces={namespaces} /></dd>
+      {overviews.map((plugin) => { const { label, Summary } = plugin.group!.overview!;
+        return <Fragment key={plugin.id}><dt>{label}</dt><dd><Summary data={pluginLines?.[plugin.id]} /></dd></Fragment>; })}
       <dt>Group key</dt>
       <dd><code className="text-[.75rem] text-muted-foreground">{group.key}</code></dd>
     </dl>

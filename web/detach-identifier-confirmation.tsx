@@ -6,16 +6,16 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
  * so it asks first.
  *
  * What it says depends on where the value came from, because the consequence
- * differs. A recorded identifier simply stops being carried. A value Kannabi
- * issued stays bound to this Asset in the issuance ledger and is never reissued
- * anywhere else, so detaching it is not a release and the dialog says so rather
- * than letting somebody infer that the number returns to a pool.
+ * differs. A recorded identifier simply stops being carried. Where an installed
+ * plugin has something to say about the value, such as having issued it, the
+ * plugin supplies the consequence and the dialog says that instead.
  */
-export function DetachIdentifierConfirmation({ identifier, issued, busy, error, onClose, onConfirm }: {
+export function DetachIdentifierConfirmation({ identifier, consequence, busy, error, onClose, onConfirm }: {
   /** The canonical form being detached, or null when nothing is pending. */
   identifier: string | null;
-  /** Whether Kannabi's own ledger records issuing this value. */
-  issued: boolean;
+  /** What detaching means for this value, from the plugin that has a
+   * statement about it, or null for a value that was simply recorded. */
+  consequence: string | null;
   busy: boolean;
   error?: string | null;
   onClose(): void;
@@ -27,9 +27,7 @@ export function DetachIdentifierConfirmation({ identifier, issued, busy, error, 
         <AlertDialogTitle>Detach this identifier?</AlertDialogTitle>
         <AlertDialogDescription>
           <code>{identifier}</code> will no longer identify this Asset.{' '}
-          {issued
-            ? 'Kannabi issued this value, so it stays bound to this Asset in the issuance ledger and is never issued for anything else. It can only ever return here.'
-            : 'It can be recorded again later.'}
+          {consequence ?? 'It can be recorded again later.'}
         </AlertDialogDescription>
       </AlertDialogHeader>
       {error && <p role="alert" className="text-sm text-destructive">

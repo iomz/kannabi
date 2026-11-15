@@ -3,6 +3,9 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp-tools.js';
+import { noPlugins } from './plugin.js';
+import { gs1Mcp } from '../plugins/gs1/adapter/mcp.js';
+import type { Gs1Store } from '../plugins/gs1/adapter/store.js';
 import {
   PrincipalError, principalAudienceResolver, principalFromMeta, principalMetaKey,
   systemAudienceResolver,
@@ -10,7 +13,8 @@ import {
 import { externalIdentityKey, externalPrincipal } from './external-principal.js';
 import type { Asset, AssetPage, IdentityStore, ResolvedUser } from './identity-store.js';
 import type { NamedAudienceInput } from './asset-audience.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
+const { schemes } = composition;
 
 /** The gateway contract, exercised without a database: what Kannabi accepts as
  * an asserted principal, who it resolves to, and what it refuses. The real
@@ -215,7 +219,8 @@ async function connect(store: IdentityStore, resolver = systemAudienceResolver()
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'principal-test-client', version: '0.0.0' });
   await Promise.all([
-    createMcpServer(store, resolver).connect(serverTransport),
+    createMcpServer(store, resolver, { ...noPlugins, mcp: [gs1Mcp(store as unknown as Gs1Store)] })
+      .connect(serverTransport),
     client.connect(clientTransport),
   ]);
   return client;

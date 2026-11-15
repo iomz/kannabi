@@ -1,11 +1,12 @@
 import './dom.js';
+import { saveGtinConsistency } from '../plugins/gs1/web/admin-settings.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import Administration, { clientAction as adminSettingsAction } from '../web/routes/settings.js';
 import { mount, settle, withTheme } from './dom-render.js';
-import { GtinConflictDialog } from '../web/gtin-conflict-dialog.js';
+import { GtinConflictDialog } from '../plugins/gs1/web/gtin-conflict-dialog.js';
 import { defaultSettings, defaultToastSeconds } from './settings.js';
 
 test('instance presentation settings default hidden and render as independent choices', () => {
@@ -20,7 +21,8 @@ test('instance presentation settings default hidden and render as independent ch
     masterKeySource: 'file' as const, masterKeyState: 'available' as const,
   };
   const router = createMemoryRouter([{ path: '/admin/settings', element: withTheme(
-    createElement(Administration, { loaderData: { settings, mail } } as never)) }],
+    createElement(Administration, { loaderData: { settings, mail,
+      pluginSettings: { gs1: { enforceGtinConsistency: true } } } } as never)) }],
   { initialEntries: ['/admin/settings'] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
@@ -86,24 +88,21 @@ test('saving either presentation setting preserves the configured toast lifetime
 
 test('the GTIN consistency switch saves its own state and nothing else', async () => {
   const originalFetch = globalThis.fetch;
-  const sent: Record<string, unknown>[] = [];
-  globalThis.fetch = async (_input, init) => {
+  const sent: { path: string; body: Record<string, unknown> }[] = [];
+  globalThis.fetch = async (input, init) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    sent.push(body);
+    sent.push({ path: new URL(String(input), 'https://kannabi.test').pathname, body });
     return new Response(JSON.stringify({ settings: body }), { headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    for (const value of ['', 'on']) {
-      const data = new FormData();
-      for (const [name, field] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
-        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: value })) {
-        data.set(name, field);
-      }
-      await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
-        method: 'POST', body: data,
-      }) } as never);
+    // The GS1 plugin's setting is saved through the plugin's own route, so it
+    // carries nothing of core's settings and core's action never sees it.
+    for (const value of [false, true]) {
+      assert.deepEqual(await saveGtinConsistency(value), { saved: true, settings: { enforceGtinConsistency: value } });
     }
-    assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [false, true]);
+    assert.deepEqual(sent, [
+      { path: '/api/gs1/settings', body: { enforceGtinConsistency: false } },
+      { path: '/api/gs1/settings', body: { enforceGtinConsistency: true } }]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -116,7 +115,8 @@ test('admission and the People directory are shown as the instance has them, and
     masterKeySource: 'file' as const, masterKeyState: 'available' as const,
   };
   const router = createMemoryRouter([{ path: '/admin/settings', element: withTheme(
-    createElement(Administration, { loaderData: { settings: { ...defaultSettings, peopleDirectory: 'names' }, mail } } as never)) }],
+    createElement(Administration, { loaderData: { settings: { ...defaultSettings, peopleDirectory: 'names' }, mail,
+      pluginSettings: { gs1: { enforceGtinConsistency: true } } } } as never)) }],
   { initialEntries: ['/admin/settings'] });
   const view = mount(createElement(RouterProvider, { router }));
   try {
@@ -139,7 +139,7 @@ test('admission and the People directory are shown as the instance has them, and
     for (const [requireApproval, peopleDirectory] of [['', 'shared'], ['on', 'everyone']]) {
       const data = new FormData();
       for (const [name, field] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
-        apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on', requireApproval,
+        apiTokenMaxLifetimeDays: '', toastSeconds: '5', requireApproval,
         peopleDirectory })) data.set(name, field);
       await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
         method: 'POST', body: data,
@@ -147,7 +147,7 @@ test('admission and the People directory are shown as the instance has them, and
     }
     assert.deepEqual(sent.map((body) => [body.requireApproval, body.peopleDirectory]),
       [[false, 'shared'], [true, 'everyone']]);
-    assert.deepEqual(sent.map((body) => body.enforceGtinConsistency), [true, true], 'nothing else moves');
+    assert.ok(sent.every((body) => !('enforceGtinConsistency' in body)), 'a plugin setting is not core\'s to send');
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -158,15 +158,10 @@ test('a refused GTIN consistency switch hands back the Assets that block it', as
   globalThis.fetch = async () => new Response(JSON.stringify({
     error: 'GTIN consistency cannot be enabled while Assets carry conflicting GTINs', gtinConflicts,
   }), { status: 409, headers: { 'Content-Type': 'application/json' } });
-  const data = new FormData();
-  for (const [name, value] of Object.entries({ intent: 'settings', displayTimezone: 'UTC', themeId: 'default',
-    apiTokenMaxLifetimeDays: '', toastSeconds: '5', enforceGtinConsistency: 'on' })) data.set(name, value);
   try {
-    const result = await adminSettingsAction({ request: new Request('https://kannabi.test/admin/settings', {
-      method: 'POST', body: data,
-    }) } as never) as { saved: boolean; gtinConflicts?: unknown };
+    const result = await saveGtinConsistency(true);
     assert.equal(result.saved, false);
-    assert.deepEqual(result.gtinConflicts, gtinConflicts);
+    assert.deepEqual(!result.saved && result.gtinConflicts, gtinConflicts);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -215,7 +210,7 @@ test('the GTIN conflict dialog names the readable Assets, counts the rest and ha
     assert.equal(asked.length, 0, 'nothing more is read until the list end is reached');
     await settle(() => watching.at(-1)!());
     await settle();
-    assert.match(asked[0], /\/api\/admin\/gtin-conflicts\?after=01a1208f-8ce3-7523-9947-cd187ada00d2/);
+    assert.match(asked[0], /\/api\/gs1\/admin\/gtin-conflicts\?after=01a1208f-8ce3-7523-9947-cd187ada00d2/);
     assert.deepEqual(links().map(([name]) => name), ['First', 'Second', 'Third']);
     assert.deepEqual(buttons(), ['OK'], 'paging adds no button');
 

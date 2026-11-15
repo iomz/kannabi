@@ -1,4 +1,5 @@
 import './dom.js';
+import { gs1Web } from '../plugins/gs1/web/index.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
@@ -20,7 +21,7 @@ test('the native Asset URI is the native ID path and is copied complete', () => 
 
 test('an Asset with no Digital Link identity shows one URI, labelled plainly', () => {
   const uri = `${origin}/asset/${newAssetId()}`;
-  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: true }));
+  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: true, label: null }));
   try {
     const fields = [...document.querySelectorAll('input')];
     assert.equal(fields.length, 1);
@@ -34,7 +35,7 @@ test('an Asset with no Digital Link identity shows one URI, labelled plainly', (
 test('a surfaced Digital Link is offered first and the native URI stays reachable', async () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
   const surfacedUri = `${origin}/8004/0614141ASSET-001`;
-  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true }));
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: true, label: gs1Web.surfacedLabel! }));
   try {
     const fields = [...document.querySelectorAll('input')];
     assert.deepEqual(fields.map((field) => field.value), [surfacedUri, nativeUri]);
@@ -74,7 +75,7 @@ test('the copy control hands over the exact value it displays', async () => {
 test('the native Asset URI follows the instance Kannabi ID setting', () => {
   const nativeUri = `${origin}/asset/${newAssetId()}`;
   const surfacedUri = `${origin}/8004/0614141ASSET-001`;
-  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: false }));
+  const view = mount(createElement(AssetUri, { surfacedUri, nativeUri, showNativeUri: false, label: gs1Web.surfacedLabel! }));
   try {
     // The Digital Link is surfaced exactly as before.
     const fields = [...document.querySelectorAll('input')];
@@ -88,7 +89,7 @@ test('the native Asset URI follows the instance Kannabi ID setting', () => {
 
 test('with the setting off and no Digital Link, no address is put in front of a person', () => {
   const uri = `${origin}/asset/${newAssetId()}`;
-  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: false }));
+  const view = mount(createElement(AssetUri, { surfacedUri: uri, nativeUri: uri, showNativeUri: false, label: null }));
   try {
     // The address is unchanged and still resolves; it is simply not shown,
     // which is what the deployment asked for by turning the setting off.

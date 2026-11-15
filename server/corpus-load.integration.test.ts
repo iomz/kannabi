@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import neo4j from 'neo4j-driver';
@@ -10,8 +11,8 @@ import { createInventoryApi } from './inventory-api.js';
 import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import { storageFromEnv } from './storage.js';
-import { checkDigit } from './gs1-syntax.js';
-import { schemes } from './composition.js';
+import { checkDigit } from '../plugins/gs1/toolkit/syntax.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -57,14 +58,15 @@ test('an existing Asset corpus loads over the public HTTP API',
     t.after(() => driver.close());
     // Nothing is seeded by hand: opening the store is what a deployment does,
     // and it leaves the instance ready for a client to use.
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     await admitSignups(driver);
     const storage = storageFromEnv();
     await storage.check();
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomUUID() + randomUUID());
     const app = new Hono().route('/api', createInventoryApi(store, auth, origin,
-      new MediaService(store, storage), undefined, new ApiTokenService(auth, store)));
+      new MediaService(store, storage), undefined, new ApiTokenService(auth, store), plugins));
 
     /** A person, reached only through the public sign-up and session routes. */
     let peer = 0;
@@ -137,13 +139,13 @@ test('an existing Asset corpus loads over the public HTTP API',
     await t.test('Groups, membership and a managed prefix are all client work', async () => {
       // The colleague reaches the corpus only through a Group, never directly.
       await loaded(`/groups/${partner.key}/members`, 'POST', { userKey: colleague.key });
-      const namespace = (await loaded(`/groups/${holding.key}/gs1-namespaces`, 'POST',
+      const namespace = (await loaded(`/gs1/groups/${holding.key}/namespaces`, 'POST',
         { gcp })).namespace;
       assert.equal(namespace.gcp, gcp);
       assert.equal(namespace.active, true);
     });
 
-    const namespace = (await loaded('/gs1-namespaces')).namespaces
+    const namespace = (await loaded('/gs1/namespaces')).namespaces
       .find((entry: { gcp: string }) => entry.gcp === gcp);
 
     await t.test('a class key is adopted, and the serials spent before Kannabi are excluded',
@@ -151,7 +153,7 @@ test('an existing Asset corpus loads over the public HTTP API',
         // Adoption, not allocation: the operator supplies the key's own value,
         // because the prior system already had it. The record says which, and
         // Kannabi never claims to have allocated it.
-        const classKey = (await loaded(`/gs1-namespaces/${namespace.key}/class-keys`, 'POST', {
+        const classKey = (await loaded(`/gs1/namespaces/${namespace.key}/class-keys`, 'POST', {
           scheme: 'gtin', gtin: managedGtin,
           serialExclusions: [consumedSerials],
         })).classKey;
@@ -160,7 +162,7 @@ test('an existing Asset corpus loads over the public HTTP API',
         assert.deepEqual(classKey.serial.exclusions, [consumedSerials]);
       });
 
-    const classKey = (await loaded(`/gs1-namespaces/${namespace.key}/class-keys`)).classKeys
+    const classKey = (await loaded(`/gs1/namespaces/${namespace.key}/class-keys`)).classKeys
       .find((entry: { canonical: string }) => entry.canonical.includes(managedGtin));
 
     // ─── The corpus ─────────────────────────────────────────────────────────
@@ -288,24 +290,23 @@ test('an existing Asset corpus loads over the public HTTP API',
 
     await t.test('nothing in the corpus was issued by Kannabi', async () => {
       for (const [name, asset] of Object.entries(assets)) {
-        const current = await loaded(`/assets/${asset.id}`);
-        assert.deepEqual(current.asset.issuances, [],
+        const current = await loaded(`/gs1/assets/${asset.id}/issuances`);
+        assert.deepEqual(current.issuances, [],
           `${name} must carry no issuance record: every value it has came from elsewhere`);
       }
-      // An Asset's issuances are derived from the ledger rather than from its
+      // An Asset's issuances are read from the ledger rather than from its
       // identifiers, so an empty list is the ledger's answer and not an absence
       // of matching values: every Asset above carries one whose digits sit under
       // the managed prefix, and none of them is reported as issued.
       const page = await loaded('/assets?limit=100');
       assert.equal(page.assets.length, Object.keys(assets).length, 'the corpus is exactly this');
-      for (const asset of page.assets) assert.deepEqual(asset.issuances, []);
     });
 
     await t.test('an issuance afterwards skips the serials the prior system spent', async () => {
-      const { asset } = await loaded(`/assets/${assets.rig.id}/sgtin`, 'POST',
+      const { asset, issuances } = await loaded(`/gs1/assets/${assets.rig.id}/sgtin`, 'POST',
         { namespaceKey: namespace.key, classKeyKey: classKey.key });
-      assert.equal(asset.issuances.length, 1, 'exactly one, and only now');
-      const issuance = asset.issuances[0];
+      assert.equal(issuances.length, 1, 'exactly one, and only now');
+      const issuance = issuances[0];
       // 1 to 50 were unavailable before Kannabi existed, so the first value it
       // may issue is 51. The exclusions are configuration, never a free list.
       assert.equal(issuance.sequence, consumedSerials.to + 1);

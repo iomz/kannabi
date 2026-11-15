@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { connectPlugins } from './plugin.js';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ import { admitSignups } from './test-admission.js';
 import { createInventoryApi } from './inventory-api.js';
 import { MailService } from './mail.js';
 import { MasterKeyManager } from './secrets.js';
-import { schemes } from './composition.js';
+import { composition } from './composition.js';
 
 const uri = process.env.KANNABI_TEST_NEO4J_URI;
 const password = process.env.KANNABI_TEST_NEO4J_PASSWORD;
@@ -24,13 +25,14 @@ test('mail configuration, authorization, encrypted persistence, recovery, and SM
     t.after(() => driver.close());
     const data = mkdtempSync(join(tmpdir(), 'kannabi-mail-integration-'));
     t.after(() => rmSync(data, { recursive: true, force: true }));
-    const store = await IdentityStore.open(driver, schemes);
+    const store = await IdentityStore.open(driver, composition);
+    const plugins = connectPlugins(composition, store);
     await admitSignups(driver);
     const keyManager = await MasterKeyManager.open(await store.hasEncryptedSecrets(), { KANNABI_DATA_DIR: data });
     const mail = new MailService(store, keyManager);
     const origin = 'http://localhost:3000';
     const auth = await createAuth(driver, origin, randomBytes(32).toString('hex'), mail);
-    const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, mail));
+    const app = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, mail, undefined, plugins));
 
     const cookies = new Map<number, string>();
     function client(peer: number) {
@@ -150,7 +152,7 @@ test('mail configuration, authorization, encrypted persistence, recovery, and SM
       const wrongKeys = await MasterKeyManager.open(true,
         { KANNABI_SECRET_KEY: randomBytes(32).toString('base64url') });
       const degradedMail = new MailService(store, wrongKeys);
-      const degradedApp = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, degradedMail));
+      const degradedApp = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined, degradedMail, undefined, plugins));
       const request = (path: string, method = 'GET', body?: unknown) => degradedApp.request(origin + '/api' + path, {
         method, headers: { Origin: origin, Cookie: cookies.get(1) ?? '', 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -173,7 +175,7 @@ test('mail configuration, authorization, encrypted persistence, recovery, and SM
       assert.equal(missingKeys.state, 'missing');
       assert.throws(() => statSync(keyPath));
       const recoveryApp = new Hono().route('/api', createInventoryApi(store, auth, origin, undefined,
-        new MailService(store, missingKeys)));
+        new MailService(store, missingKeys), undefined, plugins));
       const recoveryRequest = (path: string, method = 'GET', body?: unknown) => recoveryApp.request(origin + '/api' + path, {
         method, headers: { Origin: origin, Cookie: cookies.get(1) ?? '', 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
