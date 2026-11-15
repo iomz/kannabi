@@ -103,8 +103,11 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     .filter((entry): entry is [string, string] => entry[1] !== undefined));
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ['--import', 'tsx', 'server/mcp.ts'],
-    env: { ...environment, NEO4J_URI: uri!, NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: password! },
+    // Composed with GS1 alone, as this test is, and reading system-wide
+    // whatever the environment that started the run says.
+    args: ['--import', 'tsx', '--import', './plugins/gs1/test-composition.mjs', 'server/mcp.ts'],
+    env: { ...environment, NEO4J_URI: uri!, NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: password!,
+      KANNABI_MCP_AUDIENCE: 'system' },
     stderr: 'pipe',
   });
   transport.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk.toString()));

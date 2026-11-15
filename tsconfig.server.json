@@ -19,6 +19,7 @@
     "plugins/**/*.test.ts",
     "plugins/**/web/**",
     "server/dom.ts",
-    "server/test-fixture.ts"
+    "server/test-fixture.ts",
+    "plugins/**/testing.ts"
   ]
 }

@@ -340,7 +340,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       assert.equal(page.matching, 104);
       assert.ok(page.assets.length > 0 && page.assets.length <= 17);
       for (const asset of page.assets) {
-        assert.ok(!asset.identifiers.some((i: { canonical: string }) => i.canonical.endsWith('hidden')));
+        assert.ok(!asset.identifiers.some((i: { canonical: string }) => i.canonical === 'tag:T-3001'));
         identities.push(asset.id);
       }
       cursor = page.nextCursor;

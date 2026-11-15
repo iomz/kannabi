@@ -5,6 +5,8 @@ import { assetLookupQuery } from '../../../server/asset-lookup.js';
 import { assetPageRequest } from '../../../server/asset-page.js';
 import { assetRecord } from '../../../server/asset-representation.js';
 import { gs1Rule, gs1Schemes } from '../adapter/schemes.js';
+import { gs1Plugin } from '../index.js';
+import { compose, type PluginDefinition } from '../../../server/plugin.js';
 import { ValidationError } from '../../../server/identity.js';
 import { DuplicateIdentityError, IdentityStore } from '../../../server/identity-store.js';
 import { identifierSchemes, type Identifier, type IdentifierScheme } from '../../../server/identifier.js';
@@ -63,8 +65,13 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
   { skip: !uri || !password }, async (t) => {
     const driver = neo4j.driver(uri!, neo4j.auth.basic('neo4j', password!));
     t.after(() => driver.close());
-    const schemes = identifierSchemes([...gs1Schemes, tag], [gs1Rule]);
-    const store = await IdentityStore.open(driver, { schemes: schemes });
+    // The whole GS1 plugin beside a plugin that only brings the tag, so GS1's
+    // part in every identifier write runs as it does in a real build.
+    const tagPlugin: PluginDefinition<null> = { schemes: [tag], connect: () => ({ api: null }),
+      manifest: { id: 'shelf', name: 'Shelf tags', version: '0.0.1', contract: [1], requires: [], contributes: [] } };
+    const composed = compose([gs1Plugin, tagPlugin]);
+    const { schemes } = composed;
+    const store = await IdentityStore.open(driver, composed);
     const alex = await store.createUser('Alex');
     const group = await store.createReportingGroup('Stores', alex.key);
     const context = { actorKey: alex.key, groupKey: group.key };
@@ -107,7 +114,7 @@ test('a scheme that is not GS1 is stored, read, found and kept unique like any o
     assert.deepEqual(withSerial.identifiers.map((identifier) => identifier.scheme), ['sgtin', 'tag']);
     const session = driver.session();
     try {
-      const conflicts = await session.run('MATCH (:Settings)-[c:HAS_GTIN_CONFLICT]->(:Asset) RETURN count(c) AS total');
+      const conflicts = await session.run(`MATCH (:Gs1Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(:Asset) RETURN count(c) AS total`);
       assert.equal(conflicts.records[0].get('total').toNumber(), 0);
     } finally { await session.close(); }
     const key = tagged.identifiers.find((identifier) => identifier.scheme === 'tag')!.key;

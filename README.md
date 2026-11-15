@@ -781,7 +781,8 @@ It never uses the application `.env` or an existing database.
 Core's tests, under `server/`, run against a fixture plugin (`server/test-fixture.ts` and `server/test-web-fixture.tsx`: two identifier schemes, one address form, one tool) and never against a real one, so they say what Kannabi does with a plugin installed and still pass in a checkout that has none.
 `server/test-composition.mjs` gives a core screen under test, and a server process a test starts, that fixture in place of the generated plugin list.
 A plugin keeps its own tests beside its code, where they run against the plugin itself: the GS1 plugin's are under `plugins/gs1/tests/`, and hold everything about Kannabi with GS1 installed.
-`pnpm test` runs both; with no plugin installed there are none of the second kind to run.
+They run under the plugin's own `test-composition.mjs`, which composes that plugin alone, so they do not depend on what else a deployment lists.
+`pnpm test` and `pnpm test:integration` run core's tests and those of each plugin the list names; with none listed there are none of the second kind to run.
 `NEO4J_TEST_IMAGE` may select a locally cached Neo4j 5 image; the default matches Compose's `neo4j:5-community`.
 
 ## Name

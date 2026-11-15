@@ -76,7 +76,8 @@ test('the Kannabi MCP server serves Asset discovery over stdio', { skip: !uri ||
     command: process.execPath,
     // The server process is composed with the fixture plugin, as this test is.
     args: ['--import', 'tsx', '--import', './server/test-composition.mjs', 'server/mcp.ts'],
-    env: { ...environment, NEO4J_URI: uri!, NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: password! },
+    env: { ...environment, NEO4J_URI: uri!, NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: password!,
+      KANNABI_MCP_AUDIENCE: 'system' },
     stderr: 'pipe',
   });
   transport.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk.toString()));
