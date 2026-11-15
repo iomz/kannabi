@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import type { Auth } from './auth.js';
 import type { HttpEnv } from './http-context.js';
 import { createInventoryApi } from './inventory-api.js';
-import type { IdentityStore } from './identity-store.js';
+import { IdentityStore } from './identity-store.js';
 import { ValidationError } from './identity.js';
 import { compose, connectPlugins, noPlugins, pluginContract, type PluginDefinition } from './plugin.js';
 import { composition } from './composition.js';
@@ -31,6 +31,28 @@ test('composition refuses a plugin it could not run', () => {
   assert.throws(() => compose([plugin('tag', { contract: [pluginContract + 1] })]), /runs contract/);
   // A peer is an earlier entry, so nothing is handed a plugin not yet built.
   assert.throws(() => compose([plugin('legacy', { requires: ['tag'] }), plugin('tag')]), /requires "tag"/);
+});
+
+test('a plugin constrains only labels that are its own', async () => {
+  const constraining = (id: string, label: string) => IdentityStore.open(null as never, { schemes: compose([]).schemes,
+    plugins: [{ manifest: manifest(id), persistence: { constraints: [{ name: 'c', label, properties: ['key'] }] } }] });
+  // A prefix alone is not ownership: `group` does not own core's `Group`, and
+  // `gs` does not own another plugin's `Gs1…`.
+  for (const [id, label] of [['group', 'Group'], ['asset', 'Asset'], ['gs', 'Gs1Settings'], ['tag', 'tagThing'],
+    ['tag', 'Taggable'], ['tag', 'Other']]) {
+    await assert.rejects(constraining(id, label), /outside its own labels/, `${id} ${label}`);
+  }
+  // Its own label passes the check and goes on to need a database.
+  await assert.rejects(constraining('tag', 'TagThing'), (error: Error) => !/outside its own labels/.test(error.message));
+});
+
+test('a plugin cannot mount routes where core already answers', () => {
+  const mount = (id: string) => createInventoryApi({} as IdentityStore, {} as Auth, 'http://localhost:3000',
+    undefined, undefined, undefined, { ...noPlugins, http: [{ id, app: new Hono<HttpEnv>() }] });
+  for (const id of ['auth', 'admin', 'assets', 'settings', 'me', 'v3']) {
+    assert.throws(() => mount(id), /core answers under that path/, id);
+  }
+  assert.doesNotThrow(() => mount('tag'));
 });
 
 test('a plugin is handed the peers it named, and only those', () => {

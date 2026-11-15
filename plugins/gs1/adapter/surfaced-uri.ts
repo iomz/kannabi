@@ -1,6 +1,3 @@
-import { assetPath } from '../../../shared/asset-uri.js';
-import { digitalLinkPath } from '../toolkit/digital-link.js';
-import { isGs1Scheme } from '../toolkit/gs1.js';
 import type { Identifier } from '../../../server/identifier.js';
 
 /** Which URI Kannabi puts in front of a person.
@@ -62,52 +59,4 @@ export function preferredDigitalLinkIdentifier<T extends SurfaceableIdentifier>(
     }
   }
   return best;
-}
-
-/** The path Kannabi surfaces for this Asset: its preferred Digital Link when
- * one exists, and its native Asset URI otherwise.
- *
- * An Asset with no eligible identifier is not a lesser case. Its native URI is
- * what it has always been, and is presented without qualification.
- */
-export function surfacedAssetPath(id: string,
-  identifiers: readonly SurfaceableIdentifier[]): string {
-  const preferred = preferredDigitalLinkIdentifier(identifiers);
-  return preferred ? digitalLinkPath(preferred) : assetPath(id);
-}
-
-/** Every address that serves this Asset where it stands, without a redirect.
- *
- * Its individual-level Digital Links, and the native URI only when there is
- * no Digital Link to surface — once there is one, the native URI redirects.
- */
-export function servingAssetPaths(id: string,
-  identifiers: readonly SurfaceableIdentifier[]): string[] {
-  const digitalLinks = identifiers
-    // A Digital Link is GS1's: an identifier of another scheme has none.
-    .filter((identifier) => identifier.level === 'individual' && isGs1Scheme(identifier.scheme))
-    .map((identifier) => digitalLinkPath(identifier));
-  return digitalLinks.length ? digitalLinks : [assetPath(id)];
-}
-
-/** Where a viewer standing at `current` should be sent after this Asset's
- * identifiers changed, or `null` to stay put.
- *
- * This is post-mutation navigation, and deliberately not canonicalization. A
- * viewer at a valid non-preferred Digital Link stays there, because that
- * address still serves the Asset and moving them to the preferred one would
- * do by navigation exactly what resolution is forbidden to do by redirect.
- *
- * A viewer moves only when the address they are standing on no longer serves
- * the Asset: the identifier it was built from has been detached, or they are
- * on the native URI and the Asset has just acquired a Digital Link the server
- * would now redirect that URI to.
- *
- * Nothing here changes how any address resolves. A detached Digital Link,
- * requested directly, is unknown exactly as before.
- */
-export function surfacedTransition(current: string, id: string,
-  identifiers: readonly SurfaceableIdentifier[]): string | null {
-  return servingAssetPaths(id, identifiers).includes(current)
-    ? null : surfacedAssetPath(id, identifiers);
 }

@@ -504,10 +504,16 @@ const lockSettings = `MATCH (p:Gs1Settings {key: 'instance'}) SET p.revision = p
  * Whether they conflict is `hasGtinConflict`, the same rule enforcement
  * applies. Deleting an Asset takes the relationship with it. */
 async function recordGtinConflict(tx: ManagedTransaction, assetKey: string): Promise<void> {
-  const current = await tx.run(`${assetMatch} RETURN ${assetIdentifierRows} AS identifiers`,
-    { assetId: assetKey });
-  const identifiers = gs1Identifiers(current.records[0].get('identifiers') as StoredIdentifier[]);
-  await tx.run(hasGtinConflict(identifiers)
+  // One read says both what the Asset carries and whether it is in the set, so
+  // the set is written only when membership actually changes. Most identifier
+  // writes involve no GTIN conflict at all — an Asset with no identifier, or
+  // one of another scheme — and those cost this read and nothing more.
+  const current = await tx.run(`${assetMatch} RETURN ${assetIdentifierRows} AS identifiers,
+    EXISTS { (:Gs1Settings {key: 'instance'})-[:HAS_GTIN_CONFLICT]->(a) } AS recorded`,
+  { assetId: assetKey });
+  const conflicts = hasGtinConflict(gs1Identifiers(current.records[0].get('identifiers') as StoredIdentifier[]));
+  if (conflicts === (current.records[0].get('recorded') === true)) return;
+  await tx.run(conflicts
     ? `MATCH (p:Gs1Settings {key: 'instance'}) ${assetMatch} MERGE (p)-[:HAS_GTIN_CONFLICT]->(a)`
     : `MATCH (:Gs1Settings {key: 'instance'})-[c:HAS_GTIN_CONFLICT]->(:Asset {id: $assetId}) DELETE c`,
   { assetId: assetKey });
@@ -692,7 +698,9 @@ export class Gs1Store {
     }
     return this.core.write(async (tx) => {
       const admin = await tx.run("MATCH (u:User {key: $actorKey, role: 'admin'}) RETURN u.key", { actorKey });
-      if (!admin.records.length) throw new AdministrationError('Administrator access required');
+      // Answered as core answers a change to its own settings by somebody who
+      // is not an administrator, so the two refusals read the same to a client.
+      if (!admin.records.length) throw new ReferenceError('Administrator access required');
       // The settings lock is taken before the conflict set is read, and every
       // identifier write takes it before judging and recording, so a conflict
       // either committed before this check and blocks it, or is judged by the
@@ -1072,7 +1080,7 @@ export class Gs1Store {
           RETURN n.gcp AS gcp, n.active AS active,
             ${counterProjection('n', 'giai')} AS counter`, { key });
         if (!locked.records.length) throw new ReferenceError('Allocation namespace not found');
-        await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
+        await this.core.lockAsset(tx, assetKey);
         // 2. Authority comes from the Group that manages the namespace — its
         //    membership and its control, both required — and that Group must
         //    also collaborate on the Asset. Control is the organizational half

@@ -458,10 +458,10 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
         }),
         // The address put in front of a person: one an installed plugin
         // surfaces for this Asset, or its native URI.
-        surfacedUri: new URL(plugins.surfaced(asset) ?? assetPath(asset.id), origin).toString(),
-        // Each installed plugin's statement about this Asset, as the
-        // structured representation carries it.
-        extensions: await plugins.sections(asset, user?.key ?? null) });
+        // What an installed plugin states about the Asset is in the
+        // structured representation under /v3, and behind the plugin's own
+        // routes; it is not gathered again here.
+        surfacedUri: new URL(plugins.surfaced(asset) ?? assetPath(asset.id), origin).toString() });
     })
     .patch('/assets/:id', validator('json', (value) =>
       record(value, ['name', 'ownerKey', 'isPublic']) as AssetChanges), async (c) => {
@@ -495,7 +495,15 @@ export function createInventoryApi(store: IdentityStore, auth: Auth, origin: str
   // answered for the same caller as core's own, and its refusals are rendered
   // by the same handler.
   const api = new Hono<Env>().route('/', core).onError(refused);
-  for (const { id, app } of plugins.http) api.route(`/${id}`, app);
+  // A plugin's id is its path segment, so it may not be one core already
+  // answers under: its routes would land inside core's own path space, or be
+  // swallowed by a core route registered first. Read from the routes core
+  // actually has, so the list cannot fall behind them.
+  const taken = new Set(core.routes.map((route) => route.path.split('/')[1]));
+  for (const { id, app } of plugins.http) {
+    if (taken.has(id)) throw new Error(`Plugin "${id}" cannot mount routes at /api/${id}: core answers under that path`);
+    api.route(`/${id}`, app);
+  }
   return Object.assign(api, { core });
 }
 /** Core's own routes, which is what a typed client of core is typed by. A

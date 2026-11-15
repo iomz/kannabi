@@ -164,5 +164,4 @@ test('an Asset carrying an identifier with no address is still served', async ()
   // Which address is surfaced is an installed plugin's presentation choice;
   // with none installed it is the native Asset URI.
   assert.equal(body.surfacedUri, origin + '/asset/' + rig.id);
-  assert.deepEqual(body.extensions, {});
 });

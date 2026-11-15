@@ -641,8 +641,13 @@ export class IdentityStore {
    * plugin's own id, so no plugin can constrain core's nodes or another's. */
   private static pluginConstraints(composition: StoreComposition): PluginConstraint[] {
     return (composition.plugins ?? []).flatMap((plugin) => (plugin.persistence?.constraints ?? []).map((constraint) => {
+      // The label is the plugin's id in PascalCase followed by a capitalised
+      // word, as `Gs1Namespace` is for `gs1`. A bare prefix test would let a
+      // plugin called `group` constrain core's `Group`, and one called `gs`
+      // constrain another plugin's `Gs1…`.
       const prefix = plugin.manifest.id.replaceAll('-', '');
-      if (!constraint.label.toLowerCase().startsWith(prefix) || !/^\w+$/.test(constraint.label)
+      const owned = new RegExp(`^${prefix[0].toUpperCase()}${prefix.slice(1)}[A-Z]\\w*$`);
+      if (!owned.test(constraint.label)
         || !/^\w+$/.test(constraint.name) || !constraint.properties.every((name) => /^\w+$/.test(name))) {
         throw new Error(`Plugin "${plugin.manifest.id}" declares a constraint outside its own labels: ${constraint.label}`);
       }
@@ -1147,6 +1152,15 @@ export class IdentityStore {
         const policy = await tx.run(`MATCH (s:Settings {key: 'instance'}) SET s.revision = s.revision + 1
           RETURN s.requirePhoto AS required`);
         if (!photoKey && policy.records[0].get('required')) throw new ValidationError('A photo is required when reporting an Asset');
+        // Who may report here is settled before any plugin judges the
+        // identifiers, as it is before an attachment. A plugin's refusal can
+        // say something about what the instance holds, and that is never
+        // answered to a caller this report would refuse anyway.
+        const reporter = await tx.run(`MATCH (:User {key: $actorKey})-[:MEMBER_OF]->(g:Group {key: $groupKey})
+          RETURN g.key`, params);
+        if (!reporter.records.length) {
+          throw new ReferenceError('Reporter must belong to the selected Group and any Owner must exist');
+        }
         await assertClassSchemes(tx, identifiers);
         for (const participant of this.participants) {
           await participant.beforeIdentifiers(tx, { assetId: params.assetId, existing: [], additions: identifiers });
@@ -1774,6 +1788,16 @@ export class IdentityStore {
     }
   }
 
+  /** Take the write lock on one Asset for the rest of the transaction, so
+   * whatever is read about it next cannot change before the transaction
+   * commits. Public for a plugin that must order its own decision against an
+   * Asset write: the lock is core's to take, and a plugin sets nothing on a
+   * core node itself. Locking an unknown Asset locks nothing and says so to
+   * nobody. */
+  async lockAsset(tx: ManagedTransaction, assetKey: string): Promise<void> {
+    await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
+  }
+
   /** The one attachment implementation: Asset authorization, the installed
    * identifier rules, each plugin's part, persistence and provenance.
    *
@@ -1782,7 +1806,7 @@ export class IdentityStore {
    * the actor must collaborate on the Asset, whoever is calling. */
   async attachWithin(tx: ManagedTransaction, assetKey: string, actorKey: string, identifier: Identifier,
     origin: ChangeOrigin = {}): Promise<void> {
-    await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
+    await this.lockAsset(tx, assetKey);
     const current = await tx.run(`${assetMatch} WHERE ${collaboration}
       RETURN ${assetIdentifierRows} AS identifiers`,
     { assetId: assetKey, actorKey });

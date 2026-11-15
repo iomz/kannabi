@@ -636,6 +636,15 @@ test('Neo4j identity integrity', { skip: !uri || !password }, async (t) => {
     await assert.rejects(store.attachIdentifier(second.id, owner.key,
       { scheme: 'giai', assetReference: value }), (error: Error) =>
       error instanceof ValidationError && /issued that identifier for another Asset/.test(error.message));
+    // Reporting a new Asset with it is refused for the same reason, but only
+    // to somebody the report would otherwise accept: a caller who may not
+    // report into the Group named is told that, and learns nothing about
+    // what the ledger holds.
+    const reported = { name: 'Reuses an issued value', identifiers: [{ scheme: 'giai', assetReference: value }] };
+    await assert.rejects(store.reportAsset(reported, context), (error: Error) =>
+      error instanceof ValidationError && /issued that identifier for another Asset/.test(error.message));
+    await assert.rejects(store.reportAsset(reported, { ...context, groupKey: 'no-such-group' }),
+      (error: Error) => error instanceof ReferenceError);
     const restored = await store.attachIdentifier(first.id, owner.key, { scheme: 'giai', assetReference: value });
     assert.ok(restored.identifiers.some((identifier) => identifier.components.assetReference === value));
     // An externally assigned GIAI keeps Phase 2 correction semantics.

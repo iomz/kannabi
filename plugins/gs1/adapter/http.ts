@@ -34,7 +34,8 @@ export function createGs1Api(gs1: Gs1Store) {
       c.json({ settings: await gs1.updateSettings(actor(c.get('user')), await c.req.json()) }))
     // The Assets that block enforcing GTIN consistency, a page at a time. The
     // 409 refusing enforcement carries the first page; this continues it.
-    .get('/admin/gtin-conflicts', administrativeCredential, async (c) => c.json({
+    // Core applies the administrator ceiling to every plugin's `admin/` path.
+    .get('/admin/gtin-conflicts', async (c) => c.json({
       gtinConflicts: await gs1.gtinConflicts(actor(c.get('user')), c.req.query('after')),
     }))
     // The ledger rows bound to one Asset, for a reader who may see that Asset

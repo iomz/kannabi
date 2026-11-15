@@ -61,8 +61,15 @@ export async function loadAsset(id: string, request: Request) {
   // through its own routes. Display only: every decision is the server's.
   const context = { asset: result.asset, participant, assetGroups: [...groupKeys],
     managedGroups: controlled.map((group) => group.key) };
-  const plugins = Object.fromEntries(await Promise.all(assetSlots.map(async (plugin) =>
-    [plugin.id, await plugin.assetPage!.load(context)] as const))) as Record<string, unknown>;
+  // A plugin whose read fails contributes nothing to this page, exactly as if
+  // it had no part in it: the Asset core just served is still shown.
+  const plugins = Object.fromEntries((await Promise.all(assetSlots.map(async (plugin) => {
+    try { return [[plugin.id, await plugin.assetPage!.load(context)] as const]; }
+    catch (error) {
+      console.error(`Plugin "${plugin.id}" could not load its part of the Asset page`, error);
+      return [];
+    }
+  }))).flat()) as Record<string, unknown>;
   // The Groups whose page this reader can open: their memberships, exactly as
   // the Group destination decides it.
   const reachableGroups = memberships.map((group) => group.key);
@@ -255,9 +262,11 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   const issueResult = issue.data?.kind === 'add-identifier' ? issue.data : null;
   // The value just added, while it is still the newest thing on the page.
   const justIssued = issueResult?.saved && 'added' in issueResult ? issueResult.added ?? null : null;
+  // Only the plugins whose part of this page was read.
+  const loadedSlots = assetSlots.filter((plugin) => plugin.id in plugins);
   /** What an installed plugin says about one identifier this Asset carries. */
   const standing = (identifier: CarriedIdentifier) => {
-    for (const plugin of assetSlots) {
+    for (const plugin of loadedSlots) {
       const said = plugin.assetPage!.standing?.(plugins[plugin.id], identifier) ?? null;
       if (said) return said;
     }
@@ -325,7 +334,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       {!asset.identifiers.length && <p className="mt-5 mb-0 text-[.875rem]">
         No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>}
       {canEdit && <AddIdentifier
-        panels={assetSlots.flatMap((plugin) => {
+        panels={loadedSlots.flatMap((plugin) => {
           const slot = plugin.assetPage!;
           if (!slot.add) return [];
           const Panel = slot.add.Panel;

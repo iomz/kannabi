@@ -3,9 +3,19 @@ import { test } from 'node:test';
 import { canonicalIdentifier } from '../toolkit/gs1.js';
 import { newAssetId } from '../../../server/asset-id.js';
 import { assetPath } from '../../../shared/asset-uri.js';
-import {
-  preferredDigitalLinkIdentifier, servingAssetPaths, surfacedAssetPath, surfacedTransition,
-} from './surfaced-uri.js';
+import { installed, type AddressedAsset } from '../../../web/plugin.js';
+import { gs1Web } from '../web/index.js';
+import { preferredDigitalLinkIdentifier } from './surfaced-uri.js';
+
+// What the web client actually consults: the installed plugins, with GS1 as
+// the one that surfaces an address. Exercised through `installed` so these
+// are tests of the navigation a person gets, not of a helper beside it.
+const web = installed([gs1Web]);
+type Carried = AddressedAsset['identifiers'];
+const surfacedAssetPath = (assetId: string, identifiers: Carried) => web.surfacedPath({ id: assetId, identifiers });
+const servingAssetPaths = (assetId: string, identifiers: Carried) => web.servingPaths({ id: assetId, identifiers });
+const surfacedTransition = (current: string, assetId: string, identifiers: Carried) =>
+  web.transition(current, { id: assetId, identifiers });
 
 const gtin = canonicalIdentifier({ scheme: 'gtin', gtin: '0614141123452' });
 const sgtin = canonicalIdentifier({ scheme: 'sgtin', gtin: '0614141123452', serial: 'A1B2' });
