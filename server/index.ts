@@ -1,10 +1,10 @@
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { storageFromEnv } from './storage.js';
 import { MediaService } from './media.js';
 import neo4j from 'neo4j-driver';
 import { createApp } from './app.js';
+import { clientBuild } from './client-build.js';
 import { createAuth } from './auth.js';
 import { IdentityStore } from './identity-store.js';
 import { ApiTokenService } from './api-token.js';
@@ -59,13 +59,10 @@ app.route('/api', createInventoryApi(store, auth, applicationOrigin, media, mail
 // Unknown API paths must never fall through to the SPA.
 app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
-app.use('/assets/*', serveStatic({ root: './build/client' }));
-app.all('/assets/*', (c) => c.notFound());
 // An address a plugin claims, and the native URI's redirect to one, need a
 // status the single-page build cannot produce, so they are decided here. An
 // address that resolves falls through to the same static handler as before.
-app.use('*', addressDocuments(store, auth, plugins, './build/client/index.html'));
-app.get('*', serveStatic({ path: './build/client/index.html' }));
+app.route('/', clientBuild('./build/client', addressDocuments(store, auth, plugins, './build/client/index.html')));
 
 const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
   console.log(`Kannabi: ${applicationOrigin}/`);
