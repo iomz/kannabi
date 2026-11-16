@@ -30,7 +30,7 @@ const roles: [string, boolean, boolean][] = [
   ['Leave the Group', true, true],
   ['Add or remove people', false, true],
   ['Make someone a Group Manager, or remove the role', false, true],
-  ['Anything else reserved for Group Managers', false, true],
+  ['Manage anything else this instance lets the Group manage', false, true],
 ];
 
 const directoryText: Record<PeopleDirectory, string> = {
@@ -72,7 +72,8 @@ export default function Help({ loaderData: { directory, requireApproval } }: Rou
         each Group has its own page with an Overview, its Assets and its People.</p>
       <h2 className="mt-6">Member and Group Manager</h2>
       <p>Everybody in a Group is a member. Some members are also its <strong>Group Managers</strong>: they look
-        after the Group itself — who is in it, and their roles. Whoever creates a Group
+        after the Group itself — who is in it, their roles, and anything else this instance lets the Group
+        manage, such as identifier namespaces. Whoever creates a Group
         is its first Group Manager.</p>
       <div className="mb-3 overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">

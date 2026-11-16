@@ -150,7 +150,7 @@ pnpm mcp
 
 `pnpm dev:mcp` runs the same server from source. A host launches it as a child process and speaks MCP on its stdin/stdout; it reads `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` from the environment or `.env`, serves no network listener, and never calls Kannabi's HTTP API. Its stdout carries the protocol; diagnostics go to stderr.
 
-Four core tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete identifier of an installed scheme, `get_asset` for inspection by native Asset ID, and `list_groups` for the vocabulary those take. An installed plugin may add tools of its own, which its README describes.
+Core's tools cover the discovery workflow: `search_assets` for an incomplete description, `get_asset` for inspection by native Asset ID, `list_groups` for the vocabulary those take, and, only when an installed plugin provides an identifier scheme, `resolve_external_identifier` for a complete identifier of that scheme. An installed plugin may add tools of its own, which its README describes.
 Asset results use the structured Asset representation described above.
 Every result carries the native Asset ID, so a candidate from any tool can be inspected unambiguously, and each identifier is returned with the components that resolve it again.
 Class-level identifiers may resolve to several Assets; individual-level identifiers resolve to at most one.
@@ -379,7 +379,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | --- | --- | --- | --- |
 | **Assets** | | | |
 | Browse and search by name or quoted source description | yes | `GET /api/assets` | `search_assets` |
-| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
+| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier`, when a scheme is installed |
 | Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
 | Read the structured Asset representation | no | `GET /api/v3/assets`, `/api/v3/assets/lookup`, `/api/v3/assets/{id}` | every Asset result |
 | Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
@@ -417,7 +417,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 ### What the absences mean
 
-**MCP writes nothing.** Every tool, core's four and any a plugin adds, is read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
+**MCP writes nothing.** Every tool, core's and any a plugin adds, is read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
 
 **The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
 
