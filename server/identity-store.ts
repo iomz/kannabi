@@ -683,6 +683,7 @@ export class IdentityStore {
       // owning scheme's to rebuild.
       for (const plugin of plugins) await plugin.persistence?.migrate?.(driver);
       await IdentityStore.verifyExternalIdentifiers(session);
+      await IdentityStore.verifyInstalledSchemes(session, composition.schemes);
       for (const plugin of plugins) await plugin.persistence?.verify?.(session);
       // The pre-Phase-2 identifier schema has no remaining nodes to guard.
       await session.run('DROP CONSTRAINT identifier_claim IF EXISTS');
@@ -723,6 +724,7 @@ export class IdentityStore {
     try {
       await IdentityStore.verifyConstraints(session, IdentityStore.pluginConstraints(composition));
       await IdentityStore.verifyGroupRoles(session);
+      await IdentityStore.verifyInstalledSchemes(session, composition.schemes);
       for (const plugin of composition.plugins ?? []) await plugin.persistence?.verify?.(session);
     } finally { await session.close(); }
     return new IdentityStore(driver, composition.schemes, IdentityStore.composed(composition));
@@ -823,7 +825,7 @@ export class IdentityStore {
   }
 
   /** Startup invariant: no pre-Phase-2 identifier survives, and every stored
-   * identifier carries the properties the GS1 boundary needs to rebuild it. */
+   * identifier carries the properties its scheme needs to rebuild it. */
   private static async verifyExternalIdentifiers(session: Session): Promise<void> {
     const legacy = await session.run('MATCH (i:Identifier) RETURN count(i) AS remaining');
     const remaining = legacy.records[0].get('remaining').toNumber();
@@ -834,6 +836,22 @@ export class IdentityStore {
       RETURN count(n) AS invalid`);
     const invalid = incomplete.records[0].get('invalid').toNumber();
     if (invalid) throw new Error(`${invalid} external identifier(s) are missing required properties`);
+  }
+
+  /** Startup invariant: every stored identifier's scheme is installed. An
+   * identifier is only ever read back through the scheme that owns it, so one
+   * whose plugin is missing would fail every read of its Asset; Kannabi
+   * refuses to start instead, and never hides, drops or reinterprets the
+   * value. Read-only, so the read-only attachment checks it too. */
+  private static async verifyInstalledSchemes(session: Session, schemes: IdentifierSchemes): Promise<void> {
+    const uninstalled = await session.run(`MATCH (n)
+      WHERE (n:IndividualIdentifier OR n:ClassIdentifier) AND NOT n.scheme IN $installed
+      RETURN n.scheme AS scheme, count(n) AS stored ORDER BY scheme`, { installed: [...schemes.ids] });
+    if (uninstalled.records.length) {
+      const found = uninstalled.records.map((r) => `${r.get('scheme')} (${r.get('stored').toNumber()})`).join(', ');
+      throw new Error(`Stored identifiers use schemes no installed plugin provides: ${found}. `
+        + 'List the plugin that provides each in kannabi.plugins.json and run pnpm plugins:sync');
+    }
   }
 
   /** One write transaction. Public for the installed plugins, which keep
