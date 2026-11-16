@@ -57,6 +57,9 @@ test('Kannabi refuses to start on identifiers whose scheme no installed plugin p
     // refused before it serves one, and the refusal names what to install.
     await assert.rejects(IdentityStore.open(driver, { schemes: identifierSchemes([]) }),
       /Stored identifiers use schemes no installed plugin provides: model \(1\), tag \(1\)\. List the plugin/);
+    // The read-only attachment the MCP server uses is refused the same way.
+    await assert.rejects(IdentityStore.attachReadOnly(driver, { schemes: identifierSchemes([]) }),
+      /provides: model \(1\), tag \(1\)\. List/);
     // Each missing scheme is named, and only those.
     await assert.rejects(IdentityStore.open(driver, { schemes: identifierSchemes([tagScheme]) }),
       /provides: model \(1\)\. List/);
