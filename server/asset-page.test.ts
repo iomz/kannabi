@@ -170,6 +170,20 @@ test('the URLs the inventory generates round-trip through the parser', () => {
     assert.ok(!path.includes('=&') && !path.endsWith('='), `no empty parameters in ${path}`);
     assert.equal(canonicalFilters(roundTrip(path).filters), canonicalFilters(filters), path);
   }
+  // A date bound stays a date, and an instant bound stays the instant it was,
+  // so the next page is requested under the same predicate as the first (#83).
+  for (const [query, written] of [
+    ['reportedTo=2025-03-01', 'reportedTo=2025-03-01'],
+    ['reportedTo=2025-03-01T00:00:00Z', 'reportedTo=2025-03-01T00%3A00%3A00.000Z'],
+    ['reportedFrom=2025-03-01', 'reportedFrom=2025-03-01'],
+    ['reportedFrom=2025-03-01T00:00:00Z', 'reportedFrom=2025-03-01'],
+    ['reportedFrom=2025-03-01T12:00:00Z', 'reportedFrom=2025-03-01T12%3A00%3A00.000Z'],
+  ]) {
+    const first = roundTrip('/?' + query).filters;
+    const next = inventoryPath({ ...view, filters: first });
+    assert.equal(next, '/?' + written, query);
+    assert.equal(canonicalFilters(roundTrip(next).filters), canonicalFilters(first), query);
+  }
   // Search, scope and ordering survive the same round trip.
   const full = inventoryPath({ ...view, q: 'Camera', scope: 'group', sort: 'reportedAt', dir: 'desc' });
   const parsed = roundTrip(full);
