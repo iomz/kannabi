@@ -118,6 +118,7 @@ Locating a GS1 Company Prefix inside an arbitrary key requires the GS1 GCP Lengt
 Kannabi core records identifiers and issues none, and knows no scheme of its own.
 Which schemes an instance accepts, how their values are validated, whether Kannabi can issue them, and at which addresses they resolve are an installed plugin's.
 GS1 identifiers — GTIN, SGTIN, GRAI and GIAI, their issuance from a managed Company Prefix, and GS1 Digital Link — are the [GS1 plugin](https://github.com/iomz/kannabi-plugin-gs1), whose README describes them.
+A stored identifier is read back only through the scheme that owns it, so Kannabi refuses to start on a database holding identifiers of a scheme no installed plugin provides, and names each one; it never hides, drops or reinterprets them.
 
 ## The structured Asset representation
 
