@@ -29,7 +29,7 @@ export type AssetLookupRequest = {
 export function assetLookupQuery(query: Record<string, unknown>, schemes: IdentifierSchemes): AssetLookupRequest {
   const { id, limit: rawLimit, cursor, ...identifier } = record(query, ['id', 'limit', 'cursor', ...schemes.inputFields]);
   // Exactly one identity, judged on every identifier field rather than on
-  // `scheme` alone: `{ id, gtin }` is an ambiguous request, not a native-ID
+  // `scheme` alone: `{ id, code }` is an ambiguous request, not a native-ID
   // lookup with a stray parameter, and must not resolve by silently ignoring
   // half of what was asked.
   const identifierSupplied = Object.values(identifier).some((value) => value !== undefined);

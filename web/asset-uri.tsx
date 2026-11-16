@@ -11,7 +11,8 @@ export function copyAssetUri(uri: string, clipboard: ClipboardWriter): Promise<v
 /** The Asset's addresses.
  *
  * The surfaced URI comes first because it is the one to take away. When the
- * Asset has an eligible GS1 identity that is its Digital Link URI.
+ * Asset has an address an installed plugin surfaces, that is it; otherwise it
+ * is the native URI.
  *
  * The native Kannabi URI follows the instance's "Show Kannabi ID" setting,
  * because it is the UUIDv7 spelled as a URL: a deployment that has chosen not
@@ -20,8 +21,8 @@ export function copyAssetUri(uri: string, clipboard: ClipboardWriter): Promise<v
  * stays valid, keeps resolving, and remains what every internal reference and
  * the API use.
  *
- * Neither is described as canonical. The Digital Link standard reserves that
- * word for the `id.gs1.org` form, which Kannabi does not emit.
+ * Neither is described as canonical: a standard may reserve that word for a
+ * form Kannabi does not emit, as GS1 Digital Link does for `id.gs1.org`.
  */
 export function AssetUri({ surfacedUri, nativeUri, showNativeUri, label }: {
   surfacedUri: string; nativeUri: string; showNativeUri: boolean;

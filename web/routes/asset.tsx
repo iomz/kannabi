@@ -5,8 +5,8 @@ import type { Route } from './+types/asset';
 /** The native Asset URI. Always valid, for every Asset, and unchanged by any
  * identifier the Asset gains or loses.
  *
- * When the Asset has an eligible GS1 identity the server answers this address
- * with a temporary redirect to the surfaced Digital Link URI, so a document
+ * When an installed plugin surfaces another address for the Asset, the server
+ * answers this one with a temporary redirect to it, so a document
  * request rarely arrives here. A client-side navigation still can, and this
  * route renders the same view either way.
  */

@@ -21,7 +21,8 @@ export async function clientLoader() {
 
 /** Verified against the server's authorization, not inferred from labels:
  * Asset reads, edits and reports follow membership; the people operations and
- * managed GS1 operations follow the Group Manager role. */
+ * every plugin operation on what the Group manages follow the Group Manager
+ * role. */
 const roles: [string, boolean, boolean][] = [
   ['Read and edit the Group’s private Assets', true, true],
   ['Report new Assets into the Group', true, true],
@@ -29,7 +30,7 @@ const roles: [string, boolean, boolean][] = [
   ['Leave the Group', true, true],
   ['Add or remove people', false, true],
   ['Make someone a Group Manager, or remove the role', false, true],
-  ['Manage the Group’s GS1 Company Prefixes', false, true],
+  ['Anything else reserved for Group Managers', false, true],
 ];
 
 const directoryText: Record<PeopleDirectory, string> = {
@@ -49,7 +50,7 @@ export default function Help({ loaderData: { directory, requireApproval } }: Rou
     <Panel className={prose}>
       <h2>What Kannabi does</h2>
       <p>Kannabi keeps a shared record of physical Assets — equipment, tools, devices — and of who can see and
-        change each one. Every Asset has a stable Kannabi ID, and may also carry identifiers such as GS1 keys.</p>
+        change each one. Every Asset has a stable Kannabi ID, and may also carry identifiers such as product or asset codes.</p>
       <p>{requireApproval
         ? 'On this instance, a new account waits until an administrator approves it. Until then it can read public Assets and change its own account, and nothing else.'
         : 'On this instance, a new account takes part as soon as it signs up.'}</p>
@@ -68,10 +69,10 @@ export default function Help({ loaderData: { directory, requireApproval } }: Rou
     <Panel className={prose}>
       <h2>Groups</h2>
       <p>A Group is the way Assets are shared. Open <Link to="/groups">Groups</Link> to create one or to see yours;
-        each Group has its own page with an Overview, its Assets, its People and its GS1 prefixes.</p>
+        each Group has its own page with an Overview, its Assets and its People.</p>
       <h2 className="mt-6">Member and Group Manager</h2>
       <p>Everybody in a Group is a member. Some members are also its <strong>Group Managers</strong>: they look
-        after the Group itself — who is in it, their roles, and its GS1 Company Prefixes. Whoever creates a Group
+        after the Group itself — who is in it, and their roles. Whoever creates a Group
         is its first Group Manager.</p>
       <div className="mb-3 overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">

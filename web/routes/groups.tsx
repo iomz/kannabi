@@ -13,8 +13,8 @@ import { EmptyState, Field, Hint, PageHeading, Panel } from '../ui';
 
 /** The viewer's Groups: what each is, their role in it, and how much is in it.
  *
- * Everything a Group holds — its people, its Assets, its GS1 Company
- * Prefixes — lives on its own page; this is the way there, and the place a
+ * Everything a Group holds — its people, its Assets, and whatever an
+ * installed plugin has it manage — lives on its own page; this is the way there, and the place a
  * new Group starts. */
 export async function clientLoader() {
   const { user } = await unwrap(await api.me.$get());

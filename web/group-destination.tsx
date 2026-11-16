@@ -15,7 +15,7 @@ import { Panel } from './ui';
 /** Shared pieces of the Group destination, `/groups/:key`.
  *
  * The destination is one page in several addressable views — Overview,
- * Assets, People and GS1 prefixes — each its own route with its own loader,
+ * Assets, People and any view an installed plugin adds — each its own route with its own loader,
  * so a view loads only what it shows and every view can be linked to, reloaded
  * and reached with Back and Forward.
  *
@@ -195,7 +195,7 @@ export function LeaveGroup({ lastManager, size }: { lastManager: boolean; size?:
       fields={{ intent: 'leave' }}
       description={<>You lose access to this Group’s private Assets, including those you reported, and you will
         no longer be able to open it.{' '}
-        {lastManager ? 'You are its only Group Manager: nobody will be able to add or remove people or manage its GS1 Company Prefixes until a system administrator promotes one of its members.' : ''}</>} />
+        {lastManager ? 'You are its only Group Manager: nobody will be able to add or remove people, change roles, or do anything else reserved for Group Managers until a system administrator promotes one of its members.' : ''}</>} />
   </>;
 }
 
