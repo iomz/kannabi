@@ -8,11 +8,9 @@ dist/
 
 # Which plugins are composed is written out by `pnpm plugins:compose`.
 *.generated.ts
-# A deployment's own plugin list, and the plugins it fetches. GS1 is the one
-# plugin still kept in this repository.
+# A deployment's own plugin list, and the plugins it fetches.
 kannabi.plugins.json
-plugins/*
-!plugins/gs1/
+plugins/
 
 # Local worktree tooling, not part of the project.
 .worktreeinclude
