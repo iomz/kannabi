@@ -161,18 +161,19 @@ test('the visibility transition sends only isPublic, once confirmed', async () =
   }
 });
 
-test('Owner is an unfinished note rather than a fact or a disabled control', () => {
-  const view = render();
+test('Owner is shown only when one is recorded, never as a placeholder', () => {
+  const ownerTerm = () => [...section('Details')!.querySelectorAll('dt')]
+    .find((node) => node.textContent?.trim() === 'Owner');
+  const none = render();
   try {
-    const details = section('Details')!;
-    const owner = [...details.querySelectorAll('dt')]
-      .find((node) => node.textContent?.trim() === 'Owner')!.nextElementSibling!;
-    assert.match(owner.textContent ?? '', /Not implemented yet/);
-    // Visibly demoted, and text rather than a control: nothing here is
-    // focusable, so it cannot read as something temporarily switched off.
-    assert.match(owner.querySelector('span')?.className ?? '', /text-muted-foreground/);
+    assert.equal(ownerTerm(), undefined);
+  } finally { none.stop(); }
+  const recorded = render({ owner: { key: 'owner-1', name: 'Workshop fund' } });
+  try {
+    const owner = ownerTerm()!.nextElementSibling!;
+    assert.equal(owner.textContent, 'Workshop fund');
     assert.equal(owner.querySelector('button, input, select, a'), null);
-  } finally { view.stop(); }
+  } finally { recorded.stop(); }
 });
 
 test('a reader who cannot edit is offered neither control', () => {
