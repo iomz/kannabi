@@ -362,14 +362,11 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
           error={visibilityResult?.error ?? null}
           onChange={(next) => visibility.submit({ ...identity, intent: 'visibility',
             isPublic: String(next) }, { method: 'post' })} />
-        {/* Owner is a party of record the domain already models, but nothing
-            can create or choose one yet (#64). Muted because it is an
-            unfinished note rather than a fact about this Asset — and it is
-            text, so it does not wear the look of a control that happens to be
-            disabled. */}
-        <dt>Owner</dt>
-        <dd>{asset.owner?.name
-          ?? <span className="text-muted-foreground italic">Not implemented yet</span>}</dd>
+        {/* Owner is a party of record the domain models, but nothing outside
+            the process can create or choose one (#64). An owner that is
+            recorded is a fact and is shown; with none, the page shows no row
+            rather than a placeholder for a feature that does not exist. */}
+        {asset.owner && <><dt>Owner</dt><dd>{asset.owner.name}</dd></>}
         <dt>Groups</dt><dd>{asset.groups.map((g, index) => <Fragment key={g.key}>{index > 0 && ', '}
           <GroupName group={g} reachable={reachableGroups.includes(g.key)} /></Fragment>)}</dd>
         <dt>Reported</dt><dd><ReporterAttribution reporter={asset.reportedBy}
