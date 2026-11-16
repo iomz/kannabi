@@ -116,9 +116,9 @@ export function IdentifierList({ identifiers, standing, digitalLinks, showPolicy
 export function IdentifierForm({ busy, error }: {
   busy: boolean; error: string | null;
 }) {
-  // The scheme a person most often has in hand is offered first where it is
-  // installed; otherwise the first installed one.
-  const [scheme, setScheme] = useState(web.scheme('sgtin')?.id ?? web.schemes[0]?.id ?? '');
+  // The first scheme offered is chosen: a plugin lists its schemes in the
+  // order it wants them offered, and core prefers none.
+  const [scheme, setScheme] = useState(web.schemes[0]?.id ?? '');
   return <fieldset disabled={busy} aria-busy={busy}>
     <input type="hidden" name="intent" value="attach-identifier" />
     <Field label="Choose the identifier scheme">

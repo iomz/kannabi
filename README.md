@@ -68,50 +68,25 @@ Startup then verifies presence and canonical form for every Asset, because a Neo
 A missing `id` is legacy data and is backfilled; a non-null `id` that is not a canonical lowercase UUIDv7 is corrupt or unsupported data, so startup fails closed and the unrecognized value is never repaired or replaced.
 Uniqueness itself is enforced by the `:Asset(id)` constraint, installed once migration has completed.
 
-Startup then migrates any pre-Phase-2 Asset from the single required SGTIN or GRAI claim to the external identifier model, under the same migration lock.
-A stored SGTIN already kept its components apart; a stored GRAI is decomposed into its asset type and serial.
-Legacy shape is migrated, and anything else is corruption: startup fails closed rather than repairing or discarding it.
-No class-level GTIN is materialised from an SGTIN, because that fact stays derivable.
-
 `Asset.id` addresses the Asset everywhere: lookup, editing, photos, links, and the native Asset URI.
 Neo4j node identity is an implementation detail and is never exposed.
 Kannabi owns its internal truth, and standards define its external contracts.
 
 ## External identification
 
-A Kannabi Asset exists independently of GS1.
-Reporting an Asset requires a name and a Group; it never requires GS1 knowledge or a GS1 identifier.
+A Kannabi Asset exists independently of every identifier scheme.
+Reporting an Asset requires a name and a Group; it never requires a scheme's knowledge or an identifier.
 An Asset carries zero or more external identifiers, attached and detached at any time through `POST` and `DELETE /api/assets/{id}/identifiers`, and none of that changes `Asset.id`.
 Carrying no external identifier is a normal state, not a deficiency.
 
-With the GS1 plugin installed, its toolkit is the only place GS1 rules are applied.
-It accepts GTIN (AI 01), SGTIN (AI 01 with AI 21), GRAI (AI 8003) and GIAI (AI 8004), validates components, and derives everything else:
-
-| Scheme | Input | Canonical form | Identifies |
-| --- | --- | --- | --- |
-| GTIN | `gtin` | `(01)00614141123452` | the trade item class |
-| SGTIN | `gtin`, `serial` | `(01)00614141123452(21)A1B2` | this Asset |
-| GRAI | `assetType`, optional `serial` | `(8003)00614141234561…` | the asset type, or this Asset when serialised |
-| GIAI | complete existing `assetReference` | `(8004)0614141ASSET001` | this Asset |
-
-The identification level is derived from GS1 semantics and is never supplied or edited by a caller.
+The scheme that owns a value validates it and derives everything else: its canonical form, its components, and whether it identifies one Asset or describes many.
+That identification level is never supplied or edited by a caller.
 An individual-level identifier identifies exactly one Asset; a class-level identifier describes any number of them.
 Both facts are enforced by Neo4j uniqueness constraints on the distinct labels `:IndividualIdentifier` and `:ClassIdentifier` rather than by application sequencing, so concurrent writers cannot break them.
-Those labels are persistence vocabulary for the derived level, nothing more: a `:ClassIdentifier` holding a GTIN is that GTIN, and Kannabi defines no class-identity scheme of its own.
-Stored identifiers keep only their canonical form, so components and level are re-derived on every read and cannot drift.
-That reversal is positional and is safe only because every component a scheme renders before its last one has a fixed length; `assertReversibleSchemes` turns any future scheme that breaks the property into a test failure rather than a corrupt read.
-Each one also records the GS1 policy version that accepted it, which no later reading of the value could reconstruct.
-Serials preserve case, leading zeros, and literal punctuation; they are never trimmed or URI-decoded.
-GTIN/JAN accepts 8, 12, 13, or 14 digits with a valid check digit and normalizes to 14 digits.
-GS1 `req=` and `ex=` association rules are applied to the AIs of one identifier, the coherent AI element string a scheme represents.
-They are deliberately not applied across an Asset's identifiers: the Syntax Dictionary scopes those rules to the combined data marking a physical item, whereas an Asset's identifiers are independent records attached at different times from different sources, most of which are not marked on the item at all.
-An Asset carrying a manufacturer's SGTIN beside an owner-assigned GIAI is therefore valid.
-Across an Asset, Kannabi applies only its own three coherence rules: the same identifier may not appear twice, every AI (01) an Asset carries must name the same trade item, and every AI (8003) asset type it carries must name the same returnable asset type.
-Identifiers of different schemes coexist freely — a Kannabi-issued GIAI, a serialised GRAI and an SGTIN on one Asset are three identities from three schemes, not a conflict.
-
-An identifier supplied through **Record existing identifier** is an externally assigned value and is stored as syntax only; that operation neither issues the value nor claims its origin.
-For a GIAI, enter the complete existing AI 8004 value, including its company prefix.
-Locating a GS1 Company Prefix inside an arbitrary key requires the GS1 GCP Length Table, which is not openly available, so Kannabi makes no claim about prefix ownership or boundary for a value it did not build, and a stored identifier is never evidence that Kannabi allocated it.
+Those labels are persistence vocabulary for the derived level, nothing more, and Kannabi defines no class-identity scheme of its own.
+Stored identifiers keep only their canonical form, so components and level are re-derived by the scheme on every read and cannot drift.
+Each one also records the policy version that accepted it, which no later reading of the value could reconstruct.
+Across an Asset, core refuses the same identifier twice; any further coherence rule is the installed scheme's.
 
 ## Identifier schemes are plugins
 
@@ -122,7 +97,7 @@ A stored identifier is read back only through the scheme that owns it, so Kannab
 
 ## The structured Asset representation
 
-An Asset's facts come from several places, and the structured representation puts each in its own part of the record, so where a value sits says whose statement it is:
+An Asset's facts come from several places, and the structured representation puts each in its own part of the record, so where a value sits says whose statement it is. In this example the GS1 plugin is installed:
 
 ```json
 {
@@ -148,7 +123,7 @@ An Asset's facts come from several places, and the structured representation put
 `kannabi.reported.at` is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only chronology.
 `source.says` is what the record named by `source.reference` states about itself, quoted byte for byte; Kannabi asserts only that the source says it.
 `extensions` holds what each installed plugin states about the Asset, keyed by plugin id; it is that plugin's statement, follows the Asset's visibility whole, and is `{}` in a Kannabi built with no plugin.
-`extensions.gs1.issued` lists the values Kannabi issued for the Asset: core records identifiers and issues none, so issuance is the GS1 plugin's statement.
+In the example, `extensions.gs1.issued` is the GS1 plugin's statement of the values it issued for the Asset; core records identifiers and issues none.
 `notRecorded` names the kinds of fact Kannabi records none of, so their absence is stated rather than left to an empty field.
 
 Every instant is the `at` of something Kannabi or one of its plugins did, or the `recordedAt` a source says.
@@ -161,7 +136,7 @@ Each search result says in `matched` where the query matched, as a path into the
 The representation is computed from the stored Asset on every read and changes nothing that is stored.
 The HTTP API serves it at `GET /api/v3/assets/{id}`, `GET /api/v3/assets` and `GET /api/v3/assets/lookup`, which take the same parameters and the same readability as their `/api/assets` counterparts and answer with `"representation": 3`; those original routes keep their first representation.
 Representation 3 replaced representation 2 when GS1 became a plugin: `identifiers[].accepted.gs1Policy` and `identifiers[].digitalLink` became the scheme-neutral `policy` and `address`, and `kannabi.issued` moved to `extensions.gs1.issued`. `/api/v2` is no longer served.
-MCP's `get_asset`, `search_assets`, `resolve_external_identifier` and `list_gs1_issuances` return this representation.
+MCP's `get_asset`, `search_assets` and `resolve_external_identifier` return this representation, as does any plugin tool that returns Assets.
 `server/asset-representation.ts` builds it for both.
 
 ## Agent access over MCP
@@ -175,11 +150,10 @@ pnpm mcp
 
 `pnpm dev:mcp` runs the same server from source. A host launches it as a child process and speaks MCP on its stdin/stdout; it reads `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` from the environment or `.env`, serves no network listener, and never calls Kannabi's HTTP API. Its stdout carries the protocol; diagnostics go to stderr.
 
-Seven tools cover the discovery workflow: `search_assets` for an incomplete description, `resolve_external_identifier` for a complete GS1 identity, `get_asset` for inspection by native Asset ID, `list_groups` and `list_gs1_namespaces` for the vocabulary those take, `list_managed_class_keys` for the GTINs and GRAI asset types a namespace may issue serials under, and `list_gs1_issuances` for Kannabi's issuance ledger.
+Core's tools cover the discovery workflow: `search_assets` for an incomplete description, `get_asset` for inspection by native Asset ID, `list_groups` for the vocabulary those take, and, only when an installed plugin provides an identifier scheme, `resolve_external_identifier` for a complete identifier of that scheme. An installed plugin may add tools of its own, which its README describes.
 Asset results use the structured Asset representation described above.
 Every result carries the native Asset ID, so a candidate from any tool can be inspected unambiguously, and each identifier is returned with the components that resolve it again.
 Class-level identifiers may resolve to several Assets; individual-level identifiers resolve to at most one.
-Allocation provenance is read from the ledger alone: an Asset whose stored GIAI merely begins with a managed company prefix is not reported as Kannabi-issued.
 
 The server also states, at connection time, which facts Kannabi owns and which it does not — location, events, observations and condition belong to other systems.
 That boundary is what lets a client report that Kannabi does not hold something instead of inferring it from an empty result.
@@ -253,7 +227,7 @@ New Assets are private, and there are no direct User-to-Asset ACLs.
 
 ### Member and Group Manager
 
-Everybody in a Group is a member, and each has one role in it: **Member**, or **Group Manager** — a member who also looks after the Group itself, its people and its GS1 Company Prefixes.
+Everybody in a Group is a member, and each has one role in it: **Member**, or **Group Manager** — a member who also looks after the Group itself, its people, and whatever an installed plugin has a Group manage.
 There is no managing a Group without belonging to it, and no role outlives its membership.
 The store keeps the role on the membership (`MEMBER_OF {role: 'member' | 'manager'}`), and startup refuses Group data recorded any other way: a development database from before roles is not migrated and has to be recreated.
 
@@ -265,9 +239,9 @@ The store keeps the role on the membership (`MEMBER_OF {role: 'member' | 'manage
 | Leave the Group | yes | yes |
 | Add or remove people | no | yes |
 | Make someone a Group Manager, or remove the role | no | yes |
-| Manage the Group's GS1 Company Prefixes | no | yes |
+| Manage what an installed plugin has the Group manage | no | yes |
 
-Every row is enforced by the server, not by what the UI shows: Asset reads, edits and reports follow membership, and the people operations and managed GS1 operations follow the Group Manager role.
+Every row is enforced by the server, not by what the UI shows: Asset reads, edits and reports follow membership, and the people operations and every plugin operation on what the Group manages follow the Group Manager role.
 Group Managers are peers: any of them may change anybody's role, their own included, and a Group may deliberately be left with none; an administrator can then promote one of its members.
 
 On a Group's **People** page, everybody in the Group sees the roster with each person's role; a Group Manager changes roles and removes people through each person's **Change** menu, and anything that takes access or authority away is confirmed first.
@@ -291,7 +265,7 @@ Ordering is name followed by `Asset.id` as a deterministic tiebreaker, independe
 Unsafe API requests require an Origin matching `APP_URL`.
 Better Auth rate limiting uses the TCP peer address set by the Node server; forwarded client IP headers are not trusted, so clients behind one reverse proxy share its rate-limit bucket.
 Authentication routes are limited to sign-up, sign-in, sign-out, session lookup, password change, and password recovery.
-External identity providers remain deferred. Identifier issuance is described under GS1 identifier issuance above.
+External identity providers remain deferred.
 
 ## Photos and administration
 
@@ -349,7 +323,7 @@ Failure cleanup removes bytes while retaining a retry record through the ten-min
 Expired or failed uploads are retried on startup and every minute; attached photos are excluded.
 If storage is unavailable, cleanup waits for recovery and the pending photo is never exposed as an Asset photo.
 
-To evaluate an empty deployment, sign up, create a Group or join through a Group Manager, report an Asset, optionally attach a GS1 identifier to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
+To evaluate an empty deployment, sign up, create a Group or join through a Group Manager, report an Asset, optionally attach an identifier of an installed scheme to it, upload/view a photo, edit its name, switch public/private visibility, and find it again by name.
 Enable the photo requirement, select a display timezone, and change the built-in theme from Instance settings to exercise deployment policy and appearance.
 
 ## Plugins
@@ -372,7 +346,7 @@ The first is a deployment's own, like `.env`, and is never committed; the second
 ```json
 {
   "plugins": [
-    { "id": "gs1", "repository": "https://github.com/iomz/kannabi-plugin-gs1.git", "ref": "v0.1.0" },
+    { "id": "gs1", "repository": "https://github.com/iomz/kannabi-plugin-gs1.git", "ref": "v0.1.1" },
     { "id": "local" }
   ]
 }
@@ -405,7 +379,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | --- | --- | --- | --- |
 | **Assets** | | | |
 | Browse and search by name or quoted source description | yes | `GET /api/assets` | `search_assets` |
-| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier` |
+| Resolve a complete identifier | yes | `GET /api/assets/lookup` | `resolve_external_identifier`, when a scheme is installed |
 | Inspect one Asset | yes | `GET /api/assets/{id}` | `get_asset` |
 | Read the structured Asset representation | no | `GET /api/v3/assets`, `/api/v3/assets/lookup`, `/api/v3/assets/{id}` | every Asset result |
 | Report an Asset | yes | `POST /api/assets`, `POST /api/reports` | no |
@@ -443,7 +417,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 ### What the absences mean
 
-**MCP writes nothing.** Every tool, core's four and the GS1 plugin's three, is read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
+**MCP writes nothing.** Every tool, core's and any a plugin adds, is read-only, and that is the posture rather than an unfinished surface: the server attaches to a database Kannabi already opened and verifies constraints instead of installing them. An agent that should change an Asset uses the HTTP API with a credential of its own.
 
 **The web UI does not offer source attribution, and the HTTP API accepts it only at creation.** A person reporting an Asset in a browser is reporting it to Kannabi now; they are not quoting a record that already existed somewhere else. Attribution belongs to a client loading an existing corpus, which is why it is an API field and why no path revises it afterwards.
 
@@ -453,15 +427,9 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 
 **Identifier provenance is read-only everywhere.** Each association records who accepted it, when, and the basis the request named in `X-Kannabi-Basis`; nothing supplies it as data, and the accepting User and credential come only from authentication. It is an acceptance, never a verification, and it is removed with the association it describes.
 
-**GTIN consistency is an administrator setting with no MCP control.** Turning it off lets an instance record identifiers whose GTINs disagree — a legacy corpus that wrote its own numbering in SGTIN syntax — and every surface then shows both, each with its own basis. Turning it back on is refused with `409` while any Asset still holds a conflict; the refusal names the conflicting Assets the administrator can read and counts the rest, and nothing is removed to make it succeed. Once every conflict is resolved, enabling succeeds and new conflicts are refused.
+**Reporting through the browser takes no identifiers.** The form asks for a name, a Group and optionally a photo, and identifiers are added from the Asset page afterwards. An Asset exists independently of every identifier scheme, so nothing about identification belongs on the path that brings one into existence. A client loading a corpus already holds the identifiers and supplies them in one request.
 
-**Reporting through the browser takes no identifiers.** The form asks for a name, a Group and optionally a photo, and identifiers are added from the Asset page afterwards. An Asset exists independently of GS1, so nothing about identification belongs on the path that brings one into existence. A client loading a corpus already holds the identifiers and supplies them in one request.
-
-**The issuance ledger is listed only over MCP.** Per-Asset issuances reach all three surfaces through the Asset representation, which is what answers "did Kannabi issue this value" — the question allocation provenance exists for. A ledger-wide listing is a different question, about a namespace rather than an Asset, and so far only an agent inspecting allocation provenance has needed it.
-
-**A Digital Link address is a document address.** Kannabi dereferences the forms it supports by serving the Asset page at them, outside `/api`; there is no JSON endpoint that takes one. MCP reports the path an identifier corresponds to and does not resolve it, because resolving it would grant nothing a `get_asset` call does not already answer.
-
-**A Group's page and its people are web and HTTP only.** `/groups/{key}` is reachable by the Group's members, and answers everybody else, an administrator included, as for a Group that does not exist. Every member reads who is in it and their roles; Group Managers add people, change roles and remove people. Its GS1 Company Prefixes are a view of the Group's page, pending their redesign (#58). MCP lists the reader's Groups and nothing more: it writes nothing, and who manages or belongs to a Group is administration, not a question about Assets an agent is asked to answer.
+**A Group's page and its people are web and HTTP only.** `/groups/{key}` is reachable by the Group's members, and answers everybody else, an administrator included, as for a Group that does not exist. Every member reads who is in it and their roles; Group Managers add people, change roles and remove people. MCP lists the reader's Groups and nothing more: it writes nothing, and who manages or belongs to a Group is administration, not a question about Assets an agent is asked to answer.
 
 **Group recovery is HTTP only, for now.** It is rare, and what it should be able to do for a Group with no member left to promote is undecided (#87); a web surface waits for that decision rather than building the narrower one first.
 
@@ -485,7 +453,7 @@ It never uses the application `.env` or an existing database.
 
 Core's tests, under `server/`, run against a fixture plugin (`server/test-fixture.ts` and `server/test-web-fixture.tsx`: two identifier schemes, one address form, one tool) and never against a real one, so they say what Kannabi does with a plugin installed and still pass in a checkout that has none.
 `server/test-composition.mjs` gives a core screen under test, and a server process a test starts, that fixture in place of the generated plugin list.
-A plugin keeps its own tests beside its code, where they run against the plugin itself: the GS1 plugin's are under `plugins/gs1/tests/`, and hold everything about Kannabi with GS1 installed.
+A plugin keeps its own tests beside its code, where they run against the plugin itself: the GS1 plugin's, for example, are under `plugins/gs1/tests/`, and hold everything about Kannabi with GS1 installed.
 They run under the plugin's own `test-composition.mjs`, which composes that plugin alone, so they do not depend on what else a deployment lists.
 `pnpm test` and `pnpm test:integration` run core's tests and those of each plugin the list names; with none listed there are none of the second kind to run.
 `NEO4J_TEST_IMAGE` may select a locally cached Neo4j 5 image; the default matches Compose's `neo4j:5-community`.

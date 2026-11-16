@@ -31,7 +31,7 @@ test('Help explains the two roles with the verified table, and this instance’s
     assert.deepEqual(rows['See everybody in the Group and their role'], ['Yes', 'Yes']);
     assert.deepEqual(rows['Add or remove people'], ['No', 'Yes']);
     assert.deepEqual(rows['Make someone a Group Manager, or remove the role'], ['No', 'Yes']);
-    assert.deepEqual(rows['Manage the Group’s GS1 Company Prefixes'], ['No', 'Yes']);
+    assert.deepEqual(rows['Manage anything else this instance lets the Group manage'], ['No', 'Yes']);
     assert.match(view.text(), /can find everybody else, by name or email/);
     assert.match(view.text(), /a new account waits until an administrator approves it/);
   } finally { view.stop(); router.dispose(); }

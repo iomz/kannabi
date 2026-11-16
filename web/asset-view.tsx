@@ -47,9 +47,9 @@ export async function loadAsset(id: string, request: Request) {
     .map((group) => ({ key: group.key, name: group.name }));
   const canGrant = controlled.some((g) => groupKeys.has(g.key));
   const absolute = (path: string) => new URL(path, request.url).toString();
-  // A Digital Link URI is shown only where Kannabi also answers it, so a
-  // class-level identifier gets none: `/01/{gtin}` is constructible and valid,
-  // and Kannabi does not dereference it (#50).
+  // An identifier's address is shown only where Kannabi also answers it, so
+  // an identifier its scheme gives no served address gets none, even where
+  // the scheme could spell one.
   // The server decides which identifiers have one and what its path is, by
   // asking each identifier's own scheme. This only restates that path on the
   // origin the page was reached at, and builds no address itself.
@@ -94,12 +94,12 @@ type MutatedAsset = AddressedAsset;
 /** Leave an address that no longer serves this Asset.
  *
  * An identifier mutation can retire the very address the viewer is standing
- * on — detaching the GIAI whose Digital Link they navigated to — and can give
- * an Asset viewed at its native URI a Digital Link the server would now
+ * on — detaching the identifier whose address they navigated to — and can give
+ * an Asset viewed at its native URI an address the server would now
  * redirect that URI to. Either way the page they are on is no longer where
  * the Asset is served, so it is recomputed and navigated to.
  *
- * A viewer at a valid non-preferred Digital Link stays. That address still
+ * A viewer at a valid address that is not the surfaced one stays. That address still
  * serves the Asset, and moving them to the preferred one would do by
  * navigation what resolution is deliberately forbidden to do by redirect.
  *
@@ -116,8 +116,8 @@ function transition(asset: MutatedAsset, message: string, at: string) {
 export async function submitAsset(request: Request) {
   const data = await request.formData();
   // The Asset's own identity, carried by the submission. Never taken from
-  // the address: a Digital Link path is a presentation address, and React
-  // Router re-encodes a form's action URL, so `%2F` inside a serial arrives
+  // the address: a plugin's address is a presentation address, and React
+  // Router re-encodes a form's action URL, so `%2F` inside a value arrives
   // as `%252F` and would resolve to a different identifier or to none. The
   // native id is what every Asset-scoped API call is addressed by.
   const id = assetId(data.get('assetId'));
@@ -160,7 +160,7 @@ export async function submitAsset(request: Request) {
       return { kind, saved: true as const, error: null, photoKey: requestedPhotoKey };
     }
     if (kind === 'attach-identifier') {
-      // Only the scheme's own fields reach the GS1 boundary. The intent and
+      // Only the scheme's own fields reach the scheme. The intent and
       // the identity this submission carries are how the form was routed,
       // not part of the identifier, and that boundary rejects what it does
       // not recognise.
@@ -235,8 +235,8 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
   /** What every mutation carries with it.
    *
    * The Asset's own identity, because the address a form posts to is a
-   * presentation address: React Router re-encodes it, so a Digital Link
-   * carrying `%2F` in a serial arrives at the action as `%252F`. Identity
+   * presentation address: React Router re-encodes it, so an address
+   * carrying `%2F` in a value arrives at the action as `%252F`. Identity
    * must not depend on that, and the page already knows it.
    *
    * And the address the viewer is standing on, taken from the router's

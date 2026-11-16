@@ -80,8 +80,8 @@ const userAccountProjection = `u { .key, .name, .email, isAdmin: u.role = 'admin
 // application identity in `id`; external identifiers never address the Asset.
 export type Entity = Readonly<{ key: string; name: string }>;
 /** A member's role in a Group. A Group Manager is a member who also manages
- * the Group's people and GS1 Company Prefixes; there is no managing a Group
- * without belonging to it. */
+ * the Group's people and whatever an installed plugin has it manage; there is
+ * no managing a Group without belonging to it. */
 export const groupRoles = ['member', 'manager'] as const;
 export type GroupRole = (typeof groupRoles)[number];
 export function groupRole(value: unknown): GroupRole {
@@ -113,7 +113,7 @@ export type IdentifierAttachment = Readonly<{
 }>;
 
 /** An external identifier as carried by an Asset. `key` addresses this
- * attachment for detachment; everything else is derived by the GS1 boundary,
+ * attachment for detachment; everything else is derived by its scheme,
  * except `attachment`, which is null for an association recorded before
  * Kannabi kept it. */
 export type AttachedIdentifier = Identifier & Readonly<{
@@ -200,7 +200,7 @@ export type AssetLookup = Readonly<{
 }>;
 export type ReportAsset = {
   name: string;
-  /** Optional. An Asset exists independently of GS1 identification. */
+  /** Optional. An Asset exists independently of every identifier scheme. */
   identifiers?: readonly unknown[];
   ownerKey?: string;
   /** Optional. The pre-existing record this Asset is being created from.
@@ -231,9 +231,9 @@ const constraints = [
   'CREATE CONSTRAINT external_identity IF NOT EXISTS FOR (n:ExternalIdentity) REQUIRE n.canonical IS UNIQUE',
   // :IndividualIdentifier and :ClassIdentifier are persistence vocabulary, not
   // domain concepts. They exist only because Neo4j Community cannot express a
-  // conditional uniqueness constraint, so the derived GS1 level is carried by
-  // the label and each rule becomes a plain constraint. A :ClassIdentifier
-  // holding a GTIN is that GTIN and nothing more: Kannabi defines no parallel
+  // conditional uniqueness constraint, so the level a scheme derives is carried
+  // by the label and each rule becomes a plain constraint. A :ClassIdentifier
+  // holding a value is that value and nothing more: Kannabi defines no parallel
   // class-identity scheme, mints no identifier of its own, and these labels
   // must never be promoted into the domain model or exposed as schemes.
   'CREATE CONSTRAINT individual_identifier IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.canonical IS UNIQUE',
@@ -297,7 +297,7 @@ function identifierParams(identifiers: readonly Identifier[]) {
 
 // Requires `a` in scope, plus `$actorKey` and the parameters `changeParams`
 // produces, which every caller already binds for `recordChange`. The two labels
-// record the GS1 level an identifier already has; they add no meaning of their
+// record the level an identifier's scheme already derived; they add no meaning of their
 // own. Individual identifiers are CREATEd so the uniqueness constraint rejects a
 // second Asset claiming them; class identifiers are MERGEd so Assets share one
 // node. The MERGE matches the scheme as well as the canonical form, so a value
@@ -525,14 +525,16 @@ const assetRowsProjection = (order: string, textMatch = false) => `
  *
  * A Group Manager is a member, so this also carries membership. It is one
  * constant rather than a clause per operation so that every privileged
- * managed-GS1 operation provably asks the same question. Where an operation
+ * operation on what the Group manages, a plugin's included, provably asks the
+ * same question. Where an operation
  * also acts on an Asset, that Asset's own predicate is required independently
  * and in addition: managing a Group never substitutes for collaboration.
  *
  * Deliberately not a per-resource authority. The role carries every privileged
- * operation over everything the Group manages, so Kannabi cannot yet express a
- * GS1 administrator who may not also recruit members; scoping those apart is
- * done with a second Group until a deployment needs otherwise.
+ * operation over everything the Group manages, so Kannabi cannot yet express
+ * an administrator of a plugin's resource, such as a GS1 namespace, who may not
+ * also recruit members; scoping those apart is done with a second Group until a
+ * deployment needs otherwise.
  */
 export const groupManaged = `EXISTS {
   MATCH (manager:User {key: $actorKey})-[:MEMBER_OF {role: 'manager'}]->(g)

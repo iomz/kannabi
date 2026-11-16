@@ -21,8 +21,8 @@ import type { Route } from './+types/group-people';
 /** A Group's people and their roles.
  *
  * One relationship with a role: a Group Manager is a member who also adds and
- * removes people, changes roles and manages the Group's GS1 Company
- * Prefixes. Every member reads the roster — they already share this Group
+ * removes people, changes roles and holds every other privileged operation on
+ * what the Group manages, including any an installed plugin adds. Every member reads the roster — they already share this Group
  * with everybody on it — and only Group Managers change it.
  *
  * Nothing here decides access. Every read and every change is the server's to
@@ -90,8 +90,8 @@ type Removal = { kind: 'remove' | 'demote' | 'step-down' | 'leave'; person: Grou
 export function removalCopy({ kind, person }: Removal, managerCount: number): {
   title: string; description: string; confirmLabel: string;
 } {
-  const orphan = 'Nobody will be able to add or remove people or manage its GS1 Company Prefixes until a system '
-    + 'administrator promotes one of its members.';
+  const orphan = 'Nobody will be able to manage it — add or remove people, change roles, or manage anything else '
+    + 'this instance lets the Group manage — until a system administrator promotes one of its members.';
   const sole = person.role === 'manager' && managerCount === 1;
   if (kind === 'remove') {
     return { title: `Remove ${person.name} from this Group?`, confirmLabel: 'Remove',
@@ -101,14 +101,14 @@ export function removalCopy({ kind, person }: Removal, managerCount: number): {
   }
   if (kind === 'demote') {
     return { title: `Remove ${person.name}’s Group Manager role?`, confirmLabel: 'Remove role',
-      description: `${person.name} will no longer be able to add or remove people, change roles, or manage GS1 `
-        + 'Company Prefixes. They stay a member, with the same access to this Group’s Assets.' };
+      description: `${person.name} will no longer be able to add or remove people, change roles, or manage anything `
+        + 'else this instance lets the Group manage. They stay a member, with the same access to this Group’s Assets.' };
   }
   if (kind === 'step-down') {
     return { title: sole ? 'Step down, and leave nobody managing this Group?' : 'Step down as Group Manager?',
       confirmLabel: 'Step down',
       description: (sole ? `You are its only Group Manager. ${orphan} `
-        : 'You will no longer be able to add or remove people, change roles, or manage GS1 Company Prefixes. ')
+        : 'You will no longer be able to add or remove people, change roles, or manage anything else this instance lets the Group manage. ')
         + 'You stay a member, with the same access to its Assets.' };
   }
   return { title: sole ? 'Leave, and leave nobody managing this Group?' : 'Leave this Group?', confirmLabel: 'Leave',
@@ -137,7 +137,7 @@ export default function GroupPeople({ loaderData: { members, directory, self }, 
     </div>
     <Hint className="mt-0 mb-4">{count(members.length, 'person', 'people')} · {count(managerCount, 'Group Manager',
       'Group Managers')}. Members read and edit this Group’s private Assets. Group Managers are members who also add
-      and remove people and manage its GS1 Company Prefixes.</Hint>
+      and remove people, change roles, and manage anything else this instance lets the Group manage.</Hint>
     {result?.message && <StatusPill tone={result.status === 'error' ? 'error' : 'info'}
       role={result.status === 'error' ? 'alert' : 'status'} className="mb-4 whitespace-normal">{result.message}</StatusPill>}
     {managerCount === 0 && <StatusPill tone="error" role="status" className="mb-4 whitespace-normal">
@@ -310,7 +310,7 @@ function AddPeople({ members, self, directory, onClose }: {
             <strong className="font-[600]">{roleLabel[kind]}</strong>
             <span className="text-muted-foreground">{kind === 'member'
               ? 'Reads and edits this Group’s private Assets and reports new ones into it.'
-              : 'Everything a member can do, plus adding and removing people, changing roles and managing GS1 Company Prefixes.'}</span>
+              : 'Everything a member can do, plus adding and removing people, changing roles, and managing anything else this instance lets the Group manage.'}</span>
           </span>
         </label>)}
       </fieldset>

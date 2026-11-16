@@ -3,7 +3,7 @@ import { ValidationError } from './identity.js';
 
 /** Kannabi's native Asset identity: an application-owned UUIDv7 (RFC 9562).
  * It is independent of Neo4j implementation identity and of external
- * identifiers such as SGTIN or GRAI.
+ * identifiers of every scheme.
  *
  * The UUIDv7 timestamp carries no Kannabi domain meaning. Asset chronology
  * uses explicit domain fields such as `reportedAt`, never UUID ordering.
