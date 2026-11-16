@@ -49,10 +49,27 @@ export function inventoryPath(view: InventoryView, change: Partial<InventoryView
   for (const group of next.filters.groups) params.append('group', group);
   for (const scheme of next.filters.schemes) params.append('scheme', scheme);
   set('identified', next.filters.identified);
-  set('reportedFrom', next.filters.reportedFrom?.slice(0, 10));
-  set('reportedTo', next.filters.reportedTo?.slice(0, 10));
+  // A bound is written back as the predicate it already is, so every page of a
+  // view is requested under the filter its first page was: a browse cursor is
+  // bound to that filter, and changing it stops the next page.
+  set('reportedFrom', lowerBound(next.filters.reportedFrom));
+  set('reportedTo', upperBound(next.filters));
   const query = params.toString();
   return query ? '/?' + query : '/';
+}
+
+const utcMidnight = 'T00:00:00.000Z';
+
+/** A date and that day's UTC midnight are the same lower bound, so the shorter
+ * spelling is used whenever it means the same; any other instant is kept. */
+function lowerBound(value: string | null): string | null {
+  return value?.endsWith(utcMidnight) ? value.slice(0, 10) : value;
+}
+
+/** An upper bound written as a date runs through the end of that day, which
+ * differs from an instant even at midnight, so only a date is written as one. */
+function upperBound(filters: AssetFilters): string | null {
+  return filters.reportedTo && filters.reportedToEndOfDay ? filters.reportedTo.slice(0, 10) : filters.reportedTo;
 }
 
 /** Read the filter panel's fields, dropping every unset control. Separated from
