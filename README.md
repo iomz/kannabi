@@ -78,6 +78,8 @@ A Kannabi Asset exists independently of every identifier scheme.
 Reporting an Asset requires a name and a Group; it never requires a scheme's knowledge or an identifier.
 An Asset carries zero or more external identifiers, attached and detached at any time through `POST` and `DELETE /api/assets/{id}/identifiers`, and none of that changes `Asset.id`.
 Carrying no external identifier is a normal state, not a deficiency.
+Detaching an identifier keeps a record of the association on the Asset: the value as it was accepted, who accepted it, and who detached it, when and on what basis.
+That record is history, never identity: lookup, resolution, filters and search read only current identifiers, and a detached value reserves nothing, so it may be attached again wherever its scheme allows.
 
 The scheme that owns a value validates it and derives everything else: its canonical form, its components, and whether it identifies one Asset or describes many.
 That identification level is never supplied or edited by a caller.
@@ -104,6 +106,7 @@ An Asset's facts come from several places, and the structured representation put
   "id": "0198c2a0-…",
   "kannabi": {
     "name": "Spectrum analyser", "owner": null, "groups": [{ "key": "…", "name": "Workshop" }], "public": false,
+    "formerIdentifiers": [],
     "reported": { "at": "2026-10-17T08:00:00Z", "by": { "key": "…", "name": "Migration Operator", "status": "active" } },
     "lastChange": { "at": "…", "by": { … }, "via": { "id": "…", "label": "legacy loader" }, "basis": "depot:assets:100" },
     "photos": []
@@ -120,6 +123,7 @@ An Asset's facts come from several places, and the structured representation put
 ```
 
 `kannabi` is what Kannabi holds and did, by its own clock.
+`kannabi.formerIdentifiers` lists identifiers detached from the Asset, each with when it was `accepted` and `detached`; they are not in `identifiers`, carry no components or address, and nothing resolves them.
 `kannabi.reported.at` is when Kannabi recorded the Asset — for one loaded from another system, the load — and is the only chronology.
 `source.says` is what the record named by `source.reference` states about itself, quoted byte for byte; Kannabi asserts only that the source says it.
 `extensions` holds what each installed plugin states about the Asset, keyed by plugin id; it is that plugin's statement, follows the Asset's visibility whole, and is `{}` in a Kannabi built with no plugin.
@@ -392,6 +396,7 @@ Kannabi answers through three surfaces: the web UI, the HTTP API, and the MCP se
 | Record an identifier assigned elsewhere | yes | `POST /api/assets/{id}/identifiers` | no |
 | Detach one | yes | `DELETE /api/assets/{id}/identifiers/{key}` | no |
 | Read who accepted each identifier, when and on what basis | yes | in the Asset representation | `get_asset` |
+| Read identifiers detached from an Asset, and who detached them | yes | in the Asset representation | `get_asset` |
 | **Groups** | | | |
 | Create, leave | yes | `POST /api/groups`, `DELETE /api/groups/{key}/membership` | no |
 | List your Groups with your role | yes | `GET /api/groups` | `list_groups`, without roles |

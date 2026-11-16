@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { AttachedIdentifier } from '../server/identity-store.js';
+import type { AttachedIdentifier, FormerIdentifier } from '../server/identity-store.js';
 import { web } from './plugins';
 import type { IdentifierStanding } from './plugin';
 import { displayInstant } from '../server/settings.js';
@@ -111,6 +111,48 @@ export function IdentifierList({ identifiers, standing, digitalLinks, showPolicy
       onClick={() => onDetach(identifier.key)}><Icon name="trash" /></IconButton>}
     </li>;
   })}</ul>;
+}
+
+/** Who did something, through which credential, when, and on what basis, as
+ * one muted line. */
+function ActLine({ verb, act, displayTimezone }: {
+  verb: string; displayTimezone: string;
+  act: Readonly<{ acceptedBy: { name: string; status: 'active' | 'deleted' }; acceptedAt: string;
+    assertedBy: { label: string } | null; basis: string | null }>;
+}) {
+  return <p className="mt-1 mb-0 text-[.82rem] text-muted-foreground">
+    {verb} by {act.acceptedBy.name}
+    {act.acceptedBy.status === 'deleted' ? ' (deleted account)' : ''}
+    {act.assertedBy ? <> via <q>{act.assertedBy.label}</q></> : null}
+    {' · '}<time dateTime={act.acceptedAt}>{displayInstant(act.acceptedAt, displayTimezone)}</time>
+    {act.basis ? <> · basis <code className="break-all">{act.basis}</code></> : null}
+  </p>;
+}
+
+/** Identifiers once attached to this Asset and since detached.
+ *
+ * History, not identity: it sits below the current identifiers, under its own
+ * heading, without the card treatment, the scheme's components, an address or
+ * any control, so nothing here reads as something this Asset still carries or
+ * something a reader could act on. The value is shown as it was accepted. */
+export function FormerIdentifierList({ identifiers, displayTimezone = 'UTC' }: {
+  identifiers: readonly FormerIdentifier[];
+  displayTimezone?: string;
+}) {
+  if (!identifiers.length) return null;
+  return <>
+    <SubHeading>No longer attached</SubHeading>
+    <ul className="mb-6 grid gap-3 border-l-2 pl-4">{identifiers.map((former) => <li key={former.key}>
+      <div className="flex flex-wrap items-center gap-2 text-[.875rem]">
+        <span className="text-muted-foreground">{web.schemeLabel(former.scheme)}</span>
+        {/* Not struck through: a value somebody may still read off a label
+            has to stay legible, and the heading already says it is gone. */}
+        <code className="break-all">{former.canonical}</code>
+      </div>
+      {former.attachment && <ActLine verb="Accepted" act={former.attachment} displayTimezone={displayTimezone} />}
+      <ActLine verb="Detached" act={former.detachment} displayTimezone={displayTimezone} />
+    </li>)}</ul>
+  </>;
 }
 
 export function IdentifierForm({ busy, error }: {

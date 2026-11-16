@@ -20,7 +20,7 @@ const studio = { key: 'group-studio', name: 'Shared Studio' };
 const reporter = { key: 'user-1', name: 'Alex Demo', status: 'active' as const };
 function asset(id: string, name: string, overrides: Partial<Asset> = {}): Asset {
   return Object.freeze({
-    id, name, identifiers: [], reportedBy: reporter,
+    id, name, identifiers: [], formerIdentifiers: [], reportedBy: reporter,
     reportedAt: '2026-06-22T00:00:00.000Z', provenance: null, sourceRecord: null,
     owner: null, groups: [workshop], isPublic: false, photos: [], ...overrides,
   });
@@ -54,6 +54,8 @@ const camera = asset('0198c2a0-0000-7000-8000-000000000001', 'Inspection camera 
   sourceRecord: quoted, provenance: changeProvenance,
   identifiers: [{ key: 'i1', ...cameraModel, attachment: cameraModelAttachment },
     { key: 'i2', ...cameraTag, attachment: null }],
+  formerIdentifiers: [{ key: 'f1', scheme: 'tag', canonical: 'tag:T-1', level: 'individual', policyVersion: '1',
+    attachment: null, detachment: { ...changeProvenance, basis: 'relabel:1' } }],
   photos: [{ key: 'p1', contentType: 'image/png', size: 1024, createdAt: '2026-06-22T00:00:00.000Z' }],
 });
 const microscope = asset('0198c2a0-0000-7000-8000-000000000002', 'Inspection microscope · Studio 011', {
@@ -254,6 +256,10 @@ test('Asset discovery tools project Kannabi domain facts', async (t) => {
     assert.equal(tagged.accepted, null);
     assert.deepEqual(record.kannabi.lastChange, { at: changeProvenance.acceptedAt, by: reporter,
       via: null, basis: null });
+    // A detached identifier is Kannabi's history of the Asset, never one of its identifiers.
+    assert.deepEqual(record.kannabi.formerIdentifiers, [{ scheme: 'tag', value: 'tag:T-1', level: 'individual',
+      accepted: null, detached: { at: changeProvenance.acceptedAt, by: reporter, via: null, basis: 'relabel:1' } }]);
+    assert.ok(!record.identifiers.some((identifier: { value: string }) => identifier.value === 'tag:T-1'));
     // What a plugin states sits in its own section, apart from what Kannabi holds.
     assert.deepEqual(record.extensions, { shelf: { tagged: true } });
   });

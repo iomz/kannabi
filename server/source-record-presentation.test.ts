@@ -33,7 +33,7 @@ function loaderData(overrides: Record<string, unknown> = {}) {
       groups: [{ key: 'workshop', name: 'Workshop' }],
       reportedBy: { key: 'alex', name: 'Alex', status: 'active' as const },
       reportedAt: '2026-09-29T11:00:00.000Z',
-      identifiers: [], photos: [], issuances: [], provenance: null,
+      identifiers: [], formerIdentifiers: [], photos: [], issuances: [], provenance: null,
       sourceRecord: null, ...overrides,
     },
     canEdit: false, canViewReporterProfile: false, authenticated: true,

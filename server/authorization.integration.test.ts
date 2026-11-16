@@ -202,7 +202,7 @@ test('local authentication and Group authorization', { skip: !uri || !password }
       // attribution of the same kind as provenance, so it never carries an
       // address either.
       assert.deepEqual(Object.keys(result.asset).sort(),
-        ['groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos',
+        ['formerIdentifiers', 'groups', 'id', 'identifiers', 'isPublic', 'name', 'owner', 'photos',
           'provenance', 'reportedAt', 'reportedBy', 'sourceRecord']);
       assert.equal('email' in result.asset.provenance.acceptedBy, false);
       for (const identifier of result.asset.identifiers as { attachment: { acceptedBy: object } | null }[]) {

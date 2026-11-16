@@ -47,7 +47,7 @@ export const notRecorded = [
 /** What a summary leaves out of the full record, by path. Stated once per page
  * rather than on every result. */
 export const summaryOmits = [
-  'kannabi.reported.by', 'kannabi.lastChange', 'kannabi.photos',
+  'kannabi.reported.by', 'kannabi.lastChange', 'kannabi.photos', 'kannabi.formerIdentifiers',
   'identifiers[].accepted', 'identifiers[].address', 'source.says', 'extensions', 'notRecorded',
 ] as const;
 
@@ -77,6 +77,20 @@ export type IdentifierRecord = Readonly<{
   address: string | null;
 }>;
 
+/** An identifier Kannabi once held on this Asset and no longer does. Kannabi's
+ * own statement of what it held and did, never current identity: it has no
+ * components or address, because it is not re-derived or dereferenced, and
+ * nothing resolves it to this Asset. */
+export type FormerIdentifierRecord = Readonly<{
+  scheme: string;
+  value: string;
+  level: Identifier['level'];
+  /** Who accepted it onto this Asset, carried over from the association.
+   * Null for one made before Kannabi kept this. */
+  accepted: (KannabiAct & Readonly<{ policy: string }>) | null;
+  detached: KannabiAct;
+}>;
+
 export type AssetRecord = Readonly<{
   id: string;
   kannabi: Readonly<{
@@ -84,6 +98,8 @@ export type AssetRecord = Readonly<{
     owner: Entity | null;
     groups: readonly Entity[];
     public: boolean;
+    /** Identifiers detached from this Asset, oldest detachment first. */
+    formerIdentifiers: readonly FormerIdentifierRecord[];
     /** Who reported the Asset to Kannabi, and when: for an Asset loaded from
      * another system, the load. Kannabi keeps no credential or basis for the
      * report apart from the latest change, so none is shown here. */
@@ -136,6 +152,14 @@ export function assetRecord(asset: Asset, schemes: IdentifierSchemes,
       owner: asset.owner ? entity(asset.owner) : null,
       groups: asset.groups.map(entity),
       public: asset.isPublic,
+      formerIdentifiers: asset.formerIdentifiers.map((former) => ({
+        scheme: former.scheme, value: former.canonical, level: former.level,
+        accepted: former.attachment ? { at: former.attachment.acceptedAt,
+          by: attribution(former.attachment.acceptedBy), via: credential(former.attachment.assertedBy),
+          basis: former.attachment.basis, policy: former.policyVersion } : null,
+        detached: { at: former.detachment.acceptedAt, by: attribution(former.detachment.acceptedBy),
+          via: credential(former.detachment.assertedBy), basis: former.detachment.basis },
+      })),
       reported: { at: asset.reportedAt, by: attribution(asset.reportedBy) },
       lastChange: asset.provenance ? { at: asset.provenance.acceptedAt,
         by: attribution(asset.provenance.acceptedBy), via: credential(asset.provenance.assertedBy),

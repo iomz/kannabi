@@ -32,7 +32,7 @@ const tag: IdentifierScheme = Object.freeze({
 });
 
 const bare: Asset = Object.freeze({
-  id: '0198c2a0-0000-7000-8000-000000000009', name: 'Bench vice', identifiers: [], issuances: [],
+  id: '0198c2a0-0000-7000-8000-000000000009', name: 'Bench vice', identifiers: [], formerIdentifiers: [], issuances: [],
   reportedBy: { key: 'u1', name: 'Alex', status: 'active' as const }, reportedAt: '2026-06-22T00:00:00.000Z',
   provenance: null, sourceRecord: null, owner: null, groups: [{ key: 'g1', name: 'Workshop' }],
   isPublic: false, photos: [],

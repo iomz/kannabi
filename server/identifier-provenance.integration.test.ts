@@ -12,6 +12,7 @@ import { MediaService } from './media.js';
 import { ApiTokenService } from './api-token.js';
 import type { ObjectStorage } from './storage.js';
 import { composition } from './test-fixture.js';
+import { systemAudience } from './asset-audience.js';
 
 /** Quoted source descriptions, the provenance of each Asset–identifier
  * association, the instance's GTIN consistency policy, and free-text search
@@ -187,7 +188,7 @@ test('quoted descriptions and identifier provenance', { skip: !uri || !password 
       { scheme: 'tag', code: 'T-7', basis: 'forged' })).status, 400);
   });
 
-  await t.test('detaching removes the association and its provenance', async () => {
+  await t.test('detaching ends the association and keeps it as a former one', async () => {
     const { asset } = await (await call('/assets', 'POST', { groupKey, name: 'Tagged bench' })).json();
     const attached = await loader(`/assets/${asset.id}/identifiers`, 'POST', { scheme: 'tag', code: 'T-8' }, 'research:arm-b');
     assert.equal(attached.status, 201, await attached.clone().text());
@@ -198,7 +199,78 @@ test('quoted descriptions and identifier provenance', { skip: !uri || !password 
     assert.equal(detached.status, 200);
     const left = await query(`MATCH (a:Asset {id: $id})-[r:IDENTIFIED_BY]->() RETURN count(r) AS n`, { id: asset.id });
     assert.equal(left.records[0].get('n').toNumber(), 0);
-    assert.equal((await read(asset.id)).provenance!.basis, 'review:detach:1', 'Tier-1 records the detach');
+    const after = await read(asset.id) as Awaited<ReturnType<typeof read>> & { formerIdentifiers: {
+      scheme: string; canonical: string; level: string; policyVersion: string;
+      attachment: Attachment | null; detachment: Attachment }[] };
+    assert.equal(after.provenance!.basis, 'review:detach:1', 'Tier-1 records the detach');
+    assert.deepEqual(after.identifiers, []);
+
+    // The association's own acceptance, carried over unchanged, beside the
+    // detachment, which the authenticated actor accepted on the stated basis.
+    const [former] = after.formerIdentifiers;
+    assert.deepEqual({ scheme: former.scheme, canonical: former.canonical, level: former.level,
+      policyVersion: former.policyVersion }, { scheme: 'tag', canonical: tag.canonical, level: 'individual',
+      policyVersion: tag.policyVersion });
+    assert.deepEqual(former.attachment, tag.attachment);
+    assert.equal(former.detachment.acceptedBy.key, alex.key);
+    assert.deepEqual(former.detachment.assertedBy, { id: token.id, label: token.label });
+    assert.equal(former.detachment.basis, 'review:detach:1');
+    const clock = await query(`MATCH (a:Asset {id: $id})-[:HAD_IDENTIFIER]->(f:FormerIdentifier)
+      RETURN f.detachedAt = a.changeAcceptedAt AS same`, { id: asset.id });
+    assert.equal(clock.records[0].get('same'), true, 'one statement, one clock');
+
+    // The v3 representation states it as Kannabi's, and never as an identifier.
+    const v3 = (await (await call(`/v3/assets/${asset.id}`)).json()).asset;
+    assert.deepEqual(v3.identifiers, []);
+    assert.equal(v3.kannabi.formerIdentifiers[0].value, tag.canonical);
+    assert.equal(v3.kannabi.formerIdentifiers[0].detached.basis, 'review:detach:1');
+
+    // Not current identity: lookup finds nothing, and the value reserves
+    // nothing, so another Asset may take it.
+    const lookup = await (await call(`/assets/lookup?scheme=tag&code=T-8`)).json();
+    assert.equal(lookup.matching, 0);
+    const other = (await (await call('/assets', 'POST', { groupKey, name: 'Relabelled bench' })).json()).asset;
+    assert.equal((await call(`/assets/${other.id}/identifiers`, 'POST', { scheme: 'tag', code: 'T-8' })).status, 201);
+    assert.deepEqual((await (await call(`/assets/lookup?scheme=tag&code=T-8`)).json()).assets
+      .map((found: { id: string }) => found.id), [other.id]);
+    assert.equal((await read(asset.id) as typeof after).formerIdentifiers.length, 1, 'and the record stays');
+  });
+
+  await t.test('a detached class identifier is kept as one, and its shared node is untouched', async () => {
+    const shared = { scheme: 'model', series: 'kept-' + randomUUID().slice(0, 8) };
+    const a = (await (await call('/assets', 'POST', { groupKey, name: 'Class A', identifiers: [shared] })).json()).asset;
+    const b = (await (await call('/assets', 'POST', { groupKey, name: 'Class B', identifiers: [shared] })).json()).asset;
+    const [model] = byScheme(a.identifiers, 'model');
+    assert.equal((await call(`/assets/${a.id}/identifiers/${model.key}`, 'DELETE')).status, 200);
+    const former = (await (await call(`/assets/${a.id}`)).json()).asset.formerIdentifiers;
+    assert.deepEqual(former.map((f: { canonical: string; level: string }) => [f.canonical, f.level]),
+      [[model.canonical, 'class']]);
+    assert.equal(former[0].detachment.assertedBy, null, 'a browser session asserts through no credential');
+    assert.equal(byScheme((await read(b.id)).identifiers, 'model')[0].canonical, model.canonical);
+    assert.deepEqual((await (await call(`/assets/${b.id}`)).json()).asset.formerIdentifiers, []);
+  });
+
+  await t.test('a former association keeps reading when its acceptor\'s account is deleted', async () => {
+    const { asset } = await (await call('/assets', 'POST', { groupKey, name: 'Tombstone bench' })).json();
+    const attached = await (await call(`/assets/${asset.id}/identifiers`, 'POST',
+      { scheme: 'tag', code: 'T-' + randomUUID().slice(0, 8) })).json();
+    const [tag] = byScheme(attached.asset.identifiers, 'tag');
+    assert.equal((await call(`/assets/${asset.id}/identifiers/${tag.key}`, 'DELETE')).status, 200);
+    // As account deletion leaves an actor: a tombstone keeping its display name.
+    await query(`MATCH (u:User {key: $key}) SET u.accountDeletedAt = datetime(), u.provenanceName = u.name`,
+      { key: alex.key });
+    try {
+      const rows = await query(`MATCH (a:Asset {id: $id})-[:HAD_IDENTIFIER]->(f) RETURN f.detachedBy AS by`,
+        { id: asset.id });
+      assert.equal(rows.records[0].get('by'), alex.key, 'stored as the actor key');
+      const projected = (await store.getAsset(asset.id, systemAudience))!;
+      const [former] = projected.formerIdentifiers;
+      for (const act of [former.detachment, former.attachment!]) {
+        assert.deepEqual(act.acceptedBy, { key: alex.key, name: alex.name, status: 'deleted' });
+      }
+    } finally {
+      await query(`MATCH (u:User {key: $key}) REMOVE u.accountDeletedAt, u.provenanceName`, { key: alex.key });
+    }
   });
 
   await t.test('an association recorded before Kannabi kept this projects null, never "nobody"', async () => {

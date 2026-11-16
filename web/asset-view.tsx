@@ -21,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ActionRow, Field, HelpTip, Hint, PageHeading, Section, SubHeading } from './ui';
-import { AddIdentifier, IdentifierForm, IdentifierList } from './asset-identifiers';
+import { AddIdentifier, FormerIdentifierList, IdentifierForm, IdentifierList } from './asset-identifiers';
 
 
 /** The installed plugins with a part in the Asset page. */
@@ -333,6 +333,7 @@ export function AssetView({ asset, canEdit, canViewReporterProfile, settings, au
       </>}
       {!asset.identifiers.length && <p className="mt-5 mb-0 text-[.875rem]">
         No identifiers recorded. This Asset’s native Kannabi identity is its Asset ID.</p>}
+      <FormerIdentifierList identifiers={asset.formerIdentifiers} displayTimezone={settings.displayTimezone} />
       {canEdit && <AddIdentifier
         panels={loadedSlots.flatMap((plugin) => {
           const slot = plugin.assetPage!;

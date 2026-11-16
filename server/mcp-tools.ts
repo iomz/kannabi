@@ -64,6 +64,17 @@ const assetRecordSchema = z.object({
     public: z.boolean(),
     reported: z.object({ at: z.string(), by: attributionSchema }),
     lastChange: actSchema.nullable().describe('The latest change only, never a history.'),
+    formerIdentifiers: z.array(z.object({
+      scheme: z.string().describe('The identifier scheme that accepted the value.'),
+      value: z.string().describe('The identifier as it was accepted. Not this Asset\'s identity: resolve_external_identifier does not find this Asset by it, and another Asset may carry it now.'),
+      level: z.enum(['individual', 'class'])
+        .describe('The level the value had when it was attached.'),
+      accepted: actSchema.extend({
+        policy: z.string().describe('The version of the scheme\'s policy that accepted the value then.'),
+      }).nullable()
+        .describe('Who accepted it onto this Asset. Null for one accepted before Kannabi kept this.'),
+      detached: actSchema.describe('Who detached it from this Asset, when, and on what stated basis.'),
+    })).describe('Identifiers once attached to this Asset and since detached, oldest detachment first. History, never current identity: none of them is in identifiers.'),
     photos: z.array(z.object({
       key: z.string(), contentType: z.string(), size: z.number(), receivedAt: z.string().nullable(),
     })),
