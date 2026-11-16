@@ -31,7 +31,7 @@ function loaderData(asset: Record<string, unknown> = {}, rest: Record<string, un
       groups: [{ key: 'workshop', name: 'Workshop' }],
       reportedBy: { key: 'alex', name: 'Alex', status: 'active' as const },
       reportedAt: '2026-09-29T11:00:00.000Z',
-      identifiers: [], photos: [], issuances: [], provenance: null, sourceRecord: null, ...asset,
+      identifiers: [], formerIdentifiers: [], photos: [], issuances: [], provenance: null, sourceRecord: null, ...asset,
     },
     canEdit: true, canViewReporterProfile: false, authenticated: true,
     settings: { displayTimezone: 'UTC', showAssetId: false, showIdentifierPolicyVersion: false },
@@ -174,6 +174,36 @@ test('Owner is shown only when one is recorded, never as a placeholder', () => {
     assert.equal(owner.textContent, 'Workshop fund');
     assert.equal(owner.querySelector('button, input, select, a'), null);
   } finally { recorded.stop(); }
+});
+
+test('a detached identifier reads as history under its own heading, with nothing to act on', () => {
+  const alex = { key: 'alex', name: 'Alex', status: 'active' as const };
+  const view = render({ formerIdentifiers: [{ key: 'f1', scheme: 'tag', canonical: 'tag:T-3', level: 'individual',
+    policyVersion: '1', attachment: { acceptedBy: alex, acceptedAt: '2026-09-01T00:00:00.000Z',
+      assertedBy: null, basis: null },
+    detachment: { acceptedBy: { ...alex, status: 'deleted' }, acceptedAt: '2026-09-02T00:00:00.000Z',
+      assertedBy: { id: 't1', label: 'relabeller' }, basis: 'relabel:7' } }] });
+  try {
+    const identifiers = section('Identifiers')!;
+    const heading = [...identifiers.querySelectorAll('h3, h4')]
+      .find((node) => node.textContent?.trim() === 'No longer attached');
+    assert.ok(heading, 'its own heading');
+    const list = heading!.nextElementSibling!;
+    assert.match(list.textContent ?? '', /tag:T-3/);
+    assert.match(list.textContent ?? '', /Accepted by Alex/);
+    assert.match(list.textContent ?? '', /Detached by Alex \(deleted account\) via “?relabeller”?/);
+    assert.match(list.textContent ?? '', /basis relabel:7/);
+    assert.equal(list.querySelector('button, input, select, a'), null, 'nothing here can be acted on');
+    // Still no current identifier: the empty state stands beside the history.
+    assert.match(identifiers.textContent ?? '', /No identifiers recorded/);
+  } finally { view.stop(); }
+});
+
+test('an Asset with nothing detached shows no history heading', () => {
+  const view = render();
+  try {
+    assert.doesNotMatch(section('Identifiers')!.textContent ?? '', /No longer attached/);
+  } finally { view.stop(); }
 });
 
 test('a reader who cannot edit is offered neither control', () => {

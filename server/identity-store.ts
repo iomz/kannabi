@@ -121,10 +121,42 @@ export type AttachedIdentifier = Identifier & Readonly<{
   attachment: IdentifierAttachment | null;
 }>;
 
+/** Who detached an identifier from an Asset, when, and on what stated basis:
+ * the same Tier 1 shape as an acceptance, describing the detachment. */
+export type IdentifierDetachment = Readonly<{
+  acceptedBy: ReporterAttribution;
+  acceptedAt: string;
+  assertedBy: AssertingCredential | null;
+  basis: string | null;
+}>;
+
+/** An identifier that was once attached to this Asset and has been detached.
+ *
+ * A record of one association's life, never identity: lookup, resolution,
+ * filters, search and sort read only current identifiers, and a former one
+ * reserves nothing, so a value may be attached again wherever its scheme
+ * allows. The value is kept exactly as it was accepted and never re-derived
+ * by the scheme now installed, so it reads the same even if that scheme is
+ * gone. `attachment` is the association's own acceptance, carried over, and
+ * null where the association predates Kannabi keeping one. Written in the
+ * statement that detaches, and never changed afterwards. */
+export type FormerIdentifier = Readonly<{
+  key: string;
+  scheme: string;
+  canonical: string;
+  level: IdentifierLevel;
+  policyVersion: string;
+  attachment: IdentifierAttachment | null;
+  detachment: IdentifierDetachment;
+}>;
+
 export type Asset = Readonly<{
   id: string;
   name: string;
   identifiers: readonly AttachedIdentifier[];
+  /** Identifiers detached from this Asset, oldest detachment first. Empty for
+   * an Asset that never had one detached since Kannabi began keeping them. */
+  formerIdentifiers: readonly FormerIdentifier[];
   reportedBy: ReporterAttribution;
   reportedAt: string;
   /** Null only for an Asset last written before Kannabi recorded this; it
@@ -240,6 +272,9 @@ const constraints = [
   'CREATE CONSTRAINT individual_identifier_key IF NOT EXISTS FOR (n:IndividualIdentifier) REQUIRE n.key IS UNIQUE',
   'CREATE CONSTRAINT class_identifier IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.canonical IS UNIQUE',
   'CREATE CONSTRAINT class_identifier_key IF NOT EXISTS FOR (n:ClassIdentifier) REQUIRE n.key IS UNIQUE',
+  // A former association is keyed for itself alone. Nothing constrains its
+  // value: it records what was attached, and reserves nothing.
+  'CREATE CONSTRAINT former_identifier_key IF NOT EXISTS FOR (n:FormerIdentifier) REQUIRE n.key IS UNIQUE',
 ];
 
 // Installed only once every Asset carries a native id, so a pre-Phase-1
@@ -369,8 +404,32 @@ const identifiersSubquery = `CALL {
         basis: r.basis } END }) AS identifiers
   }`;
 
+/** The identifiers detached from this Asset, oldest detachment first. Read
+ * as stored and never handed to a scheme: what was accepted then is not
+ * re-judged by whatever is installed now. */
+const formerIdentifiersSubquery = `CALL {
+    WITH a
+    MATCH (a)-[:HAD_IDENTIFIER]->(f:FormerIdentifier)
+    OPTIONAL MATCH (formerAcceptor:User {key: f.acceptedBy})
+    OPTIONAL MATCH (detacher:User {key: f.detachedBy})
+    WITH f, formerAcceptor, detacher ORDER BY f.detachedAt ASC, f.key ASC
+    RETURN collect(f { .key, .scheme, .canonical, .level, .policyVersion,
+      attachment: CASE WHEN f.acceptedAt IS NULL THEN null ELSE {
+        acceptedBy: ${attribution('formerAcceptor', 'f.acceptedBy')},
+        acceptedAt: toString(f.acceptedAt),
+        assertedBy: CASE WHEN f.assertedById IS NULL THEN null
+          ELSE { id: f.assertedById, label: f.assertedByLabel } END,
+        basis: f.basis } END,
+      detachment: {
+        acceptedBy: ${attribution('detacher', 'f.detachedBy')},
+        acceptedAt: toString(f.detachedAt),
+        assertedBy: CASE WHEN f.detachAssertedById IS NULL THEN null
+          ELSE { id: f.detachAssertedById, label: f.detachAssertedByLabel } END,
+        basis: f.detachBasis } }) AS formerIdentifiers
+  }`;
+
 const identifierProjection = `
-    identifiers: identifiers,`
+    identifiers: identifiers, formerIdentifiers: formerIdentifiers,`
 
 /** Resolves the accepting User of the Asset's most recent canonical change.
  * Optional in both directions: an Asset may predate this record, and the
@@ -509,8 +568,9 @@ const assetRowsProjection = (order: string, textMatch = false) => `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${identifiersSubquery}
+  ${formerIdentifiersSubquery}
   ${changeMatch}
-  WITH a, u, o, identifiers, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, identifiers, formerIdentifiers, acceptor, collect(g { .key, .name }) AS groups
   ${order}
   RETURN collect(a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
@@ -615,8 +675,9 @@ const assetProjection = `
   MATCH (g:Group)-[:CAN_COLLABORATE]->(a)
   OPTIONAL MATCH (a)-[:OWNED_BY]->(o:Owner)
   ${identifiersSubquery}
+  ${formerIdentifiersSubquery}
   ${changeMatch}
-  WITH a, u, o, identifiers, acceptor, collect(g { .key, .name }) AS groups
+  WITH a, u, o, identifiers, formerIdentifiers, acceptor, collect(g { .key, .name }) AS groups
   RETURN a { .id, .name, .isPublic, reportedAt: toString(a.reportedAt),${identifierProjection}
     reportedBy: ${attribution('u', 'u.key')}, provenance: ${changeProjection},
     sourceRecord: ${sourceRecordProjection},
@@ -1865,7 +1926,13 @@ export class IdentityStore {
 
   /** Detach an identifier by its attachment key. An individual identifier is
    * exclusive, so its node goes with the link; a class identifier node stays
-   * while any other Asset still refers to it. */
+   * while any other Asset still refers to it.
+   *
+   * The association becomes a former one on the Asset in the same statement
+   * that removes it, carrying its acceptance over unchanged and recording the
+   * detachment beside it on the statement clock `recordChange` uses. The
+   * former record is a separate node that no identifier constraint covers, so
+   * it reserves nothing and is never read as current identity. */
   async detachIdentifier(id: string, actorKey: string, key: string,
     origin: ChangeOrigin = {}): Promise<Asset> {
     const assetKey = assetId(id);
@@ -1874,9 +1941,19 @@ export class IdentityStore {
       await tx.run(`${assetMatch} SET a.lock = true`, { assetId: assetKey });
       const detached = await tx.run(`${assetMatch} WHERE ${collaboration}
         OPTIONAL MATCH (a)-[individualLink:IDENTIFIED_BY]->(individual:IndividualIdentifier {key: $key})
-        OPTIONAL MATCH (a)-[classLink:CLASSIFIED_AS]->(:ClassIdentifier {key: $key})
-        WITH a, individualLink, individual, classLink
+        OPTIONAL MATCH (a)-[classLink:CLASSIFIED_AS]->(classNode:ClassIdentifier {key: $key})
+        WITH a, individualLink, individual, classLink, classNode
         WHERE individualLink IS NOT NULL OR classLink IS NOT NULL
+        WITH a, individualLink, individual, classLink,
+          coalesce(individualLink, classLink) AS link, coalesce(individual, classNode) AS node
+        CREATE (a)-[:HAD_IDENTIFIER]->(:FormerIdentifier {
+          key: randomUUID(), scheme: node.scheme, canonical: node.canonical,
+          level: CASE WHEN individual IS NULL THEN 'class' ELSE 'individual' END,
+          policyVersion: coalesce(link.policyVersion, node.policyVersion),
+          acceptedBy: link.acceptedBy, acceptedAt: link.acceptedAt,
+          assertedById: link.assertedById, assertedByLabel: link.assertedByLabel, basis: link.basis,
+          detachedBy: $actorKey, detachedAt: datetime(),
+          detachAssertedById: $assertedById, detachAssertedByLabel: $assertedByLabel, detachBasis: $basis })
         DELETE individualLink, classLink
         WITH a, individual
         FOREACH (node IN CASE WHEN individual IS NULL THEN [] ELSE [individual] END | DELETE node)

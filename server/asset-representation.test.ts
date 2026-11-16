@@ -20,6 +20,7 @@ const { schemes } = composition;
 const reporter = { key: 'user-1', name: 'Alex Demo', status: 'active' as const };
 const described = model('camera');
 const tagged = tag('T-5');
+const retired = tag('T-3');
 /** What a decade-old record might say, kept as an awkward composite: a dated
  * purchase, a supplier, a loan, a room, CRLF, a tab and non-ASCII text. */
 const description = 'Purchased 2015-11-02 from Example Trading.\r\nLent to Lab B (2018).\t保管: 402号室';
@@ -31,6 +32,12 @@ const populated: Asset = Object.freeze({
     acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:01.000Z',
     assertedBy: { id: 'token-1', label: 'legacy loader' }, basis: 'legacy:assetcats:42' } },
   { key: 'i2', ...tagged, attachment: null }],
+  // A label once on the Asset and detached: kept as Kannabi held it.
+  formerIdentifiers: [{ key: 'f1', scheme: retired.scheme, canonical: retired.canonical, level: retired.level,
+    policyVersion: retired.policyVersion, attachment: { acceptedBy: reporter, acceptedAt: '2026-06-22T00:00:03.000Z',
+      assertedBy: null, basis: null },
+    detachment: { acceptedBy: reporter, acceptedAt: '2026-06-24T00:00:00.000Z',
+      assertedBy: { id: 'token-1', label: 'legacy loader' }, basis: 'relabel:7' } }],
   reportedBy: reporter,
   reportedAt: '2026-06-22T00:00:00.000Z',
   provenance: { acceptedBy: reporter, acceptedAt: '2026-06-23T00:00:00.000Z',
@@ -47,7 +54,7 @@ const populated: Asset = Object.freeze({
  * optional is absent. */
 const sparse: Asset = Object.freeze({
   ...populated, id: '0198c2a0-0000-7000-8000-000000000002', identifiers: [{ key: 'i3', ...described, attachment: null }],
-  provenance: null, sourceRecord: null, owner: null, isPublic: false, photos: [],
+  formerIdentifiers: [], provenance: null, sourceRecord: null, owner: null, isPublic: false, photos: [],
 });
 
 /** Every leaf of a JSON value with its path, `[]` marking a list element. */
@@ -69,7 +76,7 @@ test('every instant is either an act in Kannabi or what a source says', () => {
   // The only places an instant can be. Each is the `at` of something Kannabi
   // did, or the source's own recordedAt: there is no slot an acquisition,
   // loan or other physical event could occupy, so none can be read as one.
-  const kannabiClock = /^(kannabi\.(reported|lastChange)\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at|extensions\.shelf\.printed\[\]\.at)$/;
+  const kannabiClock = /^(kannabi\.(reported|lastChange)\.at|kannabi\.photos\[\]\.receivedAt|identifiers\[\]\.accepted\.at|kannabi\.formerIdentifiers\[\]\.(accepted|detached)\.at|extensions\.shelf\.printed\[\]\.at)$/;
   const instants = leaves(json(assetRecord(populated, schemes, extensions)))
     .filter(([, value]) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value));
   assert.ok(instants.length >= 6);
@@ -81,6 +88,20 @@ test('every instant is either an act in Kannabi or what a source says', () => {
     .map(([path]) => path), ['source.says.recordedAt']);
   // Kannabi's report time is the report, not the source's past.
   assert.equal(assetRecord(populated, schemes).kannabi.reported.at, populated.reportedAt);
+});
+
+test('a detached identifier is what Kannabi held, never a current identifier', () => {
+  const record = json(assetRecord(populated, schemes));
+  assert.deepEqual(leaves(record).filter(([, leaf]) => leaf === retired.canonical).map(([path]) => path),
+    ['kannabi.formerIdentifiers[].value']);
+  // Not re-derived and not dereferenced, so it carries no components or address.
+  assert.deepEqual(Object.keys(record.kannabi.formerIdentifiers[0]).sort(),
+    ['accepted', 'detached', 'level', 'scheme', 'value']);
+  assert.equal(record.kannabi.formerIdentifiers[0].detached.basis, 'relabel:7');
+  assert.equal(record.kannabi.formerIdentifiers[0].accepted.policy, retired.policyVersion);
+  // A summary leaves it out and says so.
+  assert.equal('formerIdentifiers' in assetSummary(populated).kannabi, false);
+  assert.ok(summaryOmits.includes('kannabi.formerIdentifiers'));
 });
 
 test('everything a source stated is under source, and nothing else is', () => {
